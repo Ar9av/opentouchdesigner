@@ -20,6 +20,8 @@ use wgpu::util::DeviceExt;
 
 use crate::context::GpuContext;
 use crate::ops::{self, PackedParams, Sizing};
+use crate::render3d::{self, Renderer};
+use crate::scene::Scene;
 use crate::shader;
 use crate::texture::{TOP_FORMAT, TexturePool, TopTexture};
 
@@ -37,6 +39,8 @@ struct Uniforms {
 #[derive(Default)]
 struct NodeGpu {
     output: Option<TopTexture>,
+    /// Depth buffer for a Render TOP, matched to its colour target.
+    depth: Option<(u32, u32, wgpu::TextureView)>,
     /// One uniform buffer per pass (separable filters use two).
     uniforms: Vec<wgpu::Buffer>,
     /// Pipeline key of the last shader that compiled, for operators whose
@@ -67,6 +71,9 @@ pub struct TopEngine {
     /// Scratch targets used by two-pass operators, returned to the pool at
     /// the end of the frame.
     scratch: Vec<TopTexture>,
+    /// The 3D pipeline, built on first use so a 2D-only patch never pays for
+    /// it.
+    renderer: Option<Renderer>,
     pub passes_this_frame: u32,
 }
 
@@ -175,8 +182,17 @@ impl TopEngine {
             pool: TexturePool::new(),
             encoder: None,
             scratch: Vec::new(),
+            renderer: None,
             passes_this_frame: 0,
         }
+    }
+
+    /// Draw calls and instances issued this frame, for the perf panel.
+    pub fn render_stats(&self) -> (u32, u32) {
+        self.renderer
+            .as_ref()
+            .map(|r| (r.draws_this_frame, r.instances_this_frame))
+            .unwrap_or((0, 0))
     }
 
     pub fn context(&self) -> &GpuContext {
@@ -329,6 +345,9 @@ impl TopEngine {
     /// Start recording a frame. Must be paired with [`TopEngine::end_frame`].
     pub fn begin_frame(&mut self) {
         self.passes_this_frame = 0;
+        if let Some(r) = self.renderer.as_mut() {
+            r.begin_frame();
+        }
         self.encoder = Some(self.ctx.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor {
                 label: Some("otd frame"),
@@ -499,6 +518,80 @@ impl TopEngine {
         Ok(())
     }
 
+    /// Draw the scene a Render TOP names.
+    #[allow(clippy::too_many_arguments)]
+    fn cook_render(
+        &mut self,
+        graph: &Graph,
+        id: NodeId,
+        _ctx: &CookContext,
+        eval: &EvalContext,
+        scene: Option<&dyn Scene>,
+        width: u32,
+        height: u32,
+    ) -> Result<(), CookError> {
+        let Some(scene) = scene else {
+            // A pure-TOP host has no geometry to give us; leave the last
+            // frame rather than clearing to black.
+            return Ok(());
+        };
+        let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
+        let description = render3d::describe(
+            graph,
+            node,
+            eval,
+            scene,
+            width as f32 / height.max(1) as f32,
+        );
+
+        // A depth buffer matched to the colour target, rebuilt only on resize.
+        let entry = self.nodes.entry(id).unwrap().or_default();
+        let needs_depth = entry
+            .depth
+            .as_ref()
+            .map(|(w, h, _)| *w != width || *h != height)
+            .unwrap_or(true);
+        if needs_depth {
+            let view = render3d::depth_texture(&self.ctx.device, width, height);
+            self.nodes[id].depth = Some((width, height, view));
+        }
+
+        let target = self.nodes[id].output.as_ref().unwrap().view.clone();
+        let depth = self.nodes[id].depth.as_ref().unwrap().2.clone();
+        if self.renderer.is_none() {
+            self.renderer = Some(Renderer::new(&self.ctx.device));
+        }
+
+        // Colour maps are looked up before the borrow of the renderer.
+        let maps: HashMap<NodeId, wgpu::TextureView> = description
+            .items
+            .iter()
+            .filter_map(|i| i.color_map)
+            .filter_map(|m| self.output(graph, m).map(|t| (m, t.view.clone())))
+            .collect();
+        let dummy = self.dummy.clone();
+        let device = self.ctx.device.clone();
+
+        let TopEngine {
+            renderer, encoder, ..
+        } = self;
+        let renderer = renderer.as_mut().unwrap();
+        let encoder = encoder
+            .as_mut()
+            .ok_or_else(|| CookError::op("renderTOP", "cook outside of a frame"))?;
+        renderer.draw(
+            &device,
+            encoder,
+            &target,
+            &depth,
+            &description,
+            &dummy,
+            &|id| maps.get(&id).cloned(),
+        );
+        self.passes_this_frame += 1;
+        Ok(())
+    }
+
     fn input_view(&self, graph: &Graph, node_id: NodeId, index: usize) -> wgpu::TextureView {
         graph
             .get(node_id)
@@ -621,8 +714,9 @@ impl TopEngine {
         id: NodeId,
         ctx: &CookContext,
         eval: &EvalContext,
+        scene: Option<&dyn Scene>,
     ) -> Result<(), CookError> {
-        self.cook_top(graph, id, ctx, eval)
+        self.cook_top(graph, id, ctx, eval, scene)
     }
 }
 
@@ -633,16 +727,45 @@ impl Cooker for TopEngine {
         };
         // Select reads the current frame, so its target must cook first.
         // Feedback deliberately does not appear here.
-        if node.op_type != ops::SELECT {
-            return Vec::new();
+        if node.op_type == ops::SELECT {
+            return referenced_target(graph, id, "top").into_iter().collect();
         }
-        referenced_target(graph, id, "top").into_iter().collect()
+        // A Render TOP discovers the Geometry components it draws rather than
+        // being wired to them, so it has to declare them. With no Geometry
+        // parameter it draws the whole project, and depends on all of it.
+        if node.op_type == ops::RENDER {
+            let root = node
+                .param("geometry")
+                .map(|p| p.eval(&EvalContext::default()).as_str())
+                .unwrap_or_default();
+            let start = if root.trim().is_empty() {
+                Some(graph.root())
+            } else {
+                graph.find(root.trim())
+            };
+            let Some(start) = start else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            let mut stack = vec![start];
+            while let Some(cur) = stack.pop() {
+                let Some(n) = graph.get(cur) else { continue };
+                if n.op_type == crate::scene::GEOMETRY {
+                    found.push(cur);
+                    continue;
+                }
+                stack.extend(n.children.iter().copied());
+            }
+            return found;
+        }
+        Vec::new()
     }
 
     fn cook(&mut self, graph: &Graph, id: NodeId, ctx: &CookContext) -> Result<(), CookError> {
-        // No CHOPs in sight: parameters resolve against time alone.
+        // No CHOPs in sight: parameters resolve against time alone, and
+        // there is no geometry to draw.
         let eval = ctx.eval_ctx();
-        self.cook_top(graph, id, ctx, &eval)
+        self.cook_top(graph, id, ctx, &eval, None)
     }
 }
 
@@ -653,6 +776,7 @@ impl TopEngine {
         id: NodeId,
         ctx: &CookContext,
         eval: &EvalContext,
+        scene: Option<&dyn Scene>,
     ) -> Result<(), CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
@@ -713,6 +837,12 @@ impl TopEngine {
             Sizing::Referenced => FALLBACK_SIZE,
         };
         self.ensure_output(id, width, height);
+
+        // ---- The 3D pipeline is a different beast: vertex buffers, a depth
+        // attachment, a cull mode. It gets its own module.
+        if node.op_type == ops::RENDER {
+            return self.cook_render(graph, id, ctx, eval, scene, width, height);
+        }
 
         // ---- Shader: built in, or compiled from a parameter.
         let mut pipeline_key: Option<String> = None;

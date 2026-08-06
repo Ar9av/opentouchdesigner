@@ -1,0 +1,302 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/audioin1",
+      op: "audiodeviceinCHOP",
+      pos: (-900.0, 320.0),
+    ),
+    (
+      path: "/bass",
+      op: "selectCHOP",
+      pos: (-360.0, 320.0),
+      inputs: [
+        "/lag1",
+      ],
+      params: {
+        "channels": (
+          value: Str("band1"),
+        ),
+        "rename": (
+          value: Str("sx"),
+        ),
+      },
+    ),
+    (
+      path: "/bloom",
+      op: "blurTOP",
+      pos: (-260.0, 100.0),
+      inputs: [
+        "/bright",
+      ],
+      params: {
+        "size": (
+          value: Float(26.0),
+        ),
+      },
+    ),
+    (
+      path: "/bright",
+      op: "levelTOP",
+      pos: (-260.0, -20.0),
+      inputs: [
+        "/render1",
+      ],
+      params: {
+        "blacklevel": (
+          value: Float(0.55),
+        ),
+      },
+    ),
+    (
+      path: "/cam1",
+      op: "cameraCOMP",
+      pos: (-700.0, 140.0),
+      params: {
+        "translate": (
+          value: Vec3((0.0, 3.5, 7.0)),
+        ),
+        "lookat": (
+          value: Str("/geo1"),
+        ),
+      },
+    ),
+    (
+      path: "/comp1",
+      op: "compositeTOP",
+      pos: (-40.0, 0.0),
+      inputs: [
+        "/render1",
+        "/bloom",
+      ],
+      params: {
+        "operation": (
+          value: Str("add"),
+        ),
+      },
+    ),
+    (
+      path: "/geo1",
+      op: "geometryCOMP",
+      pos: (-700.0, 0.0),
+      params: {
+        "sop": (
+          value: Str("/sphere1"),
+        ),
+        "material": (
+          value: Str("/mat1"),
+        ),
+        "rotate": (
+          value: Vec3((0.0, 0.0, 0.0)),
+          mode: Expression,
+          expression: "[0.0, absTime * 12.0, 0.0]",
+        ),
+        "instancing": (
+          value: Bool(true),
+        ),
+        "instancechop": (
+          value: Str("/instances"),
+        ),
+        "ty": (
+          value: Str(""),
+        ),
+        "sx": (
+          value: Str("sx"),
+        ),
+        "sy": (
+          value: Str("sx"),
+        ),
+        "sz": (
+          value: Str("sx"),
+        ),
+      },
+    ),
+    (
+      path: "/grid_pos",
+      op: "mergeCHOP",
+      pos: (-700.0, 580.0),
+      inputs: [
+        "/pattern_x",
+        "/pattern_z",
+      ],
+    ),
+    (
+      path: "/instances",
+      op: "mergeCHOP",
+      pos: (-500.0, 520.0),
+      inputs: [
+        "/grid_pos",
+        "/size",
+      ],
+    ),
+    (
+      path: "/lag1",
+      op: "lagCHOP",
+      pos: (-540.0, 320.0),
+      inputs: [
+        "/spectrum1",
+      ],
+      params: {
+        "lagup": (
+          value: Float(0.01),
+        ),
+        "lagdown": (
+          value: Float(0.2),
+        ),
+      },
+    ),
+    (
+      path: "/light1",
+      op: "lightCOMP",
+      pos: (-700.0, 260.0),
+      params: {
+        "translate": (
+          value: Vec3((4.0, 6.0, 3.0)),
+        ),
+        "intensity": (
+          value: Float(1.3),
+        ),
+      },
+    ),
+    (
+      path: "/mat1",
+      op: "pbrMAT",
+      pos: (-900.0, -60.0),
+      params: {
+        "basecolor": (
+          value: Vec4((0.35, 0.75, 1.0, 1.0)),
+        ),
+        "metallic": (
+          value: Float(0.6),
+        ),
+        "roughness": (
+          value: Float(0.25),
+        ),
+      },
+    ),
+    (
+      path: "/out1",
+      op: "nullTOP",
+      pos: (180.0, 0.0),
+      inputs: [
+        "/comp1",
+      ],
+    ),
+    (
+      path: "/pattern_x",
+      op: "patternCHOP",
+      pos: (-900.0, 520.0),
+      params: {
+        "type": (
+          value: Str("triangle"),
+        ),
+        "length": (
+          value: Int(256),
+        ),
+        "periods": (
+          value: Float(16.0),
+        ),
+        "amplitude": (
+          value: Float(6.0),
+        ),
+        "offset": (
+          value: Float(-3.0),
+        ),
+        "name": (
+          value: Str("tx"),
+        ),
+      },
+    ),
+    (
+      path: "/pattern_z",
+      op: "patternCHOP",
+      pos: (-900.0, 640.0),
+      params: {
+        "length": (
+          value: Int(256),
+        ),
+        "amplitude": (
+          value: Float(6.0),
+        ),
+        "offset": (
+          value: Float(-3.0),
+        ),
+        "name": (
+          value: Str("tz"),
+        ),
+      },
+    ),
+    (
+      path: "/render1",
+      op: "renderTOP",
+      pos: (-480.0, 0.0),
+      params: {
+        "camera": (
+          value: Str("/cam1"),
+        ),
+        "light": (
+          value: Str("/light1"),
+        ),
+        "background": (
+          value: Vec4((0.02, 0.02, 0.04, 1.0)),
+        ),
+      },
+    ),
+    (
+      path: "/size",
+      op: "mathCHOP",
+      pos: (-180.0, 320.0),
+      inputs: [
+        "/bass",
+      ],
+      params: {
+        "gain": (
+          value: Float(1.4),
+        ),
+        "offset": (
+          value: Float(0.45),
+        ),
+        "clamp": (
+          value: Bool(true),
+        ),
+        "clampmin": (
+          value: Float(0.2),
+        ),
+        "clampmax": (
+          value: Float(1.6),
+        ),
+      },
+    ),
+    (
+      path: "/spectrum1",
+      op: "audiospectrumCHOP",
+      pos: (-720.0, 320.0),
+      inputs: [
+        "/audioin1",
+      ],
+      params: {
+        "gain": (
+          value: Float(30.0),
+        ),
+      },
+    ),
+    (
+      path: "/sphere1",
+      op: "sphereSOP",
+      pos: (-900.0, 60.0),
+      params: {
+        "radius": (
+          value: Float(0.16),
+        ),
+        "rows": (
+          value: Int(10),
+        ),
+        "columns": (
+          value: Int(14),
+        ),
+      },
+    ),
+  ],
+)

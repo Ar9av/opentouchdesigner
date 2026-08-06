@@ -166,7 +166,9 @@ fn cook_sphere(c: &mut SopCtx) -> Geometry {
         for col in 0..cols {
             let a = (row * stride + col) as u32;
             let b = a + stride as u32;
-            indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+            // Counter-clockwise seen from outside, so the winding agrees with
+            // the vertex normals and back-face culling keeps the right half.
+            indices.extend([a, a + 1, b, a + 1, b + 1, b]);
         }
     }
     Geometry {
@@ -221,7 +223,8 @@ fn cook_grid(c: &mut SopCtx) -> Geometry {
         for col in 0..cols - 1 {
             let a = (row * cols + col) as u32;
             let b = a + cols as u32;
-            indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+            // Counter-clockwise seen from the side the normals face.
+            indices.extend([a, a + 1, b, a + 1, b + 1, b]);
         }
     }
     Geometry {

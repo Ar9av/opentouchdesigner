@@ -318,6 +318,20 @@ pub const OUT: &str = "outTOP";
 pub const CACHE: &str = "cacheTOP";
 /// Compiles a shader from a parameter at cook time.
 pub const GLSL: &str = "glslTOP";
+/// Draws the 3D scene. Special-cased by the engine, which owns the pipeline.
+pub const RENDER: &str = "renderTOP";
+
+fn params_render() -> IndexMap<String, Param> {
+    with_res(params! {
+        "geometry" => Param::str("").with_label("Geometry").as_path_ref(),
+        "camera" => Param::str("").with_label("Camera").as_path_ref(),
+        "light" => Param::str("").with_label("Light").as_path_ref(),
+        "background" => Param::rgba([0.0, 0.0, 0.0, 1.0]).with_label("Background"),
+        "ambient" => Param::float(0.12).with_label("Ambient").with_range(0.0, 1.0),
+        "wireframe" => Param::bool(false).with_label("Wireframe"),
+        "cull" => Param::menu("back", &["back", "front", "none"]).with_label("Cull"),
+    })
+}
 
 // -------------------------------------------------------------- select TOP
 
@@ -692,6 +706,25 @@ fn specs() -> &'static Vec<TopSpec> {
                 two_pass: false,
                 dynamic_shader: false,
                 pack: pack_displace,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: RENDER,
+                    label: "Render",
+                    family: Family::Top,
+                    inputs: &[],
+                    summary: "Draws Geometry components through a Camera.",
+                    // The scene it draws is almost always moving, and proving
+                    // otherwise would mean tracking every operator it reaches.
+                    time_dependent: true,
+                    params: params_render,
+                    connector: Connector::None,
+                },
+                shader: "",
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
             },
             TopSpec {
                 def: OpDef {
