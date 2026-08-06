@@ -336,6 +336,47 @@ fn draw_chop_body(app: &OtdApp, ui: &egui::Ui, id: NodeId, body: Rect, zoom: f32
     }
 }
 
+/// A DAT's viewer is the first few rows of its table, which is usually
+/// enough to see whether the data is what you expected.
+fn draw_dat_body(app: &OtdApp, ui: &egui::Ui, id: NodeId, body: Rect, zoom: f32) {
+    let Some(data) = app.engines.dat_data(id) else {
+        return;
+    };
+    if zoom < 0.45 || data.rows.is_empty() {
+        return;
+    }
+    let painter = ui.painter_at(body);
+    let line = 11.0 * zoom;
+    let font = FontId::monospace(9.0 * zoom);
+    let max_rows = ((body.height() / line) as usize).max(1);
+
+    for (r, row) in data.rows.iter().take(max_rows).enumerate() {
+        // The first row of a table is nearly always headings.
+        let colour = if r == 0 && !data.is_text {
+            Color32::from_rgb(200, 202, 212)
+        } else {
+            Color32::from_rgb(150, 152, 162)
+        };
+        let text: String = row.join("  ").chars().take(30).collect();
+        painter.text(
+            body.left_top() + Vec2::new(4.0, 2.0 + r as f32 * line),
+            Align2::LEFT_TOP,
+            text,
+            font.clone(),
+            colour,
+        );
+    }
+    if data.num_rows() > max_rows {
+        painter.text(
+            body.right_bottom() - Vec2::new(4.0, 2.0),
+            Align2::RIGHT_BOTTOM,
+            format!("+{} rows", data.num_rows() - max_rows),
+            FontId::proportional(8.5 * zoom),
+            Color32::from_rgb(110, 112, 122),
+        );
+    }
+}
+
 fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin: Pos2) {
     let zoom = app.view.zoom;
     let painter = ui.painter();
@@ -398,6 +439,7 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
         // texture: you should be able to see what an operator is doing
         // without opening anything.
         Family::Chop => draw_chop_body(app, ui, id, body, zoom),
+        Family::Dat => draw_dat_body(app, ui, id, body, zoom),
         _ => {}
     }
 

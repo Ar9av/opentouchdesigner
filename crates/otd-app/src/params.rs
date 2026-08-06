@@ -86,6 +86,11 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             shader_editor(app, ui, id);
             continue;
         }
+        // A DAT's contents deserve the same room as a shader's source.
+        if key == "text" && app.graph.node(id).family == otd_core::Family::Dat {
+            text_editor(app, ui, id);
+            continue;
+        }
 
         let (label, mode, mut value, mut expression, range, menu, error, evaluated) = {
             let p = &app.graph.node(id).params[&key];
@@ -322,6 +327,32 @@ fn custom_param_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId
                 }
             });
         });
+}
+
+/// The multiline editor for a Table or Text DAT's contents.
+fn text_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
+    let mut text = app.graph.node(id).params["text"].value.as_str();
+    let rows = app
+        .engines
+        .dat_data(id)
+        .map(|d| format!("{} × {}", d.num_rows(), d.num_cols()))
+        .unwrap_or_default();
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.strong("Contents");
+        ui.label(RichText::new(rows).weak().small());
+    });
+    let response = ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .code_editor()
+            .desired_rows(10)
+            .desired_width(f32::INFINITY),
+    );
+    if response.changed() {
+        let _ = app.graph.set_param(id, "text", Value::Str(text));
+    }
+    ui.add_space(4.0);
 }
 
 /// What a dragged channel carries. Dropping it on a parameter exports it.
