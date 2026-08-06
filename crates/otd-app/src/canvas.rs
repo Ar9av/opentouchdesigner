@@ -59,6 +59,7 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             let origin = rect.min;
 
             handle_view_input(app, ui, &response, origin, rect);
+            app.input_state = sample_input(ui, rect);
             draw_grid(ui, rect, app.view, origin);
 
             let nodes = app.graph.walk();
@@ -116,6 +117,33 @@ fn handle_view_input(
     if response.clicked() {
         app.selected = None;
     }
+}
+
+/// Snapshot the pointer and keyboard for the Mouse In and Keyboard In CHOPs.
+///
+/// The editor is the only thing that talks to the window system; `otd-chop`
+/// just reads whatever is handed to it.
+fn sample_input(ui: &egui::Ui, rect: Rect) -> otd_chop::InputState {
+    let ctx = ui.ctx();
+    let pos = ctx.pointer_latest_pos().unwrap_or(rect.center());
+    ctx.input(|i| otd_chop::InputState {
+        // Centre origin, Y up — the convention a Transform TOP expects.
+        mouse: [
+            (pos.x - rect.min.x) / rect.width().max(1.0) - 0.5,
+            0.5 - (pos.y - rect.min.y) / rect.height().max(1.0),
+        ],
+        buttons: [
+            i.pointer.primary_down(),
+            i.pointer.secondary_down(),
+            i.pointer.middle_down(),
+        ],
+        wheel: i.smooth_scroll_delta.y,
+        keys: i
+            .keys_down
+            .iter()
+            .map(|k| format!("{k:?}").to_lowercase())
+            .collect(),
+    })
 }
 
 fn draw_grid(ui: &egui::Ui, rect: Rect, view: CanvasView, origin: Pos2) {
@@ -217,6 +245,100 @@ fn draw_pending_wire(app: &OtdApp, ui: &egui::Ui, _origin: Pos2, rects: &[(NodeI
     ));
 }
 
+/// Colours for channels on a node body and in the channel list, so the same
+/// channel is the same colour in both places.
+pub fn channel_color(index: usize) -> Color32 {
+    const PALETTE: [[u8; 3]; 6] = [
+        [126, 190, 126],
+        [126, 170, 220],
+        [220, 180, 110],
+        [200, 130, 200],
+        [220, 130, 130],
+        [140, 210, 200],
+    ];
+    let c = PALETTE[index % PALETTE.len()];
+    Color32::from_rgb(c[0], c[1], c[2])
+}
+
+fn draw_chop_body(app: &OtdApp, ui: &egui::Ui, id: NodeId, body: Rect, zoom: f32) {
+    let Some(data) = app.engines.chop_data(id) else {
+        return;
+    };
+    if data.channels.is_empty() {
+        return;
+    }
+    let painter = ui.painter_at(body);
+
+    // One shared vertical scale across channels, so their relative sizes are
+    // readable. A flat signal still gets a visible line rather than filling
+    // the box.
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for ch in &data.channels {
+        lo = lo.min(ch.min());
+        hi = hi.max(ch.max());
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return;
+    }
+    let span = (hi - lo).max(1e-3);
+    let (lo, hi) = (lo - span * 0.1, hi + span * 0.1);
+
+    let y_of = |v: f32| {
+        let t = (v - lo) / (hi - lo).max(1e-6);
+        body.max.y - t * body.height()
+    };
+
+    // Zero line, when zero is in range.
+    if lo < 0.0 && hi > 0.0 {
+        painter.line_segment(
+            [
+                Pos2::new(body.min.x, y_of(0.0)),
+                Pos2::new(body.max.x, y_of(0.0)),
+            ],
+            Stroke::new(1.0, Color32::from_rgb(50, 52, 58)),
+        );
+    }
+
+    for (ci, ch) in data.channels.iter().enumerate().take(8) {
+        let color = channel_color(ci);
+        let n = ch.samples.len();
+        if n == 0 {
+            continue;
+        }
+        if n == 1 {
+            // A time-sliced control channel is one sample per frame: draw it
+            // as a level rather than as a dot in the corner.
+            let y = y_of(ch.samples[0]);
+            painter.line_segment(
+                [Pos2::new(body.min.x, y), Pos2::new(body.max.x, y)],
+                Stroke::new(1.5 * zoom.max(0.5), color),
+            );
+            continue;
+        }
+        let step = body.width() / (n - 1) as f32;
+        let points: Vec<Pos2> = ch
+            .samples
+            .iter()
+            .enumerate()
+            .map(|(i, v)| Pos2::new(body.min.x + i as f32 * step, y_of(*v)))
+            .collect();
+        painter.add(egui::Shape::line(
+            points,
+            Stroke::new(1.2 * zoom.max(0.5), color),
+        ));
+    }
+
+    if zoom > 0.6 {
+        painter.text(
+            body.left_top() + Vec2::new(3.0, 2.0),
+            Align2::LEFT_TOP,
+            format!("{} ch  {} samp", data.num_channels(), data.num_samples()),
+            FontId::proportional(8.5 * zoom),
+            Color32::from_rgb(120, 122, 130),
+        );
+    }
+}
+
 fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin: Pos2) {
     let zoom = app.view.zoom;
     let painter = ui.painter();
@@ -231,7 +353,8 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     let input_count = node.inputs.len();
     let input_slots: Vec<Option<NodeId>> = node.inputs.clone();
     let cook_us = app.cook.last_cook_us(id);
-    let shader_error = app.top.shader_error(id).is_some();
+    let status = app.engines.node_status(&app.graph, id);
+    let shader_error = status.is_some();
 
     let radius = CornerRadius::same(4);
     painter.rect_filled(rect, radius, Color32::from_rgb(46, 48, 55));
@@ -255,21 +378,30 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
         Pos2::new(rect.max.x - 2.0, rect.max.y - FOOTER_H * zoom),
     );
     painter.rect_filled(body, 2.0, Color32::from_rgb(18, 18, 20));
-    if let Some((tid, size)) = app.thumbnail(id) {
-        let aspect = size[0] as f32 / size[1].max(1) as f32;
-        let draw = if aspect > body.width() / body.height() {
-            let h = body.width() / aspect;
-            Rect::from_center_size(body.center(), Vec2::new(body.width(), h))
-        } else {
-            let w = body.height() * aspect;
-            Rect::from_center_size(body.center(), Vec2::new(w, body.height()))
-        };
-        ui.painter().image(
-            tid,
-            draw,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
+    match family {
+        Family::Top => {
+            if let Some((tid, size)) = app.thumbnail(id) {
+                let aspect = size[0] as f32 / size[1].max(1) as f32;
+                let draw = if aspect > body.width() / body.height() {
+                    let h = body.width() / aspect;
+                    Rect::from_center_size(body.center(), Vec2::new(body.width(), h))
+                } else {
+                    let w = body.height() * aspect;
+                    Rect::from_center_size(body.center(), Vec2::new(w, body.height()))
+                };
+                ui.painter().image(
+                    tid,
+                    draw,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+        }
+        // A CHOP's viewer is its waveform, for the same reason a TOP's is its
+        // texture: you should be able to see what an operator is doing
+        // without opening anything.
+        Family::Chop => draw_chop_body(app, ui, id, body, zoom),
+        _ => {}
     }
 
     let painter = ui.painter();
@@ -320,11 +452,19 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
             StrokeKind::Outside,
         );
         if zoom > 0.4 {
+            // The first few words of the real message, so the node itself
+            // says what is wrong rather than just that something is.
+            let text: String = status
+                .as_deref()
+                .unwrap_or("error")
+                .chars()
+                .take(34)
+                .collect();
             painter.text(
                 rect.center_bottom() - Vec2::new(0.0, FOOTER_H * zoom + 4.0),
                 Align2::CENTER_BOTTOM,
-                "shader error",
-                FontId::proportional(10.0 * zoom),
+                text,
+                FontId::proportional(9.5 * zoom),
                 Color32::from_rgb(240, 140, 140),
             );
         }

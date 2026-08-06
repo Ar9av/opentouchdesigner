@@ -1,0 +1,20 @@
+[package]
+name = "otd-chop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cpal = "0.18.1"
+log = "0.4.33"
+midir = "0.11.0"
+otd-core = { version = "0.1.0", path = "../otd-core" }
+rosc = "0.11.4"
+rustfft = "6.4.1"
+slotmap = "1.1.1"
+thiserror = "2.0.19"
+
+[dev-dependencies]
+rosc = "0.11.4"

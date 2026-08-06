@@ -602,6 +602,23 @@ fn referenced_target(graph: &Graph, id: NodeId, key: &str) -> Option<NodeId> {
     graph.find(path).filter(|t| *t != id)
 }
 
+impl TopEngine {
+    /// Cook one TOP with an explicit evaluation context.
+    ///
+    /// The context is passed in rather than derived from `ctx` because a
+    /// parameter in Export mode has to resolve against the CHOP channels
+    /// cooked this frame, and only the cross-family router knows about those.
+    pub fn cook_node(
+        &mut self,
+        graph: &Graph,
+        id: NodeId,
+        ctx: &CookContext,
+        eval: &EvalContext,
+    ) -> Result<(), CookError> {
+        self.cook_top(graph, id, ctx, eval)
+    }
+}
+
 impl Cooker for TopEngine {
     fn extra_inputs(&self, graph: &Graph, id: NodeId) -> Vec<NodeId> {
         let Some(node) = graph.get(id) else {
@@ -616,6 +633,20 @@ impl Cooker for TopEngine {
     }
 
     fn cook(&mut self, graph: &Graph, id: NodeId, ctx: &CookContext) -> Result<(), CookError> {
+        // No CHOPs in sight: parameters resolve against time alone.
+        let eval = ctx.eval_ctx();
+        self.cook_top(graph, id, ctx, &eval)
+    }
+}
+
+impl TopEngine {
+    fn cook_top(
+        &mut self,
+        graph: &Graph,
+        id: NodeId,
+        ctx: &CookContext,
+        eval: &EvalContext,
+    ) -> Result<(), CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
 
@@ -626,8 +657,6 @@ impl Cooker for TopEngine {
 
         let spec = ops::spec(&node.op_type)
             .ok_or_else(|| CookError::op(&path, format!("unknown TOP `{}`", node.op_type)))?;
-        let eval = ctx.eval_ctx();
-
         // ---- Feedback reads its target as it stands right now, which is last
         // frame's content because the target has not re-cooked yet.
         if node.op_type == ops::FEEDBACK {
@@ -643,7 +672,7 @@ impl Cooker for TopEngine {
         if node.op_type == ops::CACHE {
             let active = node
                 .param("active")
-                .map(|p| p.eval(&eval).as_bool())
+                .map(|p| p.eval(eval).as_bool())
                 .unwrap_or(true);
             if !active && self.nodes.get(id).is_some_and(|n| n.output.is_some()) {
                 return Ok(());
@@ -652,14 +681,14 @@ impl Cooker for TopEngine {
 
         // ---- Resolution
         let (width, height) = match spec.sizing {
-            Sizing::Params => ops::generator_size(node, &eval),
+            Sizing::Params => ops::generator_size(node, eval),
             Sizing::Input0 => self
                 .input_size(graph, id, 0)
                 .or_else(|| self.input_size(graph, id, 1))
                 .unwrap_or(FALLBACK_SIZE),
             Sizing::Input0OrParams => self
                 .input_size(graph, id, 0)
-                .unwrap_or_else(|| ops::generator_size(node, &eval)),
+                .unwrap_or_else(|| ops::generator_size(node, eval)),
             // Handled above; a Referenced operator never reaches here.
             Sizing::Referenced => FALLBACK_SIZE,
         };
@@ -668,7 +697,7 @@ impl Cooker for TopEngine {
         // ---- Shader: built in, or compiled from a parameter.
         let mut pipeline_key: Option<String> = None;
         if spec.dynamic_shader {
-            let (source, is_glsl) = ops::shader_source(node, &eval);
+            let (source, is_glsl) = ops::shader_source(node, eval);
             match self.user_pipeline(&source, is_glsl) {
                 Ok(key) => {
                     let entry = self.nodes.entry(id).unwrap().or_default();
@@ -689,11 +718,11 @@ impl Cooker for TopEngine {
             }
         }
 
-        let params = (spec.pack)(node, &eval);
+        let params = (spec.pack)(node, eval);
         let base = self.uniforms(width, height, ctx, params);
         let nearest = node
             .param("filter")
-            .map(|p| p.eval(&eval).as_str() == "nearest")
+            .map(|p| p.eval(eval).as_str() == "nearest")
             .unwrap_or(false);
 
         let in0 = self.input_view(graph, id, 0);

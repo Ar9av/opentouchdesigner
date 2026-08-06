@@ -61,10 +61,23 @@ impl fmt::Display for ExprError {
 }
 impl std::error::Error for ExprError {}
 
-/// Everything an expression is allowed to see. Deliberately narrow: parameters
+/// Read-only access to the rest of the network, for parameters that are
+/// driven by something other than their own value.
+///
+/// Kept as a trait so `otd-core` still knows nothing about CHOPs: the CHOP
+/// engine implements it, and a build with no CHOPs simply passes `None`.
+pub trait ChannelSource {
+    /// The current value of `channel` on the CHOP at `op_path` — Export mode.
+    fn channel(&self, op_path: &str, channel: &str) -> Option<f32>;
+
+    /// The current value of `param` on the operator at `op_path` — Bind mode.
+    fn param_value(&self, op_path: &str, param: &str) -> Option<crate::value::Value>;
+}
+
+/// Everything a parameter is allowed to see. Deliberately narrow: parameters
 /// must not be able to reach into the graph and mutate it mid-cook.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct EvalContext {
+#[derive(Clone, Copy, Default)]
+pub struct EvalContext<'a> {
     /// Frame number since the project started.
     pub frame: i64,
     /// Component-local time in seconds (per-component local time, PLAN.md §2.2).
@@ -73,6 +86,21 @@ pub struct EvalContext {
     pub abs_time: f64,
     /// Nominal frames per second of the timeline.
     pub fps: f64,
+    /// Present once CHOPs are cooking; `None` in a pure-TOP build or before
+    /// the first frame.
+    pub channels: Option<&'a dyn ChannelSource>,
+}
+
+impl fmt::Debug for EvalContext<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EvalContext")
+            .field("frame", &self.frame)
+            .field("time", &self.time)
+            .field("abs_time", &self.abs_time)
+            .field("fps", &self.fps)
+            .field("channels", &self.channels.is_some())
+            .finish()
+    }
 }
 
 /// Variable names that make an expression re-cook every frame.
@@ -439,6 +467,7 @@ mod tests {
                 time: 1.0,
                 abs_time: 2.0,
                 fps: 60.0,
+                channels: None,
             })
             .expect("eval")
     }

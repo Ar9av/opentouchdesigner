@@ -1,5 +1,5 @@
 [package]
-name = "otd-app"
+name = "otd-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,13 +7,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-eframe = { version = "0.35.0", features = ["wgpu"] }
-egui = "0.35.0"
-env_logger = "0.11.11"
-log = "0.4.33"
 otd-chop = { version = "0.1.0", path = "../otd-chop" }
 otd-core = { version = "0.1.0", path = "../otd-core" }
-otd-engine = { version = "0.1.0", path = "../otd-engine" }
 otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
-rfd = "0.17.2"
+
+[dev-dependencies]
+image = { version = "0.25.9", default-features = false, features = ["png"] }
 wgpu = "29"

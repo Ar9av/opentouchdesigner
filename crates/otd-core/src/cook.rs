@@ -20,7 +20,7 @@
 use slotmap::SecondaryMap;
 use std::time::Instant;
 
-use crate::expr::EvalContext;
+use crate::expr::{ChannelSource, EvalContext};
 use crate::graph::{Graph, NodeId};
 
 /// Time state for one frame.
@@ -32,6 +32,13 @@ pub struct CookContext {
     /// Absolute time since the project started, seconds.
     pub abs_time: f64,
     pub fps: f64,
+    /// Seconds elapsed since the previous frame.
+    ///
+    /// CHOPs need the *actual* frame interval, not the nominal one: TD-style
+    /// time slicing generates however many samples cover the time that really
+    /// passed, so control and audio stay continuous across a dropped frame
+    /// (PLAN.md §4).
+    pub dt: f64,
 }
 
 impl Default for CookContext {
@@ -41,17 +48,28 @@ impl Default for CookContext {
             time: 0.0,
             abs_time: 0.0,
             fps: 60.0,
+            dt: 1.0 / 60.0,
         }
     }
 }
 
 impl CookContext {
-    pub fn eval_ctx(&self) -> EvalContext {
+    pub fn eval_ctx(&self) -> EvalContext<'static> {
         EvalContext {
             frame: self.frame,
             time: self.time,
             abs_time: self.abs_time,
             fps: self.fps,
+            channels: None,
+        }
+    }
+
+    /// The same context, with somewhere to resolve Export and Bind
+    /// parameters from.
+    pub fn eval_ctx_with<'a>(&self, channels: &'a dyn ChannelSource) -> EvalContext<'a> {
+        EvalContext {
+            channels: Some(channels),
+            ..self.eval_ctx()
         }
     }
 
@@ -60,6 +78,7 @@ impl CookContext {
         self.frame += 1;
         self.time += dt;
         self.abs_time += dt;
+        self.dt = dt;
     }
 }
 
@@ -207,10 +226,21 @@ impl CookEngine {
             }
         }
 
-        // Non-wire dependencies (a Select TOP's target, later a parameter
-        // expression's `op()` reference) are pulled and versioned exactly like
-        // wired inputs, so they dirty and animate this node the same way.
-        for src in cooker.extra_inputs(graph, id) {
+        // Parameters in Export or Bind mode read from another operator. That
+        // operator has to cook first, and its animation has to reach this
+        // node, so it is a dependency in every sense except the wire.
+        let param_sources: Vec<NodeId> = node
+            .param_sources()
+            .filter_map(|path| graph.find(path))
+            .collect();
+
+        // Non-wire dependencies (a Select TOP's target, a parameter's Export
+        // source) are pulled and versioned exactly like wired inputs, so they
+        // dirty and animate this node the same way.
+        for src in param_sources
+            .into_iter()
+            .chain(cooker.extra_inputs(graph, id))
+        {
             if src == id || !graph.contains(src) {
                 continue;
             }

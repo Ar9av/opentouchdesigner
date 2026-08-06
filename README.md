@@ -4,11 +4,12 @@ An open-source, cross-platform, node-based realtime visual programming
 environment in the spirit of TouchDesigner. Written in Rust on wgpu, so
 `cargo run` works on macOS, Windows and Linux.
 
-**Status: Phases 0 and 1 complete apart from video I/O.** See
-[PLAN.md](PLAN.md) for the research and the full roadmap. What exists today is
-a working graph, cook engine, GPU texture pipeline with live shader
-compilation, text project format, node editor and projector output — not yet a
-tool you would take to a show.
+**Status: Phases 0–2 complete apart from video I/O.** See [PLAN.md](PLAN.md)
+for the research and the full roadmap. What exists today is a working graph,
+cook engine, GPU texture pipeline with live shader compilation, a channel
+pipeline with audio, MIDI and OSC input, the four-mode parameter system, a
+text project format, a node editor and projector output — not yet a tool you
+would take to a show.
 
 ## Try it
 
@@ -17,15 +18,23 @@ cargo run -p otd-app
 ```
 
 It opens on the starter patch: `noise1 → level1 → null1`, animated, running
-live. Every node shows its own output at frame rate. **File → Examples →
-feedback** loads the Phase 1 demo: a Shadertoy shader driving a feedback loop
-at 1920×1080.
+live. Every node shows its own output at frame rate — a TOP shows its texture,
+a CHOP shows its waveform.
+
+**File → Examples** has the demos each phase was built to reach:
+
+| | |
+|---|---|
+| `starter` | `noise → level → viewer`, animated by expressions |
+| `feedback` | a Shadertoy shader driving a feedback loop at 1920×1080 |
+| `audioreactive` | audio spectrum and MIDI notes driving a visual through Exports |
+| `lfo` | the smallest thing that shows a channel driving a parameter |
 
 Render a frame with no window at all — something TouchDesigner cannot do on a
 Linux server:
 
 ```bash
-cargo run -p otd-gpu --example render_png -- frame.png examples/feedback.otd 300
+cargo run -p otd-engine --example render_png -- frame.png examples/feedback.otd 300
 ```
 
 ### Keys
@@ -59,13 +68,28 @@ propagates dirtiness and animation exactly like a wire. Feedback deliberately
 does not, which is precisely what lets a feedback loop exist without a cycle
 in the cook graph.
 
-**Parameters** — the four-mode system: Constant, Expression, Export, Bind.
-Constant and Expression are live; Export and Bind are visible but inert until
-CHOPs land in Phase 2. Expression mode runs a self-contained numeric evaluator
-(`absTime`, `frame`, `sin`, `fit`, `clamp`, …) that is a strict subset of the
-Python expressions Phase 3 will run, so projects written today keep loading.
-Switching a parameter to Expression and back does not lose the constant
-underneath.
+**Parameters** — the four-mode system, all four live: **Constant**,
+**Expression**, **Export** (driven by a CHOP channel) and **Bind** (following
+another parameter). Drag a channel from the panel onto a parameter to export
+it; click the mode button to release it, keeping whatever value it was showing
+so the picture doesn't jump. Expression mode runs a self-contained numeric
+evaluator (`absTime`, `frame`, `sin`, `fit`, `clamp`, …) that is a strict
+subset of the Python expressions Phase 3 will run, so projects written today
+keep loading. Switching a parameter to Expression and back does not lose the
+constant underneath.
+
+**CHOPs** (`otd-chop`) — Constant, LFO, Noise, Pattern, Math, Lag, Filter,
+Logic, Trigger, Timer, Speed, Count, Select, Merge, Switch, Null, plus Audio
+Device In, Audio Spectrum, MIDI In, OSC In, OSC Out, Mouse In and Keyboard In.
+
+Channels are **time sliced** the way TD does it: a generator emits however
+many samples cover the frame interval that *actually* elapsed, so an LFO stays
+on pitch and audio stays continuous when the renderer stutters. Devices run on
+their own threads — cpal's audio callback, midir's MIDI thread, a socket
+thread for OSC — and hand buffers to the cook; nothing device-related can
+block a frame. A missing interface reports itself on the node and produces
+silence rather than failing the cook, because losing a device mid-show must
+not stop the render.
 
 **TOPs** (`otd-gpu`) — Constant, Noise, Ramp, GLSL, Level, Transform, Blur,
 Displace, Composite, Switch, Resolution, Cache, Select, Null, Out, Feedback.
@@ -87,27 +111,33 @@ survive the round trip unchanged. See
 [`examples/feedback.otd`](examples/feedback.otd).
 
 **Editor** (`otd-app`) — node canvas with live per-node viewers, wiring,
-parameter panel with a shader code editor, output viewer, a second output
-window for a projector, cook/GPU statistics in the top bar. The thumbnails are
-the operators' real textures shared with egui — no copy, no readback.
+parameter panel with a shader code editor and a draggable channel list, output
+viewer, a second output window for a projector, cook/GPU statistics in the top
+bar. The thumbnails are the operators' real textures shared with egui — no
+copy, no readback.
 
 ## What doesn't exist yet
 
-**Video and audio I/O** — Movie File In/Out and Video Device In are the one
-part of Phase 1 not built. They need GStreamer, which is a system dependency
-rather than a crate, and none of it can be verified without it installed.
+**Video I/O** — Movie File In/Out and Video Device In are the one part of
+Phase 1 not built. They need GStreamer, which is a system dependency rather
+than a crate, and none of it can be verified without it installed.
 
-Everything else is Phases 2–6 of [PLAN.md](PLAN.md): CHOPs, SOPs, DATs, MATs,
-component encapsulation, Python, 3D rendering, Spout/Syphon/NDI, timeline,
-undo.
+Everything else is Phases 3–6 of [PLAN.md](PLAN.md): component encapsulation,
+Python, SOPs, DATs, MATs, 3D rendering, Spout/Syphon/NDI, timeline, undo.
 
 ## Layout
 
 ```
-crates/otd-core   graph, cook engine, parameters, project format  (no GPU, no UI)
-crates/otd-gpu    wgpu TOP engine, shaders, headless renderer
-crates/otd-app    egui editor shell
+crates/otd-core     graph, cook engine, parameters, project format  (no GPU, no UI)
+crates/otd-chop     channels, time slicing, audio/MIDI/OSC          (no GPU, no UI)
+crates/otd-gpu      wgpu TOP engine, shaders
+crates/otd-engine   the cross-family cook, demo patches, headless renderer
+crates/otd-app      egui editor shell
 ```
+
+`otd-gpu` and `otd-chop` know nothing about each other. `otd-engine` is the
+only place they meet, and it exists for one reason: a TOP parameter in Export
+mode has to read a CHOP channel cooked in the same frame.
 
 `otd-core` has no GPU or UI dependency on purpose — it is what makes the cook
 engine unit-testable and keeps a headless runtime and a future WASM playground
@@ -119,14 +149,20 @@ open.
 cargo test --workspace
 ```
 
-GPU tests skip themselves on machines with no adapter. Both phase exit
-criteria are asserted rather than claimed:
+GPU tests skip themselves on machines with no adapter. Every phase exit
+criterion is asserted rather than claimed:
 
-- [`tests/phase0.rs`](crates/otd-gpu/tests/phase0.rs) — an animated
+- [`otd-gpu/tests/phase0.rs`](crates/otd-gpu/tests/phase0.rs) — an animated
   `Noise → Level → viewer` chain at 1280×720 sustains 60 fps (1.3 ms/frame here)
-- [`tests/phase1.rs`](crates/otd-gpu/tests/phase1.rs) — the Shadertoy feedback
-  patch sustains 60 fps at 1920×1080 (2.5 ms/frame here), actually accumulates
-  trails, and survives a save/load round trip byte-identically
+- [`otd-gpu/tests/phase1.rs`](crates/otd-gpu/tests/phase1.rs) — the Shadertoy
+  feedback patch sustains 60 fps at 1920×1080 (2.5 ms/frame here), actually
+  accumulates trails, and survives a save/load round trip byte-identically
+- [`otd-engine/tests/phase2.rs`](crates/otd-engine/tests/phase2.rs) — a channel
+  drives a texture parameter within the same frame, a note reaches a
+  transform, and the audio-reactive patch runs with nothing plugged in
+
+The OSC test is a real UDP loopback and the spectrum test is a real FFT, so
+those paths are exercised rather than mocked.
 
 ## Adding an operator
 
