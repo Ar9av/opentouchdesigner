@@ -1,0 +1,22 @@
+[package]
+name = "otd-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "otd"
+path = "src/main.rs"
+
+[dependencies]
+otd-core = { version = "0.1.0", path = "../otd-core" }
+otd-engine = { version = "0.1.0", path = "../otd-engine" }
+otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+otd-core = { version = "0.1.0", path = "../otd-core" }
+otd-engine = { version = "0.1.0", path = "../otd-engine" }
+otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
