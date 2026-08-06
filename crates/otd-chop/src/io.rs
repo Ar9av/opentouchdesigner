@@ -39,6 +39,7 @@ pub struct Io {
     midi: HashMap<String, MidiIn>,
     osc_in: HashMap<String, OscIn>,
     osc_out: HashMap<String, OscOut>,
+    dmx: HashMap<String, DmxOut>,
     spectra: HashMap<String, Spectrum>,
     /// Per-node message shown on the node body — "no such device", and so on.
     pub status: HashMap<String, String>,
@@ -67,6 +68,7 @@ impl Io {
         self.midi.clear();
         self.osc_in.clear();
         self.osc_out.clear();
+        self.dmx.clear();
         self.spectra.clear();
         self.status.clear();
     }
@@ -733,6 +735,137 @@ fn cook_osc_out(c: &mut ChopCtx) -> ChopData {
     input
 }
 
+// ------------------------------------------------------------- DMX out
+
+struct DmxOut {
+    socket: UdpSocket,
+    target: SocketAddr,
+    sequence: u8,
+    cid: [u8; 16],
+}
+
+fn params_dmx_out() -> IndexMap<String, Param> {
+    let mut m = IndexMap::new();
+    m.insert(
+        "protocol".into(),
+        Param::menu("artnet", &["artnet", "sacn"]).with_label("Protocol"),
+    );
+    m.insert(
+        "address".into(),
+        Param::str("").with_label("Address (blank = broadcast / multicast)"),
+    );
+    m.insert(
+        "universe".into(),
+        Param::int(0).with_label("Universe").with_range(0.0, 32767.0),
+    );
+    m.insert(
+        "start".into(),
+        Param::int(1).with_label("Start Channel").with_range(1.0, 512.0),
+    );
+    m.insert("active".into(), Param::bool(true).with_label("Active"));
+    m
+}
+
+fn cook_dmx_out(c: &mut ChopCtx) -> ChopData {
+    let input = c.input(0).clone();
+    let get = |k: &str| c.node.param(k).map(|p| p.eval(c.eval));
+    if !get("active").map(|v| v.as_bool()).unwrap_or(true) || input.num_channels() == 0 {
+        return input;
+    }
+    let sacn = c
+        .node
+        .param("protocol")
+        .and_then(|p| {
+            let chosen = p.eval(c.eval).as_str();
+            p.menu.as_ref().map(|m| m.iter().position(|i| *i == chosen))
+        })
+        .flatten()
+        .unwrap_or(0)
+        == 1;
+    let universe = get("universe").map(|v| v.as_i64()).unwrap_or(0).clamp(0, 32767) as u16;
+    let start = get("start").map(|v| v.as_i64()).unwrap_or(1).clamp(1, 512) as usize;
+    let host = get("address").map(|v| v.as_str()).unwrap_or_default();
+    let path = c.path.to_string();
+
+    // DMX is a state protocol: each frame carries the current level of every
+    // slot, which is the last sample of each channel.
+    let mut slots = vec![0u8; crate::dmx::UNIVERSE_SIZE];
+    for (i, ch) in input.channels.iter().enumerate() {
+        let slot = start - 1 + i;
+        if slot < slots.len() {
+            slots[slot] = crate::dmx::to_slot(ch.last());
+        }
+    }
+    let used = (start - 1 + input.num_channels()).min(crate::dmx::UNIVERSE_SIZE);
+
+    let target: SocketAddr = if host.trim().is_empty() {
+        if sacn {
+            SocketAddr::from((crate::dmx::sacn_multicast(universe), crate::dmx::SACN_PORT))
+        } else {
+            // Art-Net's convention is a directed broadcast.
+            SocketAddr::from(([255, 255, 255, 255], crate::dmx::ARTNET_PORT))
+        }
+    } else {
+        let port = if sacn {
+            crate::dmx::SACN_PORT
+        } else {
+            crate::dmx::ARTNET_PORT
+        };
+        match format!("{}:{port}", host.trim()).parse() {
+            Ok(a) => a,
+            Err(_) => {
+                c.io.note(&path, format!("bad DMX address `{host}`"));
+                return input;
+            }
+        }
+    };
+
+    if !c.io.dmx.contains_key(&path) {
+        match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))) {
+            Ok(socket) => {
+                // Art-Net expects broadcast; without this the send fails on
+                // every platform that enforces it.
+                let _ = socket.set_broadcast(true);
+                let mut cid = [0u8; 16];
+                for (i, b) in path.bytes().take(16).enumerate() {
+                    cid[i] = b;
+                }
+                c.io.clear_note(&path);
+                c.io.dmx.insert(
+                    path.clone(),
+                    DmxOut {
+                        socket,
+                        target,
+                        sequence: 0,
+                        cid,
+                    },
+                );
+            }
+            Err(e) => c.io.note(&path, e.to_string()),
+        }
+    }
+
+    if let Some(out) = c.io.dmx.get_mut(&path) {
+        out.target = target;
+        out.sequence = out.sequence.wrapping_add(1);
+        let packet = if sacn {
+            crate::dmx::sacn_packet(
+                universe,
+                out.sequence,
+                "OpenTouchDesigner",
+                &out.cid,
+                &slots[..used],
+            )
+        } else {
+            crate::dmx::artnet_packet(universe, out.sequence, &slots[..used])
+        };
+        if let Err(e) = out.socket.send_to(&packet, out.target) {
+            c.io.note(&path, format!("DMX send: {e}"));
+        }
+    }
+    input
+}
+
 // ------------------------------------------------------- mouse, keyboard
 
 fn params_mouse_in() -> IndexMap<String, Param> {
@@ -795,6 +928,7 @@ pub const MIDI_IN: &str = "midiinCHOP";
 pub const OSC_IN: &str = "oscinCHOP";
 pub const OSC_OUT: &str = "oscoutCHOP";
 pub const SPECTRUM: &str = "audiospectrumCHOP";
+pub const DMX_OUT: &str = "dmxoutCHOP";
 
 pub(crate) fn specs() -> Vec<ChopSpec> {
     vec![
@@ -837,6 +971,14 @@ pub(crate) fn specs() -> Vec<ChopSpec> {
             "Sends its channels as one OSC message per frame.",
             params_osc_out,
             cook_osc_out,
+        ),
+        spec_animated(
+            DMX_OUT,
+            "DMX Out",
+            &["in"],
+            "Sends its channels as DMX over Art-Net or sACN.",
+            params_dmx_out,
+            cook_dmx_out,
         ),
         spec_animated(
             "mouseinCHOP",
