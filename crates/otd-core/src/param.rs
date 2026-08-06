@@ -57,6 +57,45 @@ pub struct Param {
     compiled: Option<Expr>,
     #[serde(skip)]
     error: Option<String>,
+    /// The built-in language could not parse this, so it is Python's.
+    #[serde(skip)]
+    needs_python: bool,
+    /// Operator paths this expression mentions, so the cook engine can make
+    /// them dependencies.
+    #[serde(skip)]
+    refs: Vec<String>,
+}
+
+/// Pull operator paths out of an expression.
+///
+/// An expression like `ch('/lfo1', 'chan1')` has to make `/lfo1` cook first,
+/// and there is no way to know that without looking at the source: the
+/// interpreter only finds out when it runs. Quoted strings that look like
+/// operator paths are treated as references. Over-reporting is harmless — an
+/// extra dependency costs one cached lookup — while under-reporting would
+/// read a stale channel.
+fn extract_paths(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes: Vec<char> = source.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        let quote = bytes[i];
+        if quote != '\'' && quote != '"' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut j = start;
+        while j < bytes.len() && bytes[j] != quote {
+            j += 1;
+        }
+        let literal: String = bytes[start..j.min(bytes.len())].iter().collect();
+        if literal.starts_with('/') && !out.contains(&literal) {
+            out.push(literal);
+        }
+        i = j + 1;
+    }
+    out
 }
 
 fn is_default_mode(m: &ParamMode) -> bool {
@@ -65,6 +104,16 @@ fn is_default_mode(m: &ParamMode) -> bool {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Keep the parameter's declared type: a Python expression returning a float
+/// for an int parameter should round, not change the parameter's type.
+fn coerce_like(declared: &Value, produced: Value) -> Value {
+    if declared.same_type_as(&produced) {
+        produced
+    } else {
+        declared.coerce_from_f64(produced.as_f64())
+    }
 }
 
 impl Param {
@@ -80,6 +129,8 @@ impl Param {
             custom: false,
             compiled: None,
             error: None,
+            needs_python: false,
+            refs: Vec::new(),
         }
     }
 
@@ -120,6 +171,8 @@ impl Param {
     /// Recompile the expression. Must be called after deserialization — the
     /// compiled AST is not part of the project file.
     pub fn recompile(&mut self) {
+        self.needs_python = false;
+        self.refs.clear();
         if self.mode != ParamMode::Expression || self.expression.trim().is_empty() {
             self.compiled = None;
             self.error = None;
@@ -130,9 +183,14 @@ impl Param {
                 self.compiled = Some(e);
                 self.error = None;
             }
-            Err(e) => {
+            // Not an error yet: the built-in language is a fast path for the
+            // common case, and anything it cannot parse is handed to Python.
+            // Only if Python is absent too does this become a real error.
+            Err(_) => {
                 self.compiled = None;
-                self.error = Some(e.0);
+                self.error = None;
+                self.needs_python = true;
+                self.refs = extract_paths(&self.expression);
             }
         }
     }
@@ -146,6 +204,10 @@ impl Param {
     /// Propagated into the cook engine's `time_dependent` flag.
     pub fn is_time_dependent(&self) -> bool {
         match self.mode {
+            // A Python expression is assumed animated: proving otherwise would
+            // mean analysing arbitrary Python, and cooking a static parameter
+            // every frame is far cheaper than a viewer that never updates.
+            ParamMode::Expression if self.needs_python => true,
             ParamMode::Expression => self
                 .compiled
                 .as_ref()
@@ -170,6 +232,12 @@ impl Param {
                     Ok(v) => self.value.coerce_from_f64(v),
                     Err(_) => self.value.clone(),
                 },
+                None if self.needs_python => ctx
+                    .channels
+                    .and_then(|c| c.eval_python(&self.expression, ctx, ctx.path.unwrap_or("")))
+                    .and_then(|r| r.ok())
+                    .map(|v| coerce_like(&self.value, v))
+                    .unwrap_or_else(|| self.value.clone()),
                 None => self.value.clone(),
             },
             ParamMode::Export => self
@@ -197,6 +265,14 @@ impl Param {
 
     /// The operator this parameter reads from, if it is in Export or Bind
     /// mode. The cook engine turns these into dependencies.
+    /// Operators this parameter reads from, whatever the mode: an Export or
+    /// Bind source, or a path mentioned in a Python expression.
+    pub fn referenced_ops(&self) -> impl Iterator<Item = &str> {
+        self.source_op()
+            .into_iter()
+            .chain(self.refs.iter().map(|s| s.as_str()))
+    }
+
     pub fn source_op(&self) -> Option<&str> {
         match self.mode {
             ParamMode::Export | ParamMode::Bind => self.source_parts().map(|(p, _)| p),
@@ -227,6 +303,14 @@ impl Param {
                     .eval(ctx)
                     .map(|v| self.value.coerce_from_f64(v))
                     .map_err(|e| e.0),
+                None if self.needs_python => match ctx
+                    .channels
+                    .and_then(|c| c.eval_python(&self.expression, ctx, ctx.path.unwrap_or("")))
+                {
+                    Some(Ok(v)) => Ok(coerce_like(&self.value, v)),
+                    Some(Err(e)) => Err(e),
+                    None => Err("no Python interpreter in this build".to_string()),
+                },
                 None => Ok(self.value.clone()),
             }
         } else {
@@ -280,12 +364,39 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_expression_falls_back_instead_of_failing() {
+    fn an_expression_the_fast_path_cannot_parse_is_handed_to_python() {
+        // Anything the built-in language does not understand is Python's,
+        // whether it is valid Python or not — this crate cannot tell, and
+        // guessing would reject working code.
         let mut p = Param::float(7.0);
-        p.set_expression("1 +");
-        assert!(p.error().is_some());
+        p.set_expression("sum(x for x in range(4))");
+        assert!(p.needs_python);
+        assert!(
+            p.is_time_dependent(),
+            "an unanalysable expression must be assumed animated"
+        );
+        assert_eq!(p.referenced_ops().count(), 0);
+
+        // With no interpreter available the constant stands, and asking for
+        // the value explicitly says why.
         assert_eq!(p.eval(&EvalContext::default()).as_f64(), 7.0);
-        assert!(p.eval_checked(&EvalContext::default()).is_err());
+        assert!(
+            p.eval_checked(&EvalContext::default())
+                .unwrap_err()
+                .contains("Python")
+        );
+    }
+
+    #[test]
+    fn paths_mentioned_in_an_expression_become_references() {
+        let mut p = Param::float(0.0);
+        p.set_expression("ch('/lfo1', 'chan1') + ch(\"/audio/level\", 'band1')");
+        let refs: Vec<&str> = p.referenced_ops().collect();
+        assert_eq!(refs, vec!["/lfo1", "/audio/level"]);
+
+        // A quoted string that is not a path is not a reference.
+        p.set_expression("'hello'.upper()");
+        assert_eq!(p.referenced_ops().count(), 0);
     }
 
     struct FakeNetwork;

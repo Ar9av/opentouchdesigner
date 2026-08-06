@@ -78,6 +78,20 @@ pub trait ChannelSource {
     fn parent_param(&self, _node_path: &str, _param: &str) -> Option<crate::value::Value> {
         None
     }
+
+    /// Evaluate an expression the built-in language could not parse.
+    ///
+    /// `None` means there is no Python in this build, in which case the
+    /// parameter keeps its constant. Implemented in `otd-engine`, so
+    /// `otd-core` stays free of the interpreter.
+    fn eval_python(
+        &self,
+        _source: &str,
+        _ctx: &EvalContext,
+        _path: &str,
+    ) -> Option<Result<crate::value::Value, String>> {
+        None
+    }
 }
 
 /// Everything a parameter is allowed to see. Deliberately narrow: parameters

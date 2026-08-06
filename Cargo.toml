@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app", "crates/otd-chop", "crates/otd-engine"]
+members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app", "crates/otd-chop", "crates/otd-engine", "crates/otd-py"]
 
 [workspace.package]
 version = "0.1.0"
