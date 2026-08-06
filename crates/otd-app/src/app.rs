@@ -168,6 +168,14 @@ impl OtdApp {
             self.time.advance(dt);
         }
 
+        // Clones follow their master. An unchanged master costs one subtree
+        // walk, so this is cheap enough to do every frame and means the
+        // editor never shows a stale copy.
+        let synced = self.graph.sync_clones(&self.registry);
+        if synced > 0 {
+            self.status = format!("synced {synced} clone(s)");
+        }
+
         let roots = self.cook_roots();
         self.engines.set_input_state(self.input_state.clone());
         self.engines.begin_frame();
@@ -210,6 +218,67 @@ impl OtdApp {
                 );
                 self.thumbs.insert(id, (tid, tex.generation));
                 Some((tid, size))
+            }
+        }
+    }
+
+    /// Write the selected component out as a `.otdc`.
+    pub fn save_component(&mut self) {
+        let Some(id) = self.selected.filter(|s| self.graph.contains(*s)) else {
+            return;
+        };
+        if self.graph.node(id).family != otd_core::Family::Comp {
+            self.status = "select a component first".into();
+            return;
+        }
+        let name = self.graph.node(id).name.clone();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("OpenTouchDesigner component", &["otdc"])
+            .set_file_name(format!("{name}.otdc"))
+            .save_file()
+        else {
+            return;
+        };
+        match otd_core::Component::from_graph(&self.graph, id, &self.registry) {
+            Some(c) => match c.save(&path) {
+                Ok(()) => self.status = format!("Saved component {}", path.display()),
+                Err(e) => self.status = format!("Save failed: {e}"),
+            },
+            None => self.status = "could not read that component".into(),
+        }
+    }
+
+    /// Bring a `.otdc` into the current network, linked to its file so later
+    /// edits to the shared definition arrive here.
+    pub fn import_component(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("OpenTouchDesigner component", &["otdc"])
+            .pick_file()
+        else {
+            return;
+        };
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "component".into());
+        let Some(def) = self.registry.get("containerCOMP").cloned() else {
+            return;
+        };
+        let parent = self.current;
+        let Ok(id) = self.graph.create(parent, &def, Some(&name)) else {
+            return;
+        };
+        match self
+            .graph
+            .attach_external(id, &path.to_string_lossy(), &self.registry)
+        {
+            Ok(()) => {
+                self.selected = Some(id);
+                self.status = format!("Imported {}", path.display());
+            }
+            Err(e) => {
+                let _ = self.graph.remove(id);
+                self.status = format!("Import failed: {e}");
             }
         }
     }
@@ -376,6 +445,28 @@ impl OtdApp {
                     }
                     if ui.button("Save As…").clicked() {
                         self.save(None);
+                        ui.close();
+                    }
+                    ui.separator();
+                    let on_comp = self
+                        .selected
+                        .and_then(|s| self.graph.get(s))
+                        .map(|n| n.family == otd_core::Family::Comp)
+                        .unwrap_or(false);
+                    if ui
+                        .add_enabled(on_comp, egui::Button::new("Save Component As…"))
+                        .on_hover_text("Write the selected component to a .otdc file")
+                        .clicked()
+                    {
+                        self.save_component();
+                        ui.close();
+                    }
+                    if ui
+                        .button("Import Component…")
+                        .on_hover_text("Load a .otdc into this network, linked to its file")
+                        .clicked()
+                    {
+                        self.import_component();
                         ui.close();
                     }
                     ui.separator();

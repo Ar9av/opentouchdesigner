@@ -4,8 +4,7 @@ An open-source, cross-platform, node-based realtime visual programming
 environment in the spirit of TouchDesigner. Written in Rust on wgpu, so
 `cargo run` works on macOS, Windows and Linux.
 
-**Status: Phases 0–2 complete apart from video I/O; Phase 3 all but
-external component files.** See [PLAN.md](PLAN.md)
+**Status: Phases 0–3 complete apart from video I/O.** See [PLAN.md](PLAN.md)
 for the research and the full roadmap. What exists today is a working graph,
 cook engine, GPU texture pipeline with live shader compilation, a channel
 pipeline with audio, MIDI and OSC input, the four-mode parameter system, a
@@ -88,6 +87,13 @@ and the same network behaves differently in each instance without any of it
 being duplicated. The boundary is a dependency in both directions, so
 dirtiness and animation cross it by exactly the rules a wire uses.
 
+A component can be saved as a `.otdc` file and shared: the project then holds
+a reference and the instance's settings while the file holds the network, so
+two projects using one component share one definition and editing it is one
+diff. A component can instead **clone** another one in the same project,
+following its structure while keeping its own parameter values. Either way,
+re-reading a shared definition never resets the values an artist dialled in.
+
 **Python** (`otd-py`) — expressions are evaluated in two tiers. A small
 built-in language handles the common case with no interpreter and no GIL;
 anything it cannot parse goes to embedded CPython, with `math`, `random`,
@@ -141,10 +147,6 @@ copy, no readback.
 
 ## What doesn't exist yet
 
-**External component files** (`.otdc`) and clones — the last piece of Phase 3.
-Components work and are reusable *within* a project; sharing one between
-projects as a file is not built.
-
 **Video I/O** — Movie File In/Out and Video Device In are the one part of
 Phase 1 not built. They need GStreamer, which is a system dependency rather
 than a crate, and none of it can be verified without it installed.
@@ -192,6 +194,9 @@ criterion is asserted rather than claimed:
 - [`otd-engine/tests/phase3.rs`](crates/otd-engine/tests/phase3.rs) — one
   component used twice renders two different pictures from one definition,
   and turning one of its knobs changes exactly one line of the project file
+- [`otd-engine/tests/external.rs`](crates/otd-engine/tests/external.rs) — two
+  projects share one `.otdc`, an edit to it reaches both, and neither project
+  file contains the shared network
 
 The OSC test is a real UDP loopback and the spectrum test is a real FFT, so
 those paths are exercised rather than mocked.

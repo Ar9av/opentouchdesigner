@@ -71,6 +71,7 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
 
     channel_list(app, ui, id);
+    component_links(app, ui, id);
     custom_param_editor(app, ui, id);
     ui.separator();
 
@@ -248,6 +249,50 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+/// Where a component's contents come from: a shared file, or another
+/// component it tracks.
+fn component_links(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
+    if app.graph.node(id).family != otd_core::Family::Comp {
+        return;
+    }
+    let external = app.graph.node(id).external.clone();
+    let mut clone_of = app.graph.node(id).clone_of.clone().unwrap_or_default();
+
+    ui.separator();
+    if let Some(file) = &external {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("From file").weak().small());
+            ui.label(RichText::new(file).monospace().small());
+        });
+        ui.label(
+            RichText::new("edits here are local until you save the component again")
+                .weak()
+                .small(),
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label("Clone of");
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut clone_of)
+                    .hint_text("/master_component")
+                    .desired_width(180.0),
+            )
+            .changed()
+        {
+            let trimmed = clone_of.trim().to_string();
+            app.graph.set_clone(
+                id,
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(&trimmed)
+                },
+            );
+        }
+    });
 }
 
 /// Add and remove a component's own parameters.
