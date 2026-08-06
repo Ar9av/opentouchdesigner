@@ -76,6 +76,15 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
     let eval_ctx = app.time.eval_ctx();
 
     for key in keys {
+        // A shader source gets a code editor across the full panel width
+        // rather than a one-line text field, with its compile error directly
+        // underneath. Live-coding is only usable if the error is where you
+        // are looking.
+        if key == "source" {
+            shader_editor(app, ui, id);
+            continue;
+        }
+
         let (label, mode, mut value, mut expression, range, menu, error, evaluated) = {
             let p = &app.graph.node(id).params[&key];
             let label = if p.label.is_empty() {
@@ -170,6 +179,65 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+/// The code editor for a GLSL TOP's `source` parameter.
+fn shader_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
+    let mut source = app.graph.node(id).params["source"].value.as_str();
+    let is_glsl = app
+        .graph
+        .node(id)
+        .params
+        .get("language")
+        .map(|p| p.value.as_str() == "glsl")
+        .unwrap_or(false);
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.strong("Source");
+        ui.label(
+            RichText::new(if is_glsl {
+                "Shadertoy GLSL — write mainImage(); iTime, iResolution, iFrame are provided"
+            } else {
+                "WGSL fragment body — in.uv, U.time.x, U.res, sample0/1(uv), U.p0..p3"
+            })
+            .weak()
+            .small(),
+        );
+    });
+
+    let response = ui.add(
+        egui::TextEdit::multiline(&mut source)
+            .code_editor()
+            .desired_rows(16)
+            .desired_width(f32::INFINITY),
+    );
+    if response.changed() {
+        let _ = app.graph.set_param(id, "source", Value::Str(source));
+    }
+
+    // The compile error comes from the GPU engine, not the parameter, because
+    // the shader is only compiled when the node cooks.
+    match app.top.shader_error(id) {
+        Some(err) => {
+            ui.colored_label(
+                Color32::from_rgb(235, 120, 120),
+                RichText::new(err).small().monospace(),
+            );
+            ui.label(
+                RichText::new("holding the last shader that compiled")
+                    .weak()
+                    .small(),
+            );
+        }
+        None => {
+            ui.colored_label(
+                Color32::from_rgb(130, 200, 140),
+                RichText::new("compiled").small(),
+            );
+        }
+    }
+    ui.add_space(4.0);
 }
 
 fn format_value(v: &Value) -> String {

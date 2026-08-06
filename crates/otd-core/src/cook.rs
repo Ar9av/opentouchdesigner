@@ -89,6 +89,21 @@ pub trait Cooker {
     /// Called when a node is skipped because its cached output is still
     /// valid. Default: nothing.
     fn skipped(&mut self, _graph: &Graph, _id: NodeId) {}
+
+    /// Dependencies a node has that are not wires.
+    ///
+    /// Some operators name their source by parameter rather than by input —
+    /// a Select TOP pointing at `/blur1`, and later a parameter expression
+    /// referencing another operator. Those still have to cook first and still
+    /// have to propagate dirtiness and time dependence, so the backend
+    /// declares them here and the engine treats them exactly like inputs.
+    ///
+    /// A Feedback TOP deliberately does *not* declare its target: reading
+    /// last frame's result is the whole point, and declaring it would be a
+    /// cycle.
+    fn extra_inputs(&self, _graph: &Graph, _id: NodeId) -> Vec<NodeId> {
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -106,6 +121,11 @@ struct NodeCookState {
     cook_count: u64,
     last_cook_us: u64,
     has_cooked: bool,
+    /// Set while this node is on the pull stack. Wired cycles are impossible
+    /// (rejected at connect time) but a parameter-named reference can form
+    /// one — two Select TOPs pointing at each other — and that must degrade
+    /// to a stale read, not a stack overflow.
+    visiting: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -154,15 +174,18 @@ impl CookEngine {
     ) -> Result<u64, CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
 
-        // Already settled this frame (diamond inputs, or a second root).
+        // Already settled this frame (diamond inputs, or a second root), or
+        // already on the stack via a parameter-named reference cycle.
         if let Some(st) = self.state.get(id) {
-            if st.has_cooked && st.resolved_frame == ctx.frame {
+            if st.visiting || (st.has_cooked && st.resolved_frame == ctx.frame) {
                 return Ok(st.output_version);
             }
         }
-        // Claim the frame before recursing. Cycles are rejected at connect
-        // time, but a corrupt project file must not blow the stack.
-        self.state.entry(id).unwrap().or_default().resolved_frame = ctx.frame;
+        {
+            let st = self.state.entry(id).unwrap().or_default();
+            st.resolved_frame = ctx.frame;
+            st.visiting = true;
+        }
 
         // Pull inputs first, collecting their versions and time dependence.
         let mut input_versions = Vec::with_capacity(node.inputs.len());
@@ -184,11 +207,30 @@ impl CookEngine {
             }
         }
 
+        // Non-wire dependencies (a Select TOP's target, later a parameter
+        // expression's `op()` reference) are pulled and versioned exactly like
+        // wired inputs, so they dirty and animate this node the same way.
+        for src in cooker.extra_inputs(graph, id) {
+            if src == id || !graph.contains(src) {
+                continue;
+            }
+            let v = self.pull(graph, src, ctx, cooker)?;
+            inputs_time_dependent |= self
+                .state
+                .get(src)
+                .map(|s| s.time_dependent)
+                .unwrap_or(false);
+            input_versions.push(v);
+        }
+
         let self_time_dependent =
             node.intrinsically_time_dependent || node.has_time_dependent_param();
         let time_dependent = self_time_dependent || inputs_time_dependent;
 
+        // Every recursive pull for this node is done; it is no longer on the
+        // stack.
         let st = self.state.entry(id).unwrap().or_default();
+        st.visiting = false;
         let inputs_changed = st.input_versions != input_versions;
         let edited = st.revision != node.revision();
         let needs_cook = !st.has_cooked || edited || inputs_changed || time_dependent;
@@ -408,6 +450,52 @@ mod tests {
         assert_eq!(e.cook_count(n[1]), 0);
         assert_eq!(e.cook_count(n[0]), 1);
         assert_eq!(resolve_bypass(&g, n[1]), Some(n[0]));
+    }
+
+    #[test]
+    fn a_parameter_named_reference_cooks_and_animates_like_a_wire() {
+        let (mut g, n) = chain();
+        let reg = registry();
+        let root = g.root();
+        // `selector` names n[1] by parameter rather than wiring to it.
+        let selector = g
+            .create(root, reg.get("pass").unwrap(), Some("sel"))
+            .unwrap();
+        let mut cooker = CountingCooker {
+            references: vec![(selector, n[1])],
+            ..Default::default()
+        };
+        g.set_expression(n[0], TEST_PASS, "absTime").unwrap();
+
+        let mut e = CookEngine::new();
+        let mut ctx = CookContext::default();
+        for _ in 0..3 {
+            e.cook_frame(&g, &[selector], &ctx, &mut cooker).unwrap();
+            ctx.advance(1.0 / 60.0);
+        }
+        // Pulling only `selector` must have dragged the referenced branch in.
+        assert_eq!(e.cook_count(n[0]), 3);
+        assert_eq!(e.cook_count(n[1]), 3);
+        assert_eq!(e.cook_count(selector), 3);
+        assert!(e.is_time_dependent(selector), "animation must propagate");
+    }
+
+    #[test]
+    fn a_reference_cycle_degrades_to_a_stale_read_not_a_stack_overflow() {
+        let mut g = Graph::new();
+        let reg = registry();
+        let root = g.root();
+        let a = g.create(root, reg.get("pass").unwrap(), Some("a")).unwrap();
+        let b = g.create(root, reg.get("pass").unwrap(), Some("b")).unwrap();
+        let mut cooker = CountingCooker {
+            references: vec![(a, b), (b, a)],
+            ..Default::default()
+        };
+        let mut e = CookEngine::new();
+        e.cook_frame(&g, &[a], &CookContext::default(), &mut cooker)
+            .unwrap();
+        assert_eq!(e.cook_count(a), 1);
+        assert_eq!(e.cook_count(b), 1);
     }
 
     #[test]

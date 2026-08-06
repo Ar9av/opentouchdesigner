@@ -4,8 +4,10 @@
 //! surface is [`TopEngine`], which implements `otd_core::Cooker`.
 
 pub mod context;
+pub mod demo;
 pub mod engine;
 pub mod ops;
+pub mod shader;
 pub mod texture;
 
 pub use context::GpuContext;
@@ -292,6 +294,286 @@ mod tests {
             engine.textures_created() <= 2,
             "texture pool is not recycling: {} allocations",
             engine.textures_created()
+        );
+    }
+
+    /// Cook `roots` for one frame and read back the first root's pixels.
+    fn cook_and_read(
+        ctx: &GpuContext,
+        engine: &mut TopEngine,
+        cook: &mut CookEngine,
+        graph: &Graph,
+        time: &CookContext,
+        roots: &[otd_core::NodeId],
+    ) -> (u32, Vec<u8>) {
+        engine.begin_frame();
+        for r in roots {
+            cook.pull(graph, *r, time, engine).unwrap();
+        }
+        engine.end_frame();
+        let tex = engine.output(graph, roots[0]).unwrap().clone();
+        let (w, _, pixels) = read_pixels_rgba8(ctx, &tex).unwrap();
+        (w, pixels)
+    }
+
+    #[test]
+    fn a_glsl_top_renders_its_default_wgsl_source() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let g = graph
+            .create(root, reg.get(ops::GLSL).unwrap(), None)
+            .unwrap();
+        graph.set_param(g, "resw", Value::Int(64)).unwrap();
+        graph.set_param(g, "resh", Value::Int(64)).unwrap();
+
+        let mut cook = CookEngine::new();
+        let (w, pixels) = cook_and_read(
+            &ctx,
+            &mut engine,
+            &mut cook,
+            &graph,
+            &CookContext::default(),
+            &[g],
+        );
+        assert!(
+            engine.shader_error(g).is_none(),
+            "{:?}",
+            engine.shader_error(g)
+        );
+        assert!(
+            pixels.iter().step_by(4).any(|p| *p > 8),
+            "default GLSL TOP shader rendered nothing"
+        );
+        assert_eq!(w, 64);
+    }
+
+    #[test]
+    fn a_glsl_top_runs_shadertoy_style_glsl() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let g = graph
+            .create(root, reg.get(ops::GLSL).unwrap(), None)
+            .unwrap();
+        graph.set_param(g, "resw", Value::Int(32)).unwrap();
+        graph.set_param(g, "resh", Value::Int(32)).unwrap();
+        graph
+            .set_param(g, "language", Value::Str("glsl".into()))
+            .unwrap();
+        graph
+            .set_param(
+                g,
+                "source",
+                Value::Str(
+                    "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n\
+                     fragColor = vec4(1.0, 0.0, 0.0, 1.0);\n}"
+                        .into(),
+                ),
+            )
+            .unwrap();
+
+        let mut cook = CookEngine::new();
+        let (w, pixels) = cook_and_read(
+            &ctx,
+            &mut engine,
+            &mut cook,
+            &graph,
+            &CookContext::default(),
+            &[g],
+        );
+        assert!(
+            engine.shader_error(g).is_none(),
+            "{:?}",
+            engine.shader_error(g)
+        );
+        assert_eq!(px(&pixels, w, 4, 4), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_broken_shader_reports_the_error_and_holds_the_last_good_one() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let g = graph
+            .create(root, reg.get(ops::GLSL).unwrap(), None)
+            .unwrap();
+        graph.set_param(g, "resw", Value::Int(16)).unwrap();
+        graph.set_param(g, "resh", Value::Int(16)).unwrap();
+        graph
+            .set_param(g, "source", Value::Str("return vec4<f32>(1.0);".into()))
+            .unwrap();
+
+        let mut cook = CookEngine::new();
+        let mut time = CookContext::default();
+        let (w, good) = cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[g]);
+        assert_eq!(px(&good, w, 2, 2), [255, 255, 255, 255]);
+
+        // Now break it mid-edit.
+        time.advance(1.0 / 60.0);
+        graph
+            .set_param(g, "source", Value::Str("return vec4<f32>(".into()))
+            .unwrap();
+        let (w, after) = cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[g]);
+        assert!(engine.shader_error(g).is_some(), "error should be reported");
+        assert_eq!(
+            px(&after, w, 2, 2),
+            [255, 255, 255, 255],
+            "a typo must not black out a running patch"
+        );
+    }
+
+    #[test]
+    fn a_select_top_reads_this_frame_where_feedback_reads_the_last() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+
+        let src = graph
+            .create(root, reg.get("constantTOP").unwrap(), Some("src"))
+            .unwrap();
+        let sel = graph
+            .create(root, reg.get(ops::SELECT).unwrap(), Some("sel"))
+            .unwrap();
+        graph.set_param(src, "resw", Value::Int(16)).unwrap();
+        graph.set_param(src, "resh", Value::Int(16)).unwrap();
+        graph
+            .set_param(sel, "top", Value::Str("/src".into()))
+            .unwrap();
+        graph
+            .set_param(src, "color", Value::Vec4([1.0, 1.0, 1.0, 1.0]))
+            .unwrap();
+
+        let mut cook = CookEngine::new();
+        let mut time = CookContext::default();
+        // Pulling only the Select must drag its target in and show it.
+        let (w, pixels) = cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[sel]);
+        assert!(px(&pixels, w, 2, 2)[0] > 250);
+        assert_eq!(cook.cook_count(src), 1, "the target must have cooked");
+
+        // Change the source: Select shows the new value the same frame.
+        time.advance(1.0 / 60.0);
+        graph
+            .set_param(src, "color", Value::Vec4([0.0, 0.0, 0.0, 1.0]))
+            .unwrap();
+        let (w, pixels) = cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[sel]);
+        assert!(px(&pixels, w, 2, 2)[0] < 5, "Select must not lag a frame");
+    }
+
+    #[test]
+    fn a_cache_top_freezes_its_input() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let src = graph
+            .create(root, reg.get("constantTOP").unwrap(), None)
+            .unwrap();
+        let cache = graph
+            .create(root, reg.get(ops::CACHE).unwrap(), None)
+            .unwrap();
+        graph.set_param(src, "resw", Value::Int(16)).unwrap();
+        graph.set_param(src, "resh", Value::Int(16)).unwrap();
+        graph.connect(src, cache, 0).unwrap();
+        graph
+            .set_param(src, "color", Value::Vec4([1.0, 1.0, 1.0, 1.0]))
+            .unwrap();
+
+        let mut cook = CookEngine::new();
+        let mut time = CookContext::default();
+        cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[cache]);
+
+        time.advance(1.0 / 60.0);
+        graph
+            .set_param(cache, "active", Value::Bool(false))
+            .unwrap();
+        graph
+            .set_param(src, "color", Value::Vec4([0.0, 0.0, 0.0, 1.0]))
+            .unwrap();
+        let (w, pixels) = cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[cache]);
+        assert!(
+            px(&pixels, w, 2, 2)[0] > 250,
+            "an inactive Cache TOP must hold the frame it had"
+        );
+    }
+
+    #[test]
+    fn a_resolution_top_resamples_to_an_explicit_size() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx);
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let src = graph
+            .create(root, reg.get("noiseTOP").unwrap(), None)
+            .unwrap();
+        let res = graph
+            .create(root, reg.get("resolutionTOP").unwrap(), None)
+            .unwrap();
+        graph.set_param(src, "resw", Value::Int(64)).unwrap();
+        graph.set_param(src, "resh", Value::Int(64)).unwrap();
+        graph.connect(src, res, 0).unwrap();
+        graph.set_param(res, "resw", Value::Int(200)).unwrap();
+        graph.set_param(res, "resh", Value::Int(150)).unwrap();
+
+        let mut cook = CookEngine::new();
+        engine.begin_frame();
+        cook.pull(&graph, res, &CookContext::default(), &mut engine)
+            .unwrap();
+        engine.end_frame();
+        let t = engine.output(&graph, res).unwrap();
+        assert_eq!((t.key.width, t.key.height), (200, 150));
+    }
+
+    #[test]
+    fn a_displace_top_moves_pixels() {
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        // A horizontal ramp displaced by a constant map shifts sideways.
+        let ramp = graph
+            .create(root, reg.get("rampTOP").unwrap(), None)
+            .unwrap();
+        let map = graph
+            .create(root, reg.get("constantTOP").unwrap(), None)
+            .unwrap();
+        let disp = graph
+            .create(root, reg.get("displaceTOP").unwrap(), None)
+            .unwrap();
+        for n in [ramp, map] {
+            graph.set_param(n, "resw", Value::Int(64)).unwrap();
+            graph.set_param(n, "resh", Value::Int(64)).unwrap();
+        }
+        graph
+            .set_param(map, "color", Value::Vec4([1.0, 0.5, 0.0, 1.0]))
+            .unwrap();
+        graph.connect(ramp, disp, 0).unwrap();
+        graph.connect(map, disp, 1).unwrap();
+        graph.set_param(disp, "amount", Value::Float(0.25)).unwrap();
+
+        let mut cook = CookEngine::new();
+        let time = CookContext::default();
+        let (w, displaced) = cook_and_read(&ctx, &mut engine, &mut cook, &graph, &time, &[disp]);
+
+        // Displacement X = (r=1.0 + offset -0.5) * 0.25 = +0.125 in uv.
+        // The ramp is black-to-white left-to-right, so sampling 0.125 further
+        // right makes every pixel brighter.
+        let plain = engine.output(&graph, ramp).unwrap().clone();
+        let base = read_pixels_rgba8(&ctx, &plain).unwrap().2;
+        assert!(
+            px(&displaced, w, 16, 16)[0] > px(&base, w, 16, 16)[0],
+            "displace did not shift the lookup"
         );
     }
 

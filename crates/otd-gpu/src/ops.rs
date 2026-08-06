@@ -15,14 +15,32 @@ pub const COMMON_WGSL: &str = include_str!("shaders/common.wgsl");
 /// Four `vec4`s of operator parameters, handed to the shader as a uniform.
 pub type PackedParams = [[f32; 4]; 4];
 
+/// How an operator decides its output resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sizing {
+    /// From this node's own `resw` / `resh` parameters — generators, and the
+    /// Resolution TOP.
+    Params,
+    /// Inherited from input 0 — the usual filter behaviour.
+    Input0,
+    /// Input 0 if something is wired there, otherwise `resw` / `resh`. Used by
+    /// the GLSL TOP, which is a generator or a filter depending on how it is
+    /// patched.
+    Input0OrParams,
+    /// Decided by the engine — Feedback and Select take the size of whatever
+    /// they point at.
+    Referenced,
+}
+
 pub struct TopSpec {
     pub def: OpDef,
     /// Fragment shader source, appended to [`COMMON_WGSL`].
     pub shader: &'static str,
-    /// Generators size themselves from `resw`/`resh`; filters inherit input 0.
-    pub generator: bool,
+    pub sizing: Sizing,
     /// Separable operators run their pipeline twice through a scratch texture.
     pub two_pass: bool,
+    /// The shader comes from a parameter and is compiled at cook time.
+    pub dynamic_shader: bool,
     pub pack: fn(&Node, &EvalContext) -> PackedParams,
 }
 
@@ -290,6 +308,102 @@ fn params_feedback() -> IndexMap<String, Param> {
 pub const FEEDBACK: &str = "feedbackTOP";
 /// Used for the Feedback blit and for any pass that is a straight copy.
 pub const NULL: &str = "nullTOP";
+/// Reads another TOP's output *this* frame, unlike Feedback.
+pub const SELECT: &str = "selectTOP";
+/// Freezes its input on demand.
+pub const CACHE: &str = "cacheTOP";
+/// Compiles a shader from a parameter at cook time.
+pub const GLSL: &str = "glslTOP";
+
+// -------------------------------------------------------------- select TOP
+
+fn params_select() -> IndexMap<String, Param> {
+    params! {
+        "top" => Param::str("").with_label("TOP"),
+    }
+}
+
+// --------------------------------------------------------------- cache TOP
+
+fn params_cache() -> IndexMap<String, Param> {
+    params! {
+        "active" => Param::bool(true).with_label("Active"),
+    }
+}
+
+// ---------------------------------------------------------- resolution TOP
+
+fn params_resolution() -> IndexMap<String, Param> {
+    with_res(params! {
+        "filter" => Param::menu("linear", &["linear", "nearest"]).with_label("Filter"),
+    })
+}
+
+// ------------------------------------------------------------ displace TOP
+
+fn params_displace() -> IndexMap<String, Param> {
+    params! {
+        "amount" => Param::float(0.1).with_label("Amount").with_range(-1.0, 1.0),
+        "sourcex" => Param::menu("r", &["r", "g", "b", "a", "luminance"]).with_label("Source X"),
+        "sourcey" => Param::menu("g", &["r", "g", "b", "a", "luminance"]).with_label("Source Y"),
+        "offset" => Param::float(-0.5).with_label("Offset").with_range(-1.0, 1.0),
+        "extend" => Param::menu("hold", &["zero", "hold", "repeat", "mirror"]).with_label("Extend"),
+    }
+}
+
+fn pack_displace(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "amount"),
+            menu(n, c, "sourcex"),
+            menu(n, c, "sourcey"),
+            f(n, c, "offset"),
+        ],
+        [menu(n, c, "extend"), 0.0, 0.0, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// ---------------------------------------------------------------- GLSL TOP
+
+/// The starting shader in a new GLSL TOP — a moving plasma, so the operator
+/// does something the moment it is created.
+const DEFAULT_WGSL: &str = "\
+// WGSL fragment. Available: in.uv, U.time.x (seconds), U.res.xy,
+// sample0(uv) / sample1(uv) for the two inputs, U.p0..U.p3 (Uniform 1..4).
+let p = (in.uv - 0.5) * vec2<f32>(U.res.x / U.res.y, 1.0);
+let d = length(p) * 8.0 - U.time.x * 2.0;
+let v = 0.5 + 0.5 * sin(d + atan2(p.y, p.x) * 3.0);
+return vec4<f32>(v * U.p0.rgb, 1.0);
+";
+
+fn params_glsl() -> IndexMap<String, Param> {
+    with_res(params! {
+        "language" => Param::menu("wgsl", &["wgsl", "glsl"]).with_label("Language"),
+        "source" => Param::str(DEFAULT_WGSL).with_label("Source"),
+        "uniform1" => Param::rgba([1.0, 0.6, 0.2, 1.0]).with_label("Uniform 1"),
+        "uniform2" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Uniform 2"),
+        "uniform3" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Uniform 3"),
+        "uniform4" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Uniform 4"),
+    })
+}
+
+fn pack_glsl(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        v4(n, c, "uniform1"),
+        v4(n, c, "uniform2"),
+        v4(n, c, "uniform3"),
+        v4(n, c, "uniform4"),
+    ]
+}
+
+/// The shader source and language a GLSL TOP is currently set to.
+pub fn shader_source(node: &Node, ctx: &EvalContext) -> (String, bool) {
+    let source = val(node, ctx, "source").as_str();
+    let is_glsl = val(node, ctx, "language").as_str() == "glsl";
+    (source, is_glsl)
+}
 
 // -------------------------------------------------------------- the table
 
@@ -308,8 +422,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_constant,
                 },
                 shader: include_str!("shaders/constant.wgsl"),
-                generator: true,
+                sizing: Sizing::Params,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_constant,
             },
             TopSpec {
@@ -323,8 +438,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_noise,
                 },
                 shader: include_str!("shaders/noise.wgsl"),
-                generator: true,
+                sizing: Sizing::Params,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_noise,
             },
             TopSpec {
@@ -338,8 +454,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_ramp,
                 },
                 shader: include_str!("shaders/ramp.wgsl"),
-                generator: true,
+                sizing: Sizing::Params,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_ramp,
             },
             TopSpec {
@@ -353,8 +470,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_level,
                 },
                 shader: include_str!("shaders/level.wgsl"),
-                generator: false,
+                sizing: Sizing::Input0,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_level,
             },
             TopSpec {
@@ -368,8 +486,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_transform,
                 },
                 shader: include_str!("shaders/transform.wgsl"),
-                generator: false,
+                sizing: Sizing::Input0,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_transform,
             },
             TopSpec {
@@ -383,8 +502,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_blur,
                 },
                 shader: include_str!("shaders/blur.wgsl"),
-                generator: false,
+                sizing: Sizing::Input0,
                 two_pass: true,
+                dynamic_shader: false,
                 pack: pack_blur,
             },
             TopSpec {
@@ -398,8 +518,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_composite,
                 },
                 shader: include_str!("shaders/composite.wgsl"),
-                generator: false,
+                sizing: Sizing::Input0,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_composite,
             },
             TopSpec {
@@ -413,8 +534,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_switch,
                 },
                 shader: include_str!("shaders/switch.wgsl"),
-                generator: false,
+                sizing: Sizing::Input0,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_switch,
             },
             TopSpec {
@@ -428,8 +550,9 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_none,
                 },
                 shader: include_str!("shaders/null.wgsl"),
-                generator: false,
+                sizing: Sizing::Input0,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_none,
             },
             TopSpec {
@@ -446,9 +569,112 @@ fn specs() -> &'static Vec<TopSpec> {
                     params: params_feedback,
                 },
                 shader: include_str!("shaders/null.wgsl"),
-                generator: false,
+                sizing: Sizing::Referenced,
                 two_pass: false,
+                dynamic_shader: false,
                 pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: SELECT,
+                    label: "Select",
+                    family: Family::Top,
+                    // Like Feedback, named by parameter — but this one *is*
+                    // declared as a dependency, so it reads the current frame.
+                    inputs: &[],
+                    summary: "This frame's output of another TOP, by path.",
+                    time_dependent: false,
+                    params: params_select,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Referenced,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "outTOP",
+                    label: "Out",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    summary: "Marks a component's output. A pass-through for now.",
+                    time_dependent: false,
+                    params: params_none,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: CACHE,
+                    label: "Cache",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    summary: "Holds the last frame it saw when Active is off.",
+                    time_dependent: false,
+                    params: params_cache,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "resolutionTOP",
+                    label: "Resolution",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    summary: "Resamples its input to an explicit resolution.",
+                    time_dependent: false,
+                    params: params_resolution,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "displaceTOP",
+                    label: "Displace",
+                    family: Family::Top,
+                    inputs: &["source", "displace"],
+                    summary: "Offsets input 1's lookup by channels of input 2.",
+                    time_dependent: false,
+                    params: params_displace,
+                },
+                shader: include_str!("shaders/displace.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_displace,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: GLSL,
+                    label: "GLSL",
+                    family: Family::Top,
+                    inputs: &["in0", "in1"],
+                    summary: "Your own shader, compiled live. WGSL or Shadertoy-style GLSL.",
+                    // Assumed animated: a user shader almost always reads
+                    // time, and there is no cheap way to prove it doesn't.
+                    // TouchDesigner's GLSL TOP cooks every frame too.
+                    time_dependent: true,
+                    params: params_glsl,
+                },
+                // Unused: the source comes from the `source` parameter.
+                shader: "",
+                sizing: Sizing::Input0OrParams,
+                two_pass: false,
+                dynamic_shader: true,
+                pack: pack_glsl,
             },
         ]
     })

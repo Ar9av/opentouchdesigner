@@ -231,6 +231,7 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     let input_count = node.inputs.len();
     let input_slots: Vec<Option<NodeId>> = node.inputs.clone();
     let cook_us = app.cook.last_cook_us(id);
+    let shader_error = app.top.shader_error(id).is_some();
 
     let radius = CornerRadius::same(4);
     painter.rect_filled(rect, radius, Color32::from_rgb(46, 48, 55));
@@ -310,6 +311,23 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
             Stroke::new(2.0, Color32::from_rgb(220, 190, 90)),
             StrokeKind::Outside,
         );
+    }
+    if shader_error {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(2.0, Color32::from_rgb(220, 90, 90)),
+            StrokeKind::Outside,
+        );
+        if zoom > 0.4 {
+            painter.text(
+                rect.center_bottom() - Vec2::new(0.0, FOOTER_H * zoom + 4.0),
+                Align2::CENTER_BOTTOM,
+                "shader error",
+                FontId::proportional(10.0 * zoom),
+                Color32::from_rgb(240, 140, 140),
+            );
+        }
     }
     if is_viewer {
         painter.rect_stroke(
