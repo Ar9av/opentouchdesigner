@@ -156,6 +156,19 @@ impl Node {
     pub fn param_sources(&self) -> impl Iterator<Item = &str> {
         self.params.values().filter_map(|p| p.source_op())
     }
+
+    /// True when some parameter reads a custom parameter on the enclosing
+    /// component, which makes this node depend on that component's settings.
+    pub fn references_parent(&self) -> bool {
+        self.params.values().any(|p| {
+            p.mode == crate::param::ParamMode::Expression && p.expression.contains("parent.")
+        })
+    }
+
+    /// The author-defined parameters on this node, in declaration order.
+    pub fn custom_params(&self) -> impl Iterator<Item = (&String, &Param)> {
+        self.params.iter().filter(|(_, p)| p.custom)
+    }
 }
 
 /// A static description of an operator type. Registered once at startup;
@@ -610,18 +623,75 @@ impl Graph {
 
     pub fn set_param(&mut self, id: NodeId, key: &str, value: Value) -> Result<(), GraphError> {
         let n = self.nodes.get_mut(id).ok_or(GraphError::NoSuchNode)?;
+        let custom = n.params.get(key).map(|p| p.custom).unwrap_or(false);
         if let Some(p) = n.params.get_mut(key) {
             p.set_constant(value);
             n.revision += 1;
         }
+        if custom {
+            self.dirty_descendants(id);
+        }
         Ok(())
+    }
+
+    /// Add an author-defined parameter. On a component this is how it gets an
+    /// API: operators inside read it as `parent.<key>`.
+    pub fn add_custom_param(&mut self, id: NodeId, key: &str, param: Param) {
+        if let Some(n) = self.nodes.get_mut(id) {
+            n.params.insert(key.to_string(), param.as_custom());
+            n.revision += 1;
+        }
+        self.dirty_descendants(id);
+    }
+
+    /// Remove an author-defined parameter. Operator-defined ones are left
+    /// alone — deleting those would leave the operator unable to cook.
+    pub fn remove_custom_param(&mut self, id: NodeId, key: &str) {
+        let is_custom = self
+            .nodes
+            .get(id)
+            .and_then(|n| n.params.get(key))
+            .map(|p| p.custom)
+            .unwrap_or(false);
+        if !is_custom {
+            return;
+        }
+        if let Some(n) = self.nodes.get_mut(id) {
+            n.params.shift_remove(key);
+            n.revision += 1;
+        }
+        self.dirty_descendants(id);
+    }
+
+    /// Mark everything under `id` as changed.
+    ///
+    /// A component's custom parameters are read by expressions inside it, and
+    /// those reads are not wires, so there is nothing for the cook engine to
+    /// follow. Touching the subtree on edit is O(subtree) once per edit rather
+    /// than per frame, which is the right trade.
+    fn dirty_descendants(&mut self, id: NodeId) {
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let children = match self.nodes.get(cur) {
+                Some(n) => n.children.clone(),
+                None => continue,
+            };
+            for c in children {
+                self.nodes[c].revision += 1;
+                stack.push(c);
+            }
+        }
     }
 
     pub fn set_expression(&mut self, id: NodeId, key: &str, src: &str) -> Result<(), GraphError> {
         let n = self.nodes.get_mut(id).ok_or(GraphError::NoSuchNode)?;
+        let custom = n.params.get(key).map(|p| p.custom).unwrap_or(false);
         if let Some(p) = n.params.get_mut(key) {
             p.set_expression(src);
             n.revision += 1;
+        }
+        if custom {
+            self.dirty_descendants(id);
         }
         Ok(())
     }

@@ -77,6 +77,22 @@ impl ChannelSource for Network<'_> {
         // finite and the failure mode obvious.
         Some(p.eval(&EvalContext::default()))
     }
+
+    fn parent_param(&self, node_path: &str, param: &str) -> Option<Value> {
+        let id = self.graph.find(node_path)?;
+        let parent = self.graph.get(id)?.parent?;
+        let p = self.graph.get(parent)?.param(param)?;
+        if !p.custom {
+            return None;
+        }
+        // The component's own parameter may itself be an expression or an
+        // Export, so it is evaluated against the same network.
+        Some(p.eval(&EvalContext {
+            channels: Some(self),
+            path: Some(node_path),
+            ..Default::default()
+        }))
+    }
 }
 
 #[derive(Default)]
@@ -128,6 +144,12 @@ impl ChopEngine {
             })
             .collect();
 
+        // Parameters are evaluated knowing where they live, so `parent.x`
+        // resolves against the right component.
+        let eval = &EvalContext {
+            path: Some(&path),
+            ..*eval
+        };
         let mut cctx = ChopCtx {
             node,
             eval,

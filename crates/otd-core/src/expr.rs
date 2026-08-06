@@ -72,6 +72,12 @@ pub trait ChannelSource {
 
     /// The current value of `param` on the operator at `op_path` — Bind mode.
     fn param_value(&self, op_path: &str, param: &str) -> Option<crate::value::Value>;
+
+    /// A custom parameter on the component containing `node_path` — how the
+    /// operators inside a component read its API (`parent.speed`).
+    fn parent_param(&self, _node_path: &str, _param: &str) -> Option<crate::value::Value> {
+        None
+    }
 }
 
 /// Everything a parameter is allowed to see. Deliberately narrow: parameters
@@ -89,6 +95,9 @@ pub struct EvalContext<'a> {
     /// Present once CHOPs are cooking; `None` in a pure-TOP build or before
     /// the first frame.
     pub channels: Option<&'a dyn ChannelSource>,
+    /// The path of the operator being evaluated, so `parent.x` can be
+    /// resolved relative to it.
+    pub path: Option<&'a str>,
 }
 
 impl fmt::Debug for EvalContext<'_> {
@@ -135,7 +144,22 @@ impl Expr {
     pub fn eval(&self, ctx: &EvalContext) -> Result<f64, ExprError> {
         match self {
             Expr::Num(v) => Ok(*v),
-            Expr::Var(name) => eval_var(name, ctx),
+            Expr::Var(name) => {
+                // `parent.speed` reads a custom parameter on the enclosing
+                // component — the mechanism that turns a component into a
+                // reusable thing with knobs.
+                if let Some(param) = name.strip_prefix("parent.") {
+                    if let (Some(net), Some(path)) = (ctx.channels, ctx.path) {
+                        if let Some(v) = net.parent_param(path, param) {
+                            return Ok(v.as_f64());
+                        }
+                    }
+                    return Err(ExprError(format!(
+                        "no custom parameter `{param}` on the parent component"
+                    )));
+                }
+                eval_var(name, ctx)
+            }
             Expr::Neg(e) => Ok(-e.eval(ctx)?),
             Expr::Bin(op, a, b) => {
                 let (a, b) = (a.eval(ctx)?, b.eval(ctx)?);
@@ -468,6 +492,7 @@ mod tests {
                 abs_time: 2.0,
                 fps: 60.0,
                 channels: None,
+                path: None,
             })
             .expect("eval")
     }

@@ -253,6 +253,99 @@ fn a_component_survives_the_project_format() {
     assert_eq!(text, text2);
 }
 
+/// The Phase 3 shape: a component with knobs, used more than once.
+#[test]
+fn custom_parameters_are_a_components_api() {
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut graph = Graph::new();
+    let root = graph.root();
+
+    // A component with one knob, read by the Level inside it.
+    let comp = add(&mut graph, &reg, root, "containerCOMP", "tint");
+    graph.add_custom_param(
+        comp,
+        "gain",
+        otd_core::Param::float(1.0).with_range(0.0, 4.0),
+    );
+    let inp = add(&mut graph, &reg, comp, "inTOP", "in1");
+    let level = add(&mut graph, &reg, comp, "levelTOP", "level1");
+    let outp = add(&mut graph, &reg, comp, "outTOP", "out1");
+    graph.connect(inp, level, 0).unwrap();
+    graph.connect(level, outp, 0).unwrap();
+    graph
+        .set_expression(level, "brightness", "parent.gain")
+        .unwrap();
+
+    let src = add(&mut graph, &reg, root, "constantTOP", "src");
+    graph.set_param(src, "resw", Value::Int(16)).unwrap();
+    graph.set_param(src, "resh", Value::Int(16)).unwrap();
+    graph
+        .set_param(src, "color", Value::Vec4([0.25, 0.25, 0.25, 1.0]))
+        .unwrap();
+    graph.connect(src, comp, 0).unwrap();
+
+    let mut engines = Engines::new(gpu.clone());
+    let mut cook = CookEngine::new();
+    let mut time = CookContext::default();
+
+    let render =
+        |graph: &Graph, engines: &mut Engines, cook: &mut CookEngine, time: &mut CookContext| {
+            engines.begin_frame();
+            cook.cook_frame(graph, &[comp], time, engines).unwrap();
+            engines.end_frame();
+            time.advance(1.0 / 60.0);
+            let tex = engines.top.output(graph, comp).unwrap().clone();
+            read_pixels_rgba8(&gpu, &tex).unwrap().2[0]
+        };
+
+    graph.set_param(comp, "gain", Value::Float(1.0)).unwrap();
+    let at_one = render(&graph, &mut engines, &mut cook, &mut time);
+
+    // Turning the component's knob must reach the operator inside it, with
+    // no wire between them.
+    graph.set_param(comp, "gain", Value::Float(3.0)).unwrap();
+    let at_three = render(&graph, &mut engines, &mut cook, &mut time);
+    assert!(
+        at_three > at_one + 60,
+        "the knob did not reach inside: {at_one} then {at_three}"
+    );
+}
+
+#[test]
+fn a_custom_parameter_round_trips_with_its_definition() {
+    use otd_core::Project;
+    let reg = registry();
+    let mut graph = Graph::new();
+    let root = graph.root();
+    let comp = add(&mut graph, &reg, root, "containerCOMP", "tint");
+    graph.add_custom_param(
+        comp,
+        "gain",
+        otd_core::Param::float(2.5)
+            .with_label("Gain")
+            .with_range(0.0, 4.0),
+    );
+
+    let text = Project::from_graph(&graph, &reg, 60.0).to_ron().unwrap();
+    let back = Project::from_ron(&text).unwrap().to_graph(&reg).unwrap();
+    let comp2 = back.find("/tint").unwrap();
+    let p = back
+        .node(comp2)
+        .param("gain")
+        .expect("custom param survived");
+
+    // Nothing else knows this parameter exists, so the file has to carry its
+    // whole definition, not just its value.
+    assert!(p.custom);
+    assert_eq!(p.value, Value::Float(2.5));
+    assert_eq!(p.label, "Gain");
+    assert_eq!(p.range, Some((0.0, 4.0)));
+
+    let text2 = Project::from_graph(&back, &reg, 60.0).to_ron().unwrap();
+    assert_eq!(text, text2);
+}
+
 #[test]
 fn a_chop_component_works_the_same_way() {
     let reg = registry();
