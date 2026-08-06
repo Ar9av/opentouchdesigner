@@ -17,15 +17,20 @@ use std::cell::RefCell;
 use otd_chop::InputState;
 use otd_chop::engine::{ChannelStore, ChopEngine, Network};
 use otd_core::{ChannelSource, CookContext, CookError, Cooker, Family, Graph, NodeId, OpRegistry};
+use otd_dat::{DatEngine, DatStore, ScriptHost};
 use otd_gpu::{GpuContext, TopEngine};
 use otd_py::PyEngine;
 
 pub use otd_chop::{Channel, ChopData};
+pub use otd_dat::DatData;
 
 /// Every operator this build knows about, across all families.
 pub fn registry() -> OpRegistry {
     let mut r = otd_gpu::ops::registry();
     for spec in otd_chop::ops::all() {
+        r.register(spec.def.clone());
+    }
+    for spec in otd_dat::ops::all() {
         r.register(spec.def.clone());
     }
     r
@@ -66,9 +71,30 @@ impl otd_core::ChannelSource for FullNetwork<'_> {
     }
 }
 
+/// Lets a Script DAT run its source without `otd-dat` depending on PyO3.
+struct PythonScripts<'a> {
+    python: &'a RefCell<PyEngine>,
+}
+
+impl ScriptHost for PythonScripts<'_> {
+    fn run_table(
+        &self,
+        source: &str,
+        ctx: &otd_core::EvalContext,
+        path: &str,
+    ) -> Result<Vec<Vec<String>>, String> {
+        self.python
+            .try_borrow_mut()
+            .map_err(|_| "a script cannot run inside another script".to_string())?
+            .run_table(source, ctx, path)
+    }
+}
+
 pub struct Engines {
     pub top: TopEngine,
     pub chop: ChopEngine,
+    pub dat: DatEngine,
+    pub dats: DatStore,
     /// Cooked channels, owned here — see the module docs.
     pub channels: ChannelStore,
     /// The embedded interpreter. Started once; a machine where it cannot
@@ -81,6 +107,8 @@ impl Engines {
         Engines {
             top: TopEngine::new(gpu),
             chop: ChopEngine::new(),
+            dat: DatEngine::new(),
+            dats: DatStore::new(),
             channels: ChannelStore::new(),
             python: RefCell::new(PyEngine::new()),
         }
@@ -154,18 +182,29 @@ impl Engines {
         if let Some(err) = self.top.shader_error(id) {
             return Some(err.to_string());
         }
-        self.chop.status(&graph.path(id)).map(|s| s.to_string())
+        let path = graph.path(id);
+        self.chop
+            .status(&path)
+            .or_else(|| self.dat.status_of(&path))
+            .map(|s| s.to_string())
+    }
+
+    pub fn dat_data(&self, id: NodeId) -> Option<&DatData> {
+        self.dats.get(id)
     }
 
     pub fn forget(&mut self, id: NodeId) {
         self.top.forget(id);
         self.chop.forget(id);
         self.channels.remove(id);
+        self.dats.remove(id);
     }
 
     pub fn reset(&mut self) {
         self.top.reset();
         self.chop.reset();
+        self.dat.reset();
+        self.dats.clear();
         self.channels.clear();
     }
 }
@@ -182,6 +221,8 @@ impl Cooker for Engines {
         let Engines {
             top,
             chop,
+            dat,
+            dats,
             channels,
             python,
         } = self;
@@ -212,6 +253,22 @@ impl Cooker for Engines {
                 };
                 let eval = ctx.eval_ctx_with(&net);
                 top.cook_node(graph, id, ctx, &eval)
+            }
+            Family::Dat => {
+                let data = {
+                    let net = FullNetwork {
+                        chops: Network {
+                            graph,
+                            chops: channels,
+                        },
+                        python,
+                    };
+                    let eval = ctx.eval_ctx_with(&net);
+                    let scripts = PythonScripts { python };
+                    dat.cook_node(graph, id, ctx, &eval, dats, Some(&scripts))?
+                };
+                dats.insert(id, data);
+                Ok(())
             }
             // COMPs hold sub-networks; the other families are later phases.
             _ => Ok(()),

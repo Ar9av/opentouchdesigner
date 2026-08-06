@@ -64,6 +64,11 @@ pub struct Param {
     /// them dependencies.
     #[serde(skip)]
     refs: Vec<String>,
+    /// This parameter holds script source rather than a value, so the paths
+    /// inside it are references even though the parameter is a constant.
+    /// Set by the operator definition, not by the project file.
+    #[serde(skip)]
+    script: bool,
 }
 
 /// Pull operator paths out of an expression.
@@ -131,7 +136,26 @@ impl Param {
             error: None,
             needs_python: false,
             refs: Vec::new(),
+            script: false,
         }
+    }
+
+    /// Mark this parameter as holding script source. Operator paths quoted
+    /// inside it then become cook dependencies, the same as in an expression:
+    /// a Script DAT reading `ch('/lfo1', ...)` must make `/lfo1` cook first.
+    pub fn as_script(mut self) -> Self {
+        self.script = true;
+        self.refs = extract_paths(&self.value.as_str());
+        self
+    }
+
+    pub fn is_script(&self) -> bool {
+        self.script
+    }
+
+    /// Same as [`Param::as_script`], for a parameter already built.
+    pub fn into_script(self) -> Self {
+        self.as_script()
     }
 
     /// Mark this as an author-defined parameter on a component.
@@ -166,13 +190,20 @@ impl Param {
     pub fn set_constant(&mut self, value: Value) {
         self.value = value;
         self.mode = ParamMode::Constant;
+        if self.script {
+            self.refs = extract_paths(&self.value.as_str());
+        }
     }
 
     /// Recompile the expression. Must be called after deserialization — the
     /// compiled AST is not part of the project file.
     pub fn recompile(&mut self) {
         self.needs_python = false;
-        self.refs.clear();
+        if self.script {
+            self.refs = extract_paths(&self.value.as_str());
+        } else {
+            self.refs.clear();
+        }
         if self.mode != ParamMode::Expression || self.expression.trim().is_empty() {
             self.compiled = None;
             self.error = None;

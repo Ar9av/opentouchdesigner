@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 otd-chop = { version = "0.1.0", path = "../otd-chop" }
 otd-core = { version = "0.1.0", path = "../otd-core" }
+otd-dat = { version = "0.1.0", path = "../otd-dat" }
 otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
 otd-py = { version = "0.1.0", path = "../otd-py" }
 
