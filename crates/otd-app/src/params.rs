@@ -491,6 +491,17 @@ fn shader_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
             .weak()
             .small(),
         );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button("Import ISF…")
+                .on_hover_text(
+                    "Load an ISF shader (.fs). Its inputs become parameters on this node.",
+                )
+                .clicked()
+            {
+                app.import_isf(id);
+            }
+        });
     });
 
     let response = ui.add(

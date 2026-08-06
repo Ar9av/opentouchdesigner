@@ -7,6 +7,8 @@
 
 use std::sync::OnceLock;
 
+use crate::isf;
+
 use otd_core::indexmap::IndexMap;
 use otd_core::{Connector, EvalContext, Family, Node, OpDef, OpRegistry, Param, Value};
 
@@ -408,12 +410,55 @@ fn params_glsl() -> IndexMap<String, Param> {
 }
 
 fn pack_glsl(n: &Node, c: &EvalContext) -> PackedParams {
-    [
-        v4(n, c, "uniform1"),
-        v4(n, c, "uniform2"),
-        v4(n, c, "uniform3"),
-        v4(n, c, "uniform4"),
-    ]
+    let plain = || {
+        [
+            v4(n, c, "uniform1"),
+            v4(n, c, "uniform2"),
+            v4(n, c, "uniform3"),
+            v4(n, c, "uniform4"),
+        ]
+    };
+
+    // A GLSL TOP with custom parameters — the shape ISF import leaves behind,
+    // and one an author can build by hand — packs those instead of the four
+    // generic uniforms. `crate::isf::layout` decides where each one lands, and
+    // the shader's `#define`s were written from that same function, so the two
+    // sides agree by construction rather than by comment.
+    let custom: Vec<(&String, &Param)> = n
+        .params
+        .iter()
+        .filter(|(_, p)| p.custom && isf::width(&p.value) > 0)
+        .collect();
+    if custom.is_empty() {
+        return plain();
+    }
+    let Some(slots) = isf::layout(custom.iter().map(|(_, p)| isf::width(&p.value))) else {
+        // More parameters than uniform space. Import refuses this case; a
+        // hand-built node can still reach it, and falling back is better than
+        // writing values into the wrong slots.
+        return plain();
+    };
+
+    let mut out = [[0.0f32; 4]; 4];
+    for ((key, param), slot) in custom.iter().zip(slots) {
+        let value = param.eval(c);
+        match slot.width {
+            4 => out[slot.vec] = value.as_vec4_f32(),
+            2 => {
+                let v = value.as_vec4_f32();
+                out[slot.vec][slot.component] = v[0];
+                out[slot.vec][slot.component + 1] = v[1];
+            }
+            _ => {
+                out[slot.vec][slot.component] = if param.menu.is_some() {
+                    menu(n, c, key)
+                } else {
+                    value.as_f32()
+                };
+            }
+        }
+    }
+    out
 }
 
 /// The shader source and language a GLSL TOP is currently set to.
