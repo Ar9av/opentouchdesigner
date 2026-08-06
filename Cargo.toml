@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/opentouchdesigner/opentouchdesigner"
+rust-version = "1.85"
+
+[workspace.dependencies]
+otd-core = { path = "crates/otd-core" }
+otd-gpu = { path = "crates/otd-gpu" }
+
+[profile.dev]
+# The cook loop is unusably slow in a fully unoptimised build; dependencies
+# (wgpu, naga, image codecs) get optimised even in dev.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
