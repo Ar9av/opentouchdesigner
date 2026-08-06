@@ -34,6 +34,9 @@ pub struct OtdApp {
 
     pub selected: Option<NodeId>,
     pub viewer: Option<NodeId>,
+    /// The component whose network is on screen. Entering a component is
+    /// just changing this — the graph is one tree throughout.
+    pub current: NodeId,
     pub view: CanvasView,
     pub drag: Option<DragState>,
     pub create_dialog: Option<CreateDialog>,
@@ -92,6 +95,7 @@ impl OtdApp {
             smoothed_cook_ms: 0.0,
             selected: None,
             viewer: None,
+            current: NodeId::default(),
             view: CanvasView::default(),
             drag: None,
             create_dialog: None,
@@ -118,11 +122,12 @@ impl OtdApp {
             return;
         };
         self.graph = graph;
-        self.engines.top.reset();
+        self.engines.reset();
         self.cook.reset();
         self.thumbs.clear();
         self.project_path = None;
         self.time = CookContext::default();
+        self.current = self.graph.root();
         self.viewer = Some(out);
         self.selected = self.graph.walk().into_iter().nth(1);
         self.status = format!("{name} patch");
@@ -204,6 +209,28 @@ impl OtdApp {
         }
     }
 
+    // -------------------------------------------------------- navigation
+
+    /// Step inside a component. Anything else is ignored, so a stray
+    /// double-click on an operator does not lose your place.
+    pub fn enter(&mut self, id: NodeId) {
+        if self.graph.get(id).map(|n| n.family) == Some(otd_core::Family::Comp) {
+            self.current = id;
+            self.selected = None;
+            self.view = CanvasView::default();
+        }
+    }
+
+    /// Step out to the parent network.
+    pub fn leave(&mut self) {
+        if let Some(parent) = self.graph.get(self.current).and_then(|n| n.parent) {
+            let was = self.current;
+            self.current = parent;
+            self.selected = Some(was);
+            self.view = CanvasView::default();
+        }
+    }
+
     // ---------------------------------------------------------- graph edits
 
     pub fn delete_selected(&mut self) {
@@ -242,8 +269,9 @@ impl OtdApp {
 
     pub fn create_node(&mut self, type_name: &str, world_pos: egui::Vec2) -> Option<NodeId> {
         let def = self.registry.get(type_name)?.clone();
-        let root = self.graph.root();
-        let id = self.graph.create(root, &def, None).ok()?;
+        // New operators land in the network you are looking at.
+        let parent = self.current;
+        let id = self.graph.create(parent, &def, None).ok()?;
         self.graph.node_mut_quiet(id).pos = [world_pos.x, world_pos.y];
         self.selected = Some(id);
         Some(id)
@@ -370,6 +398,36 @@ impl OtdApp {
                     "frame {}   {:.2}s",
                     self.time.frame, self.time.abs_time
                 ));
+
+                ui.separator();
+                // Breadcrumb: click a step to go back to it.
+                let mut chain = Vec::new();
+                let mut cur = Some(self.current);
+                while let Some(c) = cur {
+                    chain.push(c);
+                    cur = self.graph.get(c).and_then(|n| n.parent);
+                }
+                chain.reverse();
+                for (i, id) in chain.iter().enumerate() {
+                    if i > 0 {
+                        ui.label(egui::RichText::new("/").weak());
+                    }
+                    let name = if *id == self.graph.root() {
+                        "/".to_string()
+                    } else {
+                        self.graph.node(*id).name.clone()
+                    };
+                    let last = i + 1 == chain.len();
+                    let text = if last {
+                        egui::RichText::new(name).strong()
+                    } else {
+                        egui::RichText::new(name).weak()
+                    };
+                    if ui.selectable_label(false, text).clicked() {
+                        self.current = *id;
+                        self.selected = None;
+                    }
+                }
 
                 ui.separator();
                 ui.toggle_value(&mut self.output_window, "Output")

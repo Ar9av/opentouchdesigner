@@ -514,6 +514,13 @@ impl TopEngine {
         Some((t.key.width, t.key.height))
     }
 
+    /// The texture a node presents to the world. `output` already resolves
+    /// bypass flags and component boundaries, so a component reads as its Out
+    /// operator's texture with no special case at the call site.
+    pub fn presented(&self, graph: &Graph, id: NodeId) -> Option<&TopTexture> {
+        self.output(graph, id)
+    }
+
     fn uniforms(
         &self,
         width: u32,
@@ -657,6 +664,13 @@ impl TopEngine {
 
         let spec = ops::spec(&node.op_type)
             .ok_or_else(|| CookError::op(&path, format!("unknown TOP `{}`", node.op_type)))?;
+        // ---- An In operator presents whatever is wired to its component from
+        // outside. Nothing else in the engine has to know about components.
+        if node.connector == otd_core::Connector::In {
+            let source = graph.connector_source(id);
+            return self.blit_from(graph, id, source, ctx, &path);
+        }
+
         // ---- Feedback reads its target as it stands right now, which is last
         // frame's content because the target has not re-cooked yet.
         if node.op_type == ops::FEEDBACK {

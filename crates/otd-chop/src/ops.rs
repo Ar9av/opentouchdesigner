@@ -11,7 +11,9 @@
 use std::sync::OnceLock;
 
 use otd_core::indexmap::IndexMap;
-use otd_core::{CookContext, EvalContext, Family, Node, OpDef, OpRegistry, Param, Value};
+use otd_core::{
+    Connector, CookContext, EvalContext, Family, Node, OpDef, OpRegistry, Param, Value,
+};
 
 use crate::data::{CONTROL_RATE, Channel, ChopData, slice_len, slice_times};
 use crate::io::Io;
@@ -951,6 +953,10 @@ fn cook_null(c: &mut ChopCtx) -> ChopData {
 // ------------------------------------------------------------ the table
 
 pub const NULL: &str = "nullCHOP";
+/// A component's channel input, surfaced as a connector on its node.
+pub const IN: &str = "inCHOP";
+/// A component's channel output.
+pub const OUT: &str = "outCHOP";
 
 fn specs() -> &'static Vec<ChopSpec> {
     static SPECS: OnceLock<Vec<ChopSpec>> = OnceLock::new();
@@ -1084,6 +1090,20 @@ fn specs() -> &'static Vec<ChopSpec> {
                 no_params,
                 cook_null,
             ),
+            connector_spec(
+                IN,
+                "In",
+                &[],
+                "A channel input on this component's node.",
+                Connector::In,
+            ),
+            connector_spec(
+                OUT,
+                "Out",
+                &["in"],
+                "This component's channel output.",
+                Connector::Out,
+            ),
         ];
         v.extend(crate::io::specs());
         v
@@ -1108,9 +1128,24 @@ pub(crate) fn spec(
             summary,
             time_dependent: false,
             params,
+            connector: Connector::None,
         },
         cook,
     }
+}
+
+/// The In and Out operators that give a component its channel connectors.
+/// An In has no wire of its own; the engine fills it from outside.
+pub(crate) fn connector_spec(
+    type_name: &'static str,
+    label: &'static str,
+    inputs: &'static [&'static str],
+    summary: &'static str,
+    connector: Connector,
+) -> ChopSpec {
+    let mut s = spec(type_name, label, inputs, summary, no_params, cook_null);
+    s.def.connector = connector;
+    s
 }
 
 /// Same, for operators that must cook every frame — generators over time and

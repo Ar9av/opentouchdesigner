@@ -62,12 +62,9 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             app.input_state = sample_input(ui, rect);
             draw_grid(ui, rect, app.view, origin);
 
-            let nodes = app.graph.walk();
+            let nodes: Vec<NodeId> = app.graph.children(app.current).to_vec();
             let mut node_rects: Vec<(NodeId, Rect)> = Vec::new();
             for id in &nodes {
-                if *id == app.graph.root() {
-                    continue;
-                }
                 let p = app.graph.node(*id).pos;
                 let min = app.view.to_screen(origin, Vec2::new(p[0], p[1]));
                 let size = Vec2::new(NODE_W, NODE_H) * app.view.zoom;
@@ -542,7 +539,11 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
         app.selected = Some(id);
     }
     if body_resp.double_clicked() {
-        app.viewer = Some(id);
+        if family == Family::Comp {
+            app.enter(id);
+        } else {
+            app.viewer = Some(id);
+        }
     }
     if body_resp.drag_started() {
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
@@ -611,6 +612,14 @@ fn handle_keys(app: &mut OtdApp, ui: &egui::Ui, origin: Pos2, rect: Rect) {
         }
         if i.key_pressed(egui::Key::H) {
             app.view = CanvasView::default();
+        }
+        if i.key_pressed(egui::Key::U) {
+            app.leave();
+        }
+        if i.key_pressed(egui::Key::I) {
+            if let Some(sel) = app.selected {
+                app.enter(sel);
+            }
         }
     });
 }
