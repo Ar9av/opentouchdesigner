@@ -47,7 +47,13 @@ pub fn artnet_packet(universe: u16, sequence: u8, slots: &[u8]) -> Vec<u8> {
 /// field where the top four bits are `0x7`. The layout is fiddly and the
 /// offsets are easy to get wrong, which is exactly why this is a pure
 /// function with a test against known byte positions.
-pub fn sacn_packet(universe: u16, sequence: u8, source: &str, cid: &[u8; 16], slots: &[u8]) -> Vec<u8> {
+pub fn sacn_packet(
+    universe: u16,
+    sequence: u8,
+    source: &str,
+    cid: &[u8; 16],
+    slots: &[u8],
+) -> Vec<u8> {
     let count = slots.len().min(UNIVERSE_SIZE);
     // The DMP layer carries a start code byte before the slots.
     let dmp_property_count = count + 1;
@@ -155,20 +161,13 @@ mod tests {
         for (offset, label) in [(16usize, "root"), (38, "framing"), (115, "dmp")] {
             let len = u16::from_be_bytes([p[offset], p[offset + 1]]);
             assert_eq!(len >> 12, 0x7, "{label} flags");
-            assert_eq!(
-                len & 0x0fff,
-                (p.len() - offset) as u16,
-                "{label} length"
-            );
+            assert_eq!(len & 0x0fff, (p.len() - offset) as u16, "{label} length");
         }
     }
 
     #[test]
     fn sacn_multicast_follows_the_universe() {
-        assert_eq!(
-            sacn_multicast(1),
-            std::net::Ipv4Addr::new(239, 255, 0, 1)
-        );
+        assert_eq!(sacn_multicast(1), std::net::Ipv4Addr::new(239, 255, 0, 1));
         assert_eq!(
             sacn_multicast(300),
             std::net::Ipv4Addr::new(239, 255, 1, 44)

@@ -229,7 +229,11 @@ impl Graph {
         file: &str,
         registry: &OpRegistry,
     ) -> Result<(), ProjectError> {
-        let component = Component::load(file)?;
+        // The reference is resolved for *reading* but stored exactly as it was
+        // given. A bundle holding `components/meter.otdc` has to keep saying
+        // that, or the first re-save turns it into an absolute path on one
+        // machine and the bundle stops being portable.
+        let component = Component::load(self.resolve_external(file))?;
         component.expand_into(self, comp, registry)?;
         if let Some(n) = self.get_mut_raw(comp) {
             n.external = Some(file.to_string());

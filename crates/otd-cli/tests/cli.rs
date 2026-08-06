@@ -177,8 +177,102 @@ fn a_project_with_nothing_to_cook_says_so_instead_of_running_quietly() {
     if gpu_missing(&text) {
         return;
     }
-    assert!(!ok, "an empty run should be an error, not a success:\n{text}");
+    assert!(
+        !ok,
+        "an empty run should be an error, not a success:\n{text}"
+    );
     assert!(text.contains("Render flag"), "{text}");
+}
+
+#[test]
+fn a_bundle_still_runs_after_the_folder_is_moved() {
+    let dir = scratch("bundle");
+    let project = write_project(&dir, true);
+
+    // Put a component somewhere the bundle is not, and reference it.
+    let shared = scratch("bundle-shared");
+    let registry = otd_engine::registry();
+    let mut g = otd_core::Project::open(&project, &registry).unwrap();
+    let comp = g
+        .create(
+            g.root(),
+            registry.get("containerCOMP").unwrap(),
+            Some("meter1"),
+        )
+        .unwrap();
+    let otdc = shared.join("meter.otdc");
+    otd_core::Component::from_graph(&g, comp, &registry)
+        .unwrap()
+        .save(&otdc)
+        .unwrap();
+    g.attach_external(comp, &otdc.to_string_lossy(), &registry)
+        .unwrap();
+    otd_core::Project::from_graph(&g, &registry, 60.0)
+        .save(&project)
+        .unwrap();
+
+    let out = dir.join("bundle");
+    let (ok, text) = otd(&[
+        "bundle",
+        project.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(ok, "{text}");
+    assert!(out.join("components/meter.otdc").exists(), "{text}");
+
+    // The two things that make it a bundle rather than a copy: the shared file
+    // it was authored against is gone, and the folder is not where it was
+    // written.
+    std::fs::remove_dir_all(&shared).unwrap();
+    let moved = scratch("bundle-moved");
+    let dest = moved.join("show");
+    std::fs::rename(&out, &dest).unwrap();
+
+    let (ok, text) = otd(&[
+        "run",
+        dest.join("project.otd").to_str().unwrap(),
+        "--frames",
+        "2",
+    ]);
+    if gpu_missing(&text) {
+        return;
+    }
+    assert!(ok, "a moved bundle must still open:\n{text}");
+}
+
+#[test]
+fn bundling_a_project_whose_component_is_gone_fails_here_not_at_the_show() {
+    let dir = scratch("bundle-broken");
+    let project = write_project(&dir, true);
+
+    // A reference to a file that no longer exists — the state a project gets
+    // into after a folder is reorganised.
+    let registry = otd_engine::registry();
+    let mut p = otd_core::Project::load(&project).unwrap();
+    p.nodes.push(otd_core::project::NodeEntry {
+        path: "/meter1".into(),
+        op: "containerCOMP".into(),
+        pos: (0.0, 0.0),
+        inputs: Vec::new(),
+        params: Default::default(),
+        flags: Default::default(),
+        external: Some("/nowhere/gone.otdc".into()),
+        clone: None,
+    });
+    p.nodes.sort_by(|a, b| a.path.cmp(&b.path));
+    p.save(&project).unwrap();
+    let _ = registry;
+
+    let out = dir.join("bundle");
+    let (ok, text) = otd(&[
+        "bundle",
+        project.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("gone.otdc"), "{text}");
 }
 
 #[test]

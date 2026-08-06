@@ -244,6 +244,14 @@ pub enum GraphError {
 pub struct Graph {
     nodes: SlotMap<NodeId, Node>,
     root: NodeId,
+    /// The directory the project file lives in, when it came from one.
+    ///
+    /// External component references are stored exactly as authored, which
+    /// means a bundle can hold `components/meter.otdc` and stay portable. That
+    /// only works if something remembers what the path is relative *to* — the
+    /// process's working directory is the wrong answer, and is what makes a
+    /// project open by hand and fail from a service.
+    base_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Graph {
@@ -274,7 +282,28 @@ impl Graph {
             clone_synced_at: 0,
             revision: 0,
         });
-        Graph { nodes, root }
+        Graph {
+            nodes,
+            root,
+            base_dir: None,
+        }
+    }
+
+    /// The directory external component references resolve against.
+    pub fn base_dir(&self) -> Option<&std::path::Path> {
+        self.base_dir.as_deref()
+    }
+
+    pub fn set_base_dir(&mut self, dir: Option<std::path::PathBuf>) {
+        self.base_dir = dir;
+    }
+
+    /// An external reference as an openable path.
+    pub fn resolve_external(&self, file: &str) -> std::path::PathBuf {
+        match &self.base_dir {
+            Some(dir) if std::path::Path::new(file).is_relative() => dir.join(file),
+            _ => std::path::PathBuf::from(file),
+        }
     }
 
     pub fn root(&self) -> NodeId {

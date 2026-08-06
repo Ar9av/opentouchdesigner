@@ -41,6 +41,9 @@ pub struct OtdApp {
     pub drag: Option<DragState>,
     pub create_dialog: Option<CreateDialog>,
     pub show_perf: bool,
+    /// Perform mode: the editor is gone and the main window shows only the
+    /// output. F1 in, F1 or Escape out.
+    pub perform: bool,
     /// A second window showing only the viewer output — the projector feed.
     pub output_window: bool,
     pub output_fullscreen: bool,
@@ -103,6 +106,7 @@ impl OtdApp {
             drag: None,
             create_dialog: None,
             show_perf: true,
+            perform: false,
             output_window: false,
             output_fullscreen: false,
             output_closed: Arc::new(AtomicBool::new(false)),
@@ -141,21 +145,7 @@ impl OtdApp {
     // -------------------------------------------------------------- cooking
 
     fn cook_roots(&self) -> Vec<NodeId> {
-        let mut roots = Vec::new();
-        if let Some(v) = self.viewer.filter(|v| self.graph.contains(*v)) {
-            roots.push(v);
-        }
-        for id in self.graph.walk() {
-            if id == self.graph.root() {
-                continue;
-            }
-            let node = self.graph.node(id);
-            let wanted = node.flags.render || (node.flags.display && self.visible.contains(&id));
-            if wanted && !roots.contains(&id) {
-                roots.push(id);
-            }
-        }
-        roots
+        cook_roots(&self.graph, self.viewer, &self.visible)
     }
 
     fn cook_frame(&mut self) {
@@ -280,6 +270,54 @@ impl OtdApp {
                 let _ = self.graph.remove(id);
                 self.status = format!("Import failed: {e}");
             }
+        }
+    }
+
+    /// Copy the project and everything it references into one folder.
+    ///
+    /// A project on an authoring machine points at shared `.otdc` files that
+    /// live wherever the artist keeps them. A show machine has none of those
+    /// directories. Exporting copies them in and rewrites the references to be
+    /// relative, so the folder can be moved anywhere and still open.
+    pub fn export_bundle(&mut self) {
+        let name = self
+            .project_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "show".into());
+        let Some(dir) = rfd::FileDialog::new()
+            .set_file_name(&name)
+            .set_title("Export bundle into a new folder")
+            .pick_folder()
+        else {
+            return;
+        };
+        match otd_core::bundle::export(&self.graph, &self.registry, self.time.fps, &dir, &name) {
+            Ok(bundle) => {
+                self.status = format!(
+                    "Exported {} — {} component(s){}",
+                    bundle.project.display(),
+                    bundle.components.len(),
+                    if bundle.missing.is_empty() {
+                        String::new()
+                    } else {
+                        // Loud, not silent: a bundle missing a component will
+                        // fail on the show machine, not here.
+                        format!(
+                            ", {} MISSING: {}",
+                            bundle.missing.len(),
+                            bundle
+                                .missing
+                                .iter()
+                                .map(|(path, file, _)| format!("{path} -> {file}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                );
+            }
+            Err(e) => self.status = format!("Export failed: {e}"),
         }
     }
 
@@ -414,7 +452,7 @@ impl OtdApp {
             Some(p) => p,
             None => return,
         };
-        match Project::load(&path).and_then(|p| p.to_graph(&self.registry)) {
+        match Project::open(&path, &self.registry) {
             Ok(graph) => {
                 self.graph = graph;
                 self.engines.top.reset();
@@ -445,9 +483,22 @@ impl eframe::App for OtdApp {
         // textures we just rendered into.
         self.cook_frame();
 
-        self.top_bar(ui);
-        self.side_panel(ui);
-        crate::canvas::show(self, ui);
+        // F1 anywhere, including out of perform mode — a performer who cannot
+        // find the way back out of a black screen has a real problem.
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::F1)) {
+            self.perform = !self.perform;
+        }
+        if self.perform && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.perform = false;
+        }
+
+        if self.perform {
+            self.perform_view(ui);
+        } else {
+            self.top_bar(ui);
+            self.side_panel(ui);
+            crate::canvas::show(self, ui);
+        }
         self.output_viewport(ui.ctx());
 
         // A realtime tool repaints continuously; there is always time moving.
@@ -475,6 +526,17 @@ impl OtdApp {
                     }
                     if ui.button("Save As…").clicked() {
                         self.save(None);
+                        ui.close();
+                    }
+                    if ui
+                        .button("Export Bundle…")
+                        .on_hover_text(
+                            "Copy the project and every component it uses into one folder, \
+                             ready to move to a show machine",
+                        )
+                        .clicked()
+                    {
+                        self.export_bundle();
                         ui.close();
                     }
                     ui.separator();
@@ -556,6 +618,13 @@ impl OtdApp {
                 }
 
                 ui.separator();
+                if ui
+                    .button("Perform")
+                    .on_hover_text("Hide the editor and show only the output (F1)")
+                    .clicked()
+                {
+                    self.perform = true;
+                }
                 ui.toggle_value(&mut self.output_window, "Output")
                     .on_hover_text("Open a second window showing only the viewer");
                 if self.output_window {
@@ -586,6 +655,39 @@ impl OtdApp {
         });
     }
 
+    /// Perform mode: the main window becomes the output.
+    ///
+    /// This is not a different renderer or a different cook — it is the same
+    /// frame with the editor's panels not drawn. What it buys is what the
+    /// editor costs: no thumbnails to sample, no canvas to lay out, and every
+    /// node that was only cooking because it was visible on the canvas stops
+    /// cooking, because `cook_roots` asks what is on screen and the answer is
+    /// now nothing but the viewer.
+    fn perform_view(&mut self, ui: &mut egui::Ui) {
+        // Nothing is on the canvas in perform mode, so nothing is a visible
+        // cook root. Clearing this is what makes the mode cheaper rather than
+        // merely darker.
+        self.visible.clear();
+
+        let tex = self
+            .viewer
+            .filter(|v| self.graph.contains(*v))
+            .and_then(|v| self.thumbnail(v));
+        egui::CentralPanel::no_frame()
+            .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+            .show(ui, |ui| match tex {
+                Some((tid, size)) => letterbox(ui, tid, size),
+                None => {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new("no viewer — F1 to go back")
+                                .color(egui::Color32::from_gray(90)),
+                        );
+                    });
+                }
+            });
+    }
+
     /// The output window: a second OS window showing only the viewer TOP,
     /// which is what gets dragged onto a projector (PLAN.md Phase 1).
     fn output_viewport(&mut self, ctx: &egui::Context) {
@@ -613,25 +715,7 @@ impl OtdApp {
                     .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                     .show(ui, |ui| {
                         if let Some((tid, size)) = tex {
-                            // Letterbox rather than stretch: a show output
-                            // with the wrong aspect ratio is worse than bars.
-                            let avail = ui.available_size();
-                            let aspect = size[0] as f32 / size[1].max(1) as f32;
-                            let (mut w, mut h) = (avail.x, avail.x / aspect);
-                            if h > avail.y {
-                                h = avail.y;
-                                w = h * aspect;
-                            }
-                            let rect = egui::Rect::from_center_size(
-                                ui.max_rect().center(),
-                                egui::vec2(w, h),
-                            );
-                            ui.painter().image(
-                                tid,
-                                rect,
-                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                                egui::Color32::WHITE,
-                            );
+                            letterbox(ui, tid, size);
                         }
                     });
                 if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -675,5 +759,119 @@ impl OtdApp {
                     crate::params::show(self, ui);
                 });
             });
+    }
+}
+
+/// What has to cook this frame: the big viewer, every node flagged for render,
+/// and every node whose own viewer is on *and* which is currently on screen.
+///
+/// That last condition is what makes the demand-driven engine visible: pan a
+/// heavy branch off the canvas and it stops costing anything. It is also what
+/// makes perform mode cheap rather than merely dark — nothing is on the canvas
+/// there, so `visible` is empty and the only thing left is the output chain.
+fn cook_roots(graph: &Graph, viewer: Option<NodeId>, visible: &[NodeId]) -> Vec<NodeId> {
+    let mut roots = Vec::new();
+    if let Some(v) = viewer.filter(|v| graph.contains(*v)) {
+        roots.push(v);
+    }
+    for id in graph.walk() {
+        if id == graph.root() {
+            continue;
+        }
+        let node = graph.node(id);
+        let wanted = node.flags.render || (node.flags.display && visible.contains(&id));
+        if wanted && !roots.contains(&id) {
+            roots.push(id);
+        }
+    }
+    roots
+}
+
+/// Paint a texture centred and letterboxed.
+///
+/// Letterbox rather than stretch, in both the output window and perform mode:
+/// a show output at the wrong aspect ratio is worse than black bars, and worse
+/// still because it looks deliberate.
+fn letterbox(ui: &egui::Ui, tid: TextureId, size: [u32; 2]) {
+    let avail = ui.available_size();
+    let aspect = size[0] as f32 / size[1].max(1) as f32;
+    let (mut w, mut h) = (avail.x, avail.x / aspect);
+    if h > avail.y {
+        h = avail.y;
+        w = h * aspect;
+    }
+    let rect = egui::Rect::from_center_size(ui.max_rect().center(), egui::vec2(w, h));
+    ui.painter().image(
+        tid,
+        rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Noise -> level -> out, plus an unrelated branch nobody wired up.
+    fn patch() -> (Graph, OpRegistry, NodeId, NodeId) {
+        let registry = otd_engine::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let noise = graph
+            .create(root, registry.get("noiseTOP").unwrap(), Some("noise1"))
+            .unwrap();
+        let out = graph
+            .create(root, registry.get("nullTOP").unwrap(), Some("out1"))
+            .unwrap();
+        graph.connect(noise, out, 0).unwrap();
+        let spare = graph
+            .create(root, registry.get("rampTOP").unwrap(), Some("ramp1"))
+            .unwrap();
+        (graph, registry, out, spare)
+    }
+
+    #[test]
+    fn a_node_on_screen_cooks_and_the_same_node_off_screen_does_not() {
+        let (graph, _reg, out, spare) = patch();
+
+        // On the canvas: its own viewer makes it a root.
+        let roots = cook_roots(&graph, Some(out), &[spare]);
+        assert!(roots.contains(&spare));
+
+        // Panned away: nothing wants it, so nothing cooks it.
+        let roots = cook_roots(&graph, Some(out), &[]);
+        assert!(!roots.contains(&spare));
+        assert_eq!(roots, vec![out], "only the viewer chain is left");
+    }
+
+    #[test]
+    fn perform_mode_leaves_only_the_output_chain() {
+        let (mut graph, _reg, out, spare) = patch();
+        // A render-flagged node is a root wherever the canvas is looking —
+        // that is what the flag means, and a show output relies on it.
+        graph.node_mut(spare).flags.render = true;
+
+        // Perform mode is exactly "nothing is on the canvas".
+        let performing = cook_roots(&graph, Some(out), &[]);
+        assert!(performing.contains(&out));
+        assert!(
+            performing.contains(&spare),
+            "the render flag survives perform mode"
+        );
+
+        let noise = graph.find("/noise1").unwrap();
+        assert!(
+            !performing.contains(&noise),
+            "an upstream node is pulled by its consumer, not listed as a root"
+        );
+    }
+
+    #[test]
+    fn a_deleted_viewer_does_not_become_a_root() {
+        let (mut graph, _reg, out, _) = patch();
+        graph.remove(out).unwrap();
+        // A stale NodeId from a deleted node must not reach the cook.
+        assert!(cook_roots(&graph, Some(out), &[]).is_empty());
     }
 }

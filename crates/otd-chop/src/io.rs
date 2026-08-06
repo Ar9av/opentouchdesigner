@@ -756,11 +756,15 @@ fn params_dmx_out() -> IndexMap<String, Param> {
     );
     m.insert(
         "universe".into(),
-        Param::int(0).with_label("Universe").with_range(0.0, 32767.0),
+        Param::int(0)
+            .with_label("Universe")
+            .with_range(0.0, 32767.0),
     );
     m.insert(
         "start".into(),
-        Param::int(1).with_label("Start Channel").with_range(1.0, 512.0),
+        Param::int(1)
+            .with_label("Start Channel")
+            .with_range(1.0, 512.0),
     );
     m.insert("active".into(), Param::bool(true).with_label("Active"));
     m
@@ -782,7 +786,10 @@ fn cook_dmx_out(c: &mut ChopCtx) -> ChopData {
         .flatten()
         .unwrap_or(0)
         == 1;
-    let universe = get("universe").map(|v| v.as_i64()).unwrap_or(0).clamp(0, 32767) as u16;
+    let universe = get("universe")
+        .map(|v| v.as_i64())
+        .unwrap_or(0)
+        .clamp(0, 32767) as u16;
     let start = get("start").map(|v| v.as_i64()).unwrap_or(1).clamp(1, 512) as usize;
     let host = get("address").map(|v| v.as_str()).unwrap_or_default();
     let path = c.path.to_string();
