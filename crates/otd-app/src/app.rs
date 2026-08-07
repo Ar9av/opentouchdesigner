@@ -135,7 +135,11 @@ impl OtdApp {
             status: String::new(),
             cook_error: None,
         };
-        app.load_demo("starter");
+        // Not `starter`: that patch is the Phase 0 exit criterion, and an
+        // animated grey noise field is a bad first argument for what this
+        // tool is. `tunnel` is nine nodes, no shader, and looks like the
+        // thing somebody opened the program hoping to make.
+        app.load_demo("tunnel");
         Ok(app)
     }
 
