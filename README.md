@@ -1,69 +1,139 @@
+<div align="center">
+
 # OpenTouchDesigner
 
-An open-source, cross-platform, node-based realtime visual programming
-environment in the spirit of TouchDesigner. Written in Rust on wgpu, so
-`cargo run` works on macOS, Windows and Linux.
+**Node-based realtime visuals. Open source, cross-platform, no resolution cap.**
+*In the spirit of TouchDesigner — written in Rust on wgpu.*
 
-**Status: PLAN.md Phases 0–6 complete**, apart from the pieces that need
-platform SDKs (Spout/Syphon/NDI, Ableton Link — see below). What
-exists today is a working graph, cook engine, GPU texture pipeline with live
-shader compilation, a channel pipeline with audio, MIDI, OSC and DMX on both
-directions, the four-mode parameter system, a text project format, component
-encapsulation with embedded Python, clones and a Replicator, an instanced 3D
-pipeline, keyframes and a timeline, undo/redo, a performance monitor, a
-component palette, a node editor with projector output, and a headless CLI.
+[![CI](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml/badge.svg)](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml)
+[![Download](https://img.shields.io/github/v/release/Ar9av/opentouchdesigner?label=download%20macOS&color=blue)](https://github.com/Ar9av/opentouchdesigner/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Tests](https://img.shields.io/badge/tests-325%20passing-brightgreen)
+![Operators](https://img.shields.io/badge/operators-79-informational)
 
-## Try it
+<img src="docs/img/tunnel.gif" width="640" alt="A cyan and magenta warp tunnel, built from nine nodes and no shader">
+
+*This is the patch it opens on. Nine nodes, no shader —*
+*the motion is the **feedback loop**, not any one operator.*
+
+</div>
+
+---
+
+## Get it
+
+**macOS** — [**download the .dmg**](https://github.com/Ar9av/opentouchdesigner/releases/latest) · Apple Silicon and Intel
+
+It is unsigned, so the first launch is refused. Right-click → Open, or
+`xattr -dr com.apple.quarantine /Applications/OpenTouchDesigner.app`. Signing
+needs a paid Apple Developer account; saying so beats pretending otherwise.
+
+**Anywhere** — one command, nothing to install but Rust:
 
 ```bash
+git clone https://github.com/Ar9av/opentouchdesigner && cd opentouchdesigner
 cargo run -p otd-app
 ```
 
-It opens on `tunnel`: nine nodes, no shader, a cyan-and-magenta warp tunnel
-built out of a feedback loop. Every node shows its own output at frame rate —
-a TOP shows its texture, a CHOP shows its waveform — so the network is also
-the explanation of how the picture was made.
+No CMake, no vcpkg, no SDK downloads. macOS, Windows and Linux from the same
+checkout.
 
-**New here?** [`docs/GUIDE.md`](docs/GUIDE.md) is the short version of how
-realtime visuals are actually made: why the motion comes from a *loop* rather
-than from any one operator, the five recipes most good-looking patches are
-built from, and a list of the reasons a patch ends up looking like grey mud.
+---
 
-**File → Examples**:
+## What you can make
 
-| | |
-|---|---|
-| `tunnel` | the opening patch — a feedback warp tunnel, no shader |
-| `plasma` | domain-warped noise in one GLSL TOP, with helper functions |
-| `starter` | `noise → level → viewer` — the smallest thing that proves the engine works |
-| `feedback` | a Shadertoy shader driving a feedback loop at 1920×1080 |
-| `audioreactive` | audio spectrum and MIDI notes driving a visual through Exports |
-| `lfo` | the smallest thing that shows a channel driving a parameter |
-| `components` | one visualiser component used twice, listening to different bands |
-| `instances3d` | 256 instanced spheres driven by audio, rendered and bloomed |
-| `keyframes` | three keyed curves — eased, splined and stepped — driving rotation, scale and brightness |
-| `video` | a movie file playing through a feedback trail |
+<table>
+<tr>
+<td width="33%" align="center">
+<img src="docs/img/plasma.gif" width="260"><br>
+<b>plasma</b><br><sub>domain-warped fbm, one GLSL TOP</sub>
+</td>
+<td width="33%" align="center">
+<img src="docs/img/instances3d.gif" width="260"><br>
+<b>instances3d</b><br><sub>256 spheres, one draw call, audio-driven</sub>
+</td>
+<td width="33%" align="center">
+<img src="docs/img/feedback.png" width="260"><br>
+<b>feedback</b><br><sub>Shadertoy GLSL in a loop at 1920×1080</sub>
+</td>
+</tr>
+</table>
 
-### Headless
+All of these are **File → Examples**, and every one is generated from code —
+`otd demo tunnel --out examples/tunnel.otd` — with a test that fails the build
+if a committed example drifts from the demo it came from.
+
+New here? **[docs/GUIDE.md](docs/GUIDE.md)** is the short version of how
+realtime visuals are actually made: why motion comes from a loop, the five
+recipes most good-looking patches are built from, and the reasons a patch ends
+up looking like grey mud.
+
+---
+
+## Describe it, and it gets built
+
+<img src="docs/img/assistant-output.png" width="420" align="right">
+
+A floating bar over the canvas. Type a sentence, press Enter, get operators —
+wired, positioned, parameters set, as **one undo**.
+
+Bring your own key: **Anthropic**, **OpenAI** or **OpenRouter**.
+
+It is not a chatbot bolted on the side:
+
+- The model is told what the operators are **by the registry** — the same table
+  the editor builds its menus from — so it cannot invent one or use a name that
+  has been renamed.
+- **Shaders are compiled before the node exists.** A shader that fails goes back
+  to the model with the compiler's own error, once.
+- Anything invented is dropped and reported; anything the model built and forgot
+  to wire in is reported too.
+- **Keys never enter a project file.** `.otd` is meant to be committed, and a key
+  in a git history has to be *rotated*, not deleted.
+
+`Cmd/Ctrl+K` summons it, `Escape` collapses it, `×` hides it, and it is gone
+entirely in perform mode. → **[docs/AI.md](docs/AI.md)**
+
+<br clear="right">
+
+---
+
+## Why this exists
+
+TouchDesigner is superb and closed. The gaps it leaves are the whole pitch:
+
+| | TouchDesigner | OpenTouchDesigner |
+|---|---|---|
+| **Linux** | no | yes |
+| **Resolution** | 1280×1280 on the free tier | uncapped, 16-bit float throughout |
+| **Project format** | binary `.toe` | **text, diffable, mergeable** |
+| **Headless** | no | `otd run` on a server with no display |
+| **Source** | closed | MIT |
+
+The text format is the one that compounds. Turning one knob is a one-line diff —
+asserted in a test, not claimed:
+
+```ron
+"brightness": (
+-  value: Float(0.94),
++  value: Float(0.90),
+),
+```
+
+---
+
+## Headless
 
 `otd` runs a project with no window at all — something TouchDesigner cannot do
 on a Linux server.
 
 ```bash
-cargo run -p otd-cli -- stats examples/feedback.otd --frames 60 --node /out1
-cargo run -p otd-cli -- render examples/instances3d.otd --node /out1 --frames 120 --out shots
-cargo run -p otd-cli -- run showfile.otd
-cargo run -p otd-cli -- demo video --out examples/video.otd
+otd run showfile.otd                                    # the show machine
+otd render examples/tunnel.otd --node /out1 --frames 300 --out shots
+otd stats examples/feedback.otd --frames 60 --node /out1
+otd bundle showfile.otd --out /Volumes/USB/show         # project + components + media
+otd docs --out docs/OPERATORS.md                        # the reference, generated
 ```
-
-`run` is the show-machine mode: it cooks in realtime, paced to the frame rate,
-with the output operators — DMX, OSC — sending every frame. `stats` reports
-median, p95 and worst frame times against the frame budget, keeping the first
-frame separate because compilation is not steady state. `render` writes a
-numbered PNG sequence. `demo` writes a built-in patch out as a project file —
-the shipped `examples/*.otd` are generated by it rather than hand-saved, and a
-test fails the build if a committed one has drifted from the demo it came
-from.
 
 The 1080p feedback patch, headless on an M-series Mac:
 
@@ -75,7 +145,9 @@ frame   ms    median 1.22   p95 8.73   max 17.88
 budget  16.67 ms   1 frame(s) over
 ```
 
-### Keys
+---
+
+## Keys
 
 | | |
 |---|---|

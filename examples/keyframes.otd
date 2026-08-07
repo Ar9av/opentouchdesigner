@@ -1,0 +1,79 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/anim1",
+      op: "animationCHOP",
+      pos: (-420.0, 140.0),
+      params: {
+        "keys": (
+          value: Str("# channel  time  value  interpolation\nrotate     0     0      smooth\nrotate     4     180    smooth\nscale      0     0.4    spline\nscale      2     1      spline\nscale      4     0.4    spline\nbright     0     0.5    linear\nbright     1     2      constant\nbright     3     2      linear\nbright     4     0.5    linear\n"),
+        ),
+        "play": (
+          value: Str("loop"),
+        ),
+      },
+    ),
+    (
+      path: "/level1",
+      op: "levelTOP",
+      pos: (0.0, -140.0),
+      inputs: [
+        "/xform1",
+      ],
+      params: {
+        "brightness": (
+          value: Float(1.0),
+          mode: Export,
+          source: "/anim1:bright",
+        ),
+      },
+    ),
+    (
+      path: "/out1",
+      op: "nullTOP",
+      pos: (200.0, -140.0),
+      inputs: [
+        "/level1",
+      ],
+    ),
+    (
+      path: "/ramp1",
+      op: "rampTOP",
+      pos: (-420.0, -140.0),
+      params: {
+        "type": (
+          value: Str("vertical"),
+        ),
+        "resw": (
+          value: Int(640),
+        ),
+        "resh": (
+          value: Int(360),
+        ),
+      },
+    ),
+    (
+      path: "/xform1",
+      op: "transformTOP",
+      pos: (-200.0, -140.0),
+      inputs: [
+        "/ramp1",
+      ],
+      params: {
+        "rotate": (
+          value: Float(0.0),
+          mode: Export,
+          source: "/anim1:rotate",
+        ),
+        "scale": (
+          value: Vec2((1.0, 1.0)),
+          mode: Expression,
+          expression: "ch(\'/anim1\', \'scale\')",
+        ),
+      },
+    ),
+  ],
+)
