@@ -16,9 +16,12 @@ struct Scene {
   light_dir: vec4<f32>,
   light_color: vec4<f32>,
   base_color: vec4<f32>,
-  // x = metallic, y = roughness, z = emit, w = use texture
+  // What these mean depends on the shading model:
+  //   PBR      x = metallic,  y = roughness,  z = emit, w = use texture
+  //   Constant                                z = emit, w = use texture
+  //   Phong    x = specular,  y = shininess,  z = emit, w = use texture
   material: vec4<f32>,
-  // x = ambient, y = point scale, z, w unused
+  // x = ambient, y = point scale, z = shading model, w unused
   render: vec4<f32>,
 };
 
@@ -83,19 +86,38 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     albedo = albedo * textureSample(tex, samp, in.uv);
   }
 
+  let model = i32(S.render.z + 0.5);
+
+  // Constant: the colour is the colour. Not "PBR with the light turned off" —
+  // that would still fold in ambient and the emit term twice. This is what a
+  // Wireframe MAT and anything already lit want.
+  if (model == 1) {
+    return vec4<f32>(albedo.rgb * max(S.material.z, 0.0), albedo.a);
+  }
+
   let n = normalize(in.normal);
   let l = normalize(S.light_dir.xyz);
   let v = normalize(S.camera.xyz - in.world);
   let h = normalize(l + v);
-
   let diffuse = max(dot(n, l), 0.0) * S.light_dir.w;
-  // Roughness drives the highlight width; metals keep their colour in the
-  // specular, dielectrics go white. Not a full BRDF, but it reads correctly
-  // and costs almost nothing.
-  let roughness = clamp(S.material.y, 0.05, 1.0);
-  let shininess = 2.0 / (roughness * roughness) - 2.0;
-  let spec = pow(max(dot(n, h), 0.0), shininess) * (1.0 - roughness);
-  let spec_tint = mix(vec3<f32>(1.0), albedo.rgb, S.material.x);
+
+  var spec = 0.0;
+  var spec_tint = vec3<f32>(1.0);
+  if (model == 2) {
+    // Phong: shininess is dialled directly, and the specular level is its own
+    // number rather than being implied by roughness. Less physical than PBR
+    // and easier to get a specific look out of, which is the whole reason
+    // the operator exists alongside it.
+    spec = pow(max(dot(n, h), 0.0), max(S.material.y, 1.0)) * S.material.x;
+  } else {
+    // PBR: roughness drives the highlight width; metals keep their colour in
+    // the specular, dielectrics go white. Not a full BRDF, but it reads
+    // correctly and costs almost nothing.
+    let roughness = clamp(S.material.y, 0.05, 1.0);
+    let shininess = 2.0 / (roughness * roughness) - 2.0;
+    spec = pow(max(dot(n, h), 0.0), shininess) * (1.0 - roughness);
+    spec_tint = mix(vec3<f32>(1.0), albedo.rgb, S.material.x);
+  }
 
   let lit = albedo.rgb * (S.render.x + diffuse * S.light_color.rgb)
           + spec_tint * spec * S.light_color.rgb * S.light_dir.w;

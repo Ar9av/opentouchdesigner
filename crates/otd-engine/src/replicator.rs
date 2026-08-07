@@ -39,6 +39,7 @@ fn params_replicator() -> IndexMap<String, Param> {
 
 pub const DEF: OpDef = OpDef {
     type_name: REPLICATOR,
+    input_families: &[],
     label: "Replicator",
     family: Family::Comp,
     inputs: &[],

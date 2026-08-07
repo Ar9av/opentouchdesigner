@@ -266,7 +266,14 @@ fn winding_agrees_with_normals(g: &Geometry) -> bool {
 
 #[test]
 fn generators_wind_their_triangles_to_match_their_normals() {
-    for op in ["boxSOP", "sphereSOP", "gridSOP"] {
+    for op in [
+        "boxSOP",
+        "sphereSOP",
+        "gridSOP",
+        "tubeSOP",
+        "torusSOP",
+        "circleSOP",
+    ] {
         let mut p = Patch::new();
         let id = p.add(op, "gen");
         p.run(id);
@@ -284,6 +291,65 @@ fn every_sop_cooks_without_panicking() {
             p.host.geometry(id).is_some(),
             "{} produced nothing",
             spec.def.type_name
+        );
+    }
+}
+
+#[test]
+fn a_tube_with_one_radius_at_zero_is_a_cone() {
+    let mut p = Patch::new();
+    let t = p.add("tubeSOP", "cone");
+    p.set(t, "radius2", Value::Float(0.0));
+    p.run(t);
+
+    let g = p.geo(t);
+    // Every point at the top sits on the axis, and the cap for a zero radius
+    // is not emitted at all.
+    let top = g
+        .points
+        .iter()
+        .filter(|pt| pt.position[1] > 0.99)
+        .collect::<Vec<_>>();
+    assert!(!top.is_empty());
+    for pt in top {
+        assert!(
+            pt.position[0].abs() < 1e-5 && pt.position[2].abs() < 1e-5,
+            "the apex should be on the axis, got {:?}",
+            pt.position
+        );
+    }
+}
+
+#[test]
+fn an_unfilled_circle_is_a_line_to_copy_along() {
+    let mut p = Patch::new();
+    let c = p.add("circleSOP", "ring");
+    p.set(c, "fill", Value::Bool(false));
+    p.set(c, "divisions", Value::Int(8));
+    p.run(c);
+
+    let g = p.geo(c);
+    assert_eq!(g.topology, otd_sop::Topology::Lines);
+    // Closed: eight divisions, eight points, no repeated seam point.
+    assert_eq!(g.points.len(), 8);
+}
+
+#[test]
+fn a_torus_wraps_around_the_hole() {
+    let mut p = Patch::new();
+    let t = p.add("torusSOP", "torus");
+    p.set(t, "radius1", Value::Float(1.0));
+    p.set(t, "radius2", Value::Float(0.25));
+    p.run(t);
+
+    let g = p.geo(t);
+    // Distance from the Y axis stays inside [outer - inner, outer + inner],
+    // which is the property that distinguishes a torus from a sphere.
+    for pt in &g.points {
+        let r = (pt.position[0].powi(2) + pt.position[2].powi(2)).sqrt();
+        assert!(
+            (0.75 - 1e-4..=1.25 + 1e-4).contains(&r),
+            "point at radius {r} is off the tube"
         );
     }
 }

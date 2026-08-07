@@ -260,6 +260,88 @@ impl Engines {
     }
 }
 
+/// Collect the inputs of `id` that come from another family.
+///
+/// This is the whole cross-family mechanism, and it is deliberately here: the
+/// module docs say this crate exists because it is the one place the families
+/// meet, and a converter operator is the second reason after parameter
+/// exports. Everything upstream has already cooked — the scheduler does not
+/// care what family a wire carries — so this only has to translate.
+///
+/// A slot is only translated when the operator *declared* it foreign, so an
+/// ordinary CHOP with a CHOP on input 0 costs one integer comparison.
+fn crossings(
+    graph: &Graph,
+    id: NodeId,
+    top: &TopEngine,
+    channels: &ChannelStore,
+    dats: &DatStore,
+    geometry: &GeometryStore,
+) -> otd_core::Crossings {
+    let Some(node) = graph.get(id) else {
+        return Vec::new();
+    };
+    if node.input_families.iter().all(|f| *f == node.family) {
+        return Vec::new();
+    }
+    node.inputs
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            let wanted = *node.input_families.get(i)?;
+            if wanted == node.family {
+                return None;
+            }
+            let src = graph.resolve_output((*slot)?)?;
+            match wanted {
+                Family::Dat => Some(otd_core::Crossing::Table(dats.get(src)?.rows.clone())),
+                Family::Chop => {
+                    let data = channels.get(src)?;
+                    Some(otd_core::Crossing::Channels {
+                        names: data.channels.iter().map(|c| c.name.clone()).collect(),
+                        samples: data.channels.iter().map(|c| c.samples.clone()).collect(),
+                        sample_rate: data.sample_rate,
+                    })
+                }
+                Family::Sop => {
+                    let geo = geometry.get(src)?;
+                    // The attribute schema is the vertex layout, spelled out
+                    // once here rather than duplicated in every converter.
+                    let attrs = vec![
+                        ("P".to_string(), 3),
+                        ("N".to_string(), 3),
+                        ("uv".to_string(), 2),
+                        ("Cd".to_string(), 4),
+                    ];
+                    let mut data = Vec::with_capacity(geo.points.len() * 12);
+                    for p in &geo.points {
+                        data.extend_from_slice(&p.position);
+                        data.extend_from_slice(&p.normal);
+                        data.extend_from_slice(&p.uv);
+                        data.extend_from_slice(&p.color);
+                    }
+                    Some(otd_core::Crossing::Points { attrs, data })
+                }
+                Family::Top => {
+                    // Last frame's pixels: this frame's passes are still in an
+                    // encoder that has not been submitted. See the TOP to CHOP
+                    // operator's docs — TouchDesigner's is one frame behind for
+                    // the same reason.
+                    let tex = top.output(graph, src)?;
+                    let (width, height, rgba) =
+                        otd_gpu::read_pixels_rgba_f32(top.context(), tex).ok()?;
+                    Some(otd_core::Crossing::Pixels {
+                        width,
+                        height,
+                        rgba,
+                    })
+                }
+                Family::Mat | Family::Comp => None,
+            }
+        })
+        .collect()
+}
+
 impl Cooker for Engines {
     fn extra_inputs(&self, graph: &Graph, id: NodeId) -> Vec<NodeId> {
         self.top.extra_inputs(graph, id)
@@ -282,6 +364,7 @@ impl Cooker for Engines {
 
         match family {
             Family::Chop => {
+                let foreign = crossings(graph, id, top, channels, dats, geometry);
                 let data = {
                     let net = FullNetwork {
                         chops: Network {
@@ -291,7 +374,7 @@ impl Cooker for Engines {
                         python,
                     };
                     let eval = ctx.eval_ctx_with(&net);
-                    chop.cook_node(graph, id, ctx, &eval, channels)?
+                    chop.cook_node(graph, id, ctx, &eval, channels, foreign)?
                 };
                 channels.insert(id, data);
                 Ok(())
@@ -312,6 +395,7 @@ impl Cooker for Engines {
                 Ok(())
             }
             Family::Top => {
+                let foreign = crossings(graph, id, top, channels, dats, geometry);
                 let net = FullNetwork {
                     chops: Network {
                         graph,
@@ -325,9 +409,10 @@ impl Cooker for Engines {
                     geometry,
                     channels,
                 };
-                top.cook_node(graph, id, ctx, &eval, Some(&view))
+                top.cook_node(graph, id, ctx, &eval, Some(&view), &foreign)
             }
             Family::Dat => {
+                let foreign = crossings(graph, id, top, channels, dats, geometry);
                 let data = {
                     let net = FullNetwork {
                         chops: Network {
@@ -338,7 +423,7 @@ impl Cooker for Engines {
                     };
                     let eval = ctx.eval_ctx_with(&net);
                     let scripts = PythonScripts { python };
-                    dat.cook_node(graph, id, ctx, &eval, dats, Some(&scripts))?
+                    dat.cook_node(graph, id, ctx, &eval, dats, Some(&scripts), foreign)?
                 };
                 dats.insert(id, data);
                 Ok(())

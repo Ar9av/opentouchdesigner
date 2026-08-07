@@ -202,6 +202,7 @@ mod tests {
         let mut r = OpRegistry::new();
         r.register(OpDef {
             type_name: "container",
+            input_families: &[],
             label: "Container",
             family: Family::Comp,
             inputs: &[],
@@ -217,6 +218,7 @@ mod tests {
         }
         r.register(OpDef {
             type_name: "player",
+            input_families: &[],
             label: "Player",
             family: Family::Top,
             inputs: &[],
@@ -227,6 +229,7 @@ mod tests {
         });
         r.register(OpDef {
             type_name: "pass",
+            input_families: &[],
             label: "Pass",
             family: Family::Top,
             inputs: &["in"],

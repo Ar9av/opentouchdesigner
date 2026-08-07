@@ -7,7 +7,8 @@
 //! or worse, without a lock in the cook path.
 
 use otd_core::{
-    ChannelSource, CookContext, CookError, Cooker, EvalContext, Family, Graph, NodeId, Value,
+    ChannelSource, CookContext, CookError, Cooker, Crossings, EvalContext, Family, Graph, NodeId,
+    Value,
 };
 use slotmap::SecondaryMap;
 
@@ -115,6 +116,7 @@ impl ChopEngine {
         ctx: &CookContext,
         eval: &EvalContext,
         chops: &ChannelStore,
+        foreign: Crossings,
     ) -> Result<ChopData, CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
@@ -161,6 +163,7 @@ impl ChopEngine {
             eval,
             time: ctx,
             inputs,
+            foreign,
             state: self.state.entry(id).unwrap().or_default(),
             io: &mut self.io,
             path: &path,
@@ -224,7 +227,7 @@ impl Cooker for ChopHost {
                 chops: channels,
             };
             let eval = ctx.eval_ctx_with(&net);
-            engine.cook_node(graph, id, ctx, &eval, channels)?
+            engine.cook_node(graph, id, ctx, &eval, channels, Crossings::new())?
         };
         channels.insert(id, data);
         Ok(())

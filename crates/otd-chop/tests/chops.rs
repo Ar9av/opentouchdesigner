@@ -693,3 +693,269 @@ fn a_missing_audio_output_passes_its_input_through() {
     assert!(p.host.engine.status("/audioout1").is_some());
     assert_eq!(p.value(out, "chan1"), 0.75);
 }
+
+// ------------------------------------------------------------ new operators
+
+#[test]
+fn limit_clamps_wraps_folds_and_quantises() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let l = p.add("limitCHOP", "limit1");
+    p.graph.connect(c, l, 0).unwrap();
+    p.set(c, "value0", Value::Float(1.75));
+
+    p.run(l, 1);
+    assert_eq!(p.value(l, "chan1"), 1.0, "clamp");
+
+    p.set(l, "type", Value::Str("loop".into()));
+    p.run(l, 1);
+    assert!((p.value(l, "chan1") - 0.75).abs() < 1e-5, "loop wraps");
+
+    p.set(l, "type", Value::Str("zigzag".into()));
+    p.run(l, 1);
+    // 1.75 folds back down: past the top at 1.0, 0.75 further, so 0.25.
+    assert!((p.value(l, "chan1") - 0.25).abs() < 1e-5, "zigzag folds");
+
+    p.set(l, "type", Value::Str("quantise".into()));
+    p.set(l, "step", Value::Float(0.5));
+    p.run(l, 1);
+    assert_eq!(p.value(l, "chan1"), 2.0, "quantise snaps to the step");
+}
+
+#[test]
+fn slope_is_the_inverse_of_speed() {
+    // Integrating then differentiating should give back what went in, which
+    // is a stronger statement than either operator's own arithmetic.
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let speed = p.add("speedCHOP", "integrate");
+    let slope = p.add("slopeCHOP", "differentiate");
+    p.graph.connect(c, speed, 0).unwrap();
+    p.graph.connect(speed, slope, 0).unwrap();
+    p.set(c, "value0", Value::Float(2.0));
+
+    p.run(slope, 10);
+    assert!(
+        (p.value(slope, "chan1") - 2.0).abs() < 0.05,
+        "got {}",
+        p.value(slope, "chan1")
+    );
+}
+
+#[test]
+fn hold_freezes_until_the_trigger_fires() {
+    let mut p = Patch::new();
+    let src = p.add("constantCHOP", "src");
+    let trig = p.add("constantCHOP", "trig");
+    let hold = p.add("holdCHOP", "hold1");
+    p.graph.connect(src, hold, 0).unwrap();
+    p.graph.connect(trig, hold, 1).unwrap();
+
+    p.set(src, "value0", Value::Float(0.25));
+    p.set(trig, "value0", Value::Float(1.0));
+    p.run(hold, 2);
+    assert_eq!(p.value(hold, "chan1"), 0.25, "the rising edge samples");
+
+    // The source moves but the trigger stays high: no new edge, no new value.
+    p.set(src, "value0", Value::Float(0.9));
+    p.run(hold, 2);
+    assert_eq!(p.value(hold, "chan1"), 0.25, "held across a static trigger");
+
+    // Drop and raise it again.
+    p.set(trig, "value0", Value::Float(0.0));
+    p.run(hold, 1);
+    p.set(trig, "value0", Value::Float(1.0));
+    p.run(hold, 1);
+    assert_eq!(p.value(hold, "chan1"), 0.9, "a new edge samples again");
+}
+
+#[test]
+fn shuffle_transposes_channels_into_samples() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let s = p.add("shuffleCHOP", "shuffle1");
+    p.graph.connect(c, s, 0).unwrap();
+    p.set(c, "channels", Value::Int(3));
+    p.set(c, "value0", Value::Float(0.1));
+    p.set(c, "value1", Value::Float(0.2));
+    p.set(c, "value2", Value::Float(0.3));
+    p.run(s, 1);
+
+    // Three channels of one sample become one channel of three.
+    assert_eq!(p.data(s).num_channels(), 1);
+    assert_eq!(p.data(s).nth(0).unwrap().samples.len(), 3);
+    let got = &p.data(s).nth(0).unwrap().samples;
+    assert!((got[0] - 0.1).abs() < 1e-6 && (got[2] - 0.3).abs() < 1e-6);
+}
+
+#[test]
+fn rename_numbers_the_channels_it_matches() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let r = p.add("renameCHOP", "rename1");
+    p.graph.connect(c, r, 0).unwrap();
+    p.set(c, "channels", Value::Int(3));
+    p.set(r, "to", Value::Str("led[1-]".into()));
+    p.run(r, 1);
+
+    assert_eq!(p.data(r).names(), vec!["led1", "led2", "led3"]);
+}
+
+#[test]
+fn analyze_reduces_a_waveform_to_one_number() {
+    let mut p = Patch::new();
+    let pat = p.add("patternCHOP", "wave");
+    let a = p.add("analyzeCHOP", "peak");
+    p.graph.connect(pat, a, 0).unwrap();
+    p.set(pat, "length", Value::Int(100));
+    p.set(a, "function", Value::Str("maximum".into()));
+    p.run(a, 1);
+
+    assert_eq!(p.data(a).num_samples(), 1);
+    let peak = p.value(a, "chan1");
+    let raw = p.data(pat).nth(0).unwrap().max();
+    assert!((peak - raw).abs() < 1e-6, "{peak} vs {raw}");
+}
+
+#[test]
+fn an_equal_power_cross_does_not_dip_in_the_middle() {
+    // The reason the curve exists: at the halfway point a linear blend of two
+    // full-scale signals reads 1.0 where each input read 1.0, but the *power*
+    // has dropped. Equal power holds it up at ~0.707 each, summing to ~1.41.
+    let mut p = Patch::new();
+    let a = p.add("constantCHOP", "a");
+    let b = p.add("constantCHOP", "b");
+    let x = p.add("crossCHOP", "cross1");
+    p.graph.connect(a, x, 0).unwrap();
+    p.graph.connect(b, x, 1).unwrap();
+    p.set(a, "value0", Value::Float(1.0));
+    p.set(b, "value0", Value::Float(1.0));
+
+    p.run(x, 1);
+    assert!(
+        (p.value(x, "chan1") - 1.0).abs() < 1e-5,
+        "linear at the middle"
+    );
+
+    p.set(x, "curve", Value::Str("equalpower".into()));
+    p.run(x, 1);
+    let v = p.value(x, "chan1");
+    assert!((v - 1.414).abs() < 0.01, "equal power held at {v}");
+}
+
+#[test]
+fn resample_changes_the_length_and_keeps_the_shape() {
+    let mut p = Patch::new();
+    let pat = p.add("patternCHOP", "wave");
+    let r = p.add("resampleCHOP", "resample1");
+    p.graph.connect(pat, r, 0).unwrap();
+    p.set(pat, "length", Value::Int(100));
+    p.set(r, "length", Value::Int(10));
+    p.run(r, 1);
+
+    assert_eq!(p.data(r).num_samples(), 10);
+    // The endpoints are the endpoints — a resample that dropped or shifted
+    // them would be a crop, not a resample.
+    let src = &p.data(pat).nth(0).unwrap().samples;
+    let out = &p.data(r).nth(0).unwrap().samples;
+    assert!((out[0] - src[0]).abs() < 1e-5);
+    assert!((out[9] - src[99]).abs() < 1e-5);
+}
+
+#[test]
+fn the_beat_chop_is_a_function_of_time_not_a_counter() {
+    // Jumping the clock forward must land on the same phase a run of frames
+    // would have reached. A counter would be permanently behind.
+    let mut p = Patch::new();
+    let b = p.add("beatCHOP", "beat1");
+    p.set(b, "tempo", Value::Float(120.0)); // Two beats a second.
+
+    // 0.25 s in: half a beat.
+    p.time.advance(0.25);
+    p.run(b, 1);
+    let after_jump = p.value(b, "ramp");
+    assert!(
+        (after_jump - 0.5).abs() < 0.05,
+        "half a beat should read ~0.5, got {after_jump}"
+    );
+
+    let count = p.value(b, "count");
+    assert_eq!(count, 0.0, "still in the first beat");
+}
+
+#[test]
+fn delay_plays_a_channel_back_later() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let d = p.add("delayCHOP", "delay1");
+    p.graph.connect(c, d, 0).unwrap();
+    // 5 frames at the control rate.
+    p.set(d, "delay", Value::Float(5.0 / 60.0));
+
+    p.set(c, "value0", Value::Float(1.0));
+    p.run(d, 1);
+    assert_eq!(p.value(d, "chan1"), 0.0, "nothing has arrived yet");
+
+    p.run(d, 5);
+    assert_eq!(p.value(d, "chan1"), 1.0, "the value arrives five frames on");
+}
+
+#[test]
+fn an_expression_chop_sees_the_sample_and_its_position() {
+    let mut p = Patch::new();
+    let pat = p.add("patternCHOP", "wave");
+    let e = p.add("expressionCHOP", "expr1");
+    p.graph.connect(pat, e, 0).unwrap();
+    p.set(pat, "length", Value::Int(10));
+    p.set(pat, "type", Value::Str("ramp".into()));
+
+    // `i` is the sample index and `n` the count, so this rebuilds the ramp
+    // from scratch and must match a straight 0..1 sweep.
+    p.set(e, "expr", Value::Str("i / (n - 1)".into()));
+    p.run(e, 1);
+    let out = &p.data(e).nth(0).unwrap().samples;
+    assert_eq!(out.len(), 10);
+    assert!((out[0] - 0.0).abs() < 1e-5);
+    assert!((out[9] - 1.0).abs() < 1e-5);
+
+    // `v` is the incoming sample.
+    p.set(e, "expr", Value::Str("v * 2 + 1".into()));
+    p.run(e, 1);
+    let src = p.data(pat).nth(0).unwrap().samples.clone();
+    let out = &p.data(e).nth(0).unwrap().samples;
+    for (i, v) in src.iter().enumerate() {
+        assert!((out[i] - (v * 2.0 + 1.0)).abs() < 1e-4, "sample {i}");
+    }
+}
+
+#[test]
+fn a_half_typed_expression_holds_the_input_rather_than_emptying_it() {
+    // Typing `v *` on the way to `v * 2` must not black out a running patch,
+    // which is the same promise the GLSL TOP makes for a shader mid-edit.
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let e = p.add("expressionCHOP", "expr1");
+    p.graph.connect(c, e, 0).unwrap();
+    p.set(c, "value0", Value::Float(0.75));
+    p.set(e, "expr", Value::Str("v *".into()));
+    p.run(e, 1);
+
+    assert_eq!(p.value(e, "chan1"), 0.75);
+}
+
+#[test]
+fn an_expression_can_reach_the_clock() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "src");
+    let e = p.add("expressionCHOP", "expr1");
+    p.graph.connect(c, e, 0).unwrap();
+    p.set(e, "expr", Value::Str("frame".into()));
+
+    p.run(e, 5);
+    let first = p.value(e, "chan1");
+    p.run(e, 5);
+    assert!(
+        p.value(e, "chan1") > first,
+        "the frame number should be advancing"
+    );
+}

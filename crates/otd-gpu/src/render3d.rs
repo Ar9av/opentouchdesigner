@@ -34,9 +34,13 @@ pub struct DrawItem {
     pub model: Mat4,
     pub instances: Vec<Instance>,
     pub base_color: [f32; 4],
-    /// metallic, roughness, emit, use_texture
+    /// metallic, roughness, emit, use_texture — reinterpreted per shading
+    /// model; see `material_of`.
     pub material: [f32; 4],
     pub color_map: Option<NodeId>,
+    pub shading: scene::Shading,
+    /// Draw this item's edges rather than its faces.
+    pub wireframe: bool,
 }
 
 /// Everything the pass needs, gathered from the graph before any GPU work.
@@ -123,8 +127,7 @@ fn collect_items(graph: &Graph, root: &str, ctx: &EvalContext, scene: &dyn Scene
             if geometry.is_empty() {
                 return None;
             }
-            let (base_color, material, color_map) =
-                material_of(graph, &scene::s(node, ctx, "material"), ctx);
+            let surface = material_of(graph, &scene::s(node, ctx, "material"), ctx);
             Some(DrawItem {
                 geometry,
                 model: math::trs(
@@ -133,45 +136,124 @@ fn collect_items(graph: &Graph, root: &str, ctx: &EvalContext, scene: &dyn Scene
                     scene::v3(node, ctx, "scale"),
                 ),
                 instances: scene::instances(node, ctx, scene),
-                base_color,
-                material,
-                color_map,
+                base_color: surface.base_color,
+                material: surface.material,
+                color_map: surface.color_map,
+                shading: surface.shading,
+                wireframe: surface.wireframe,
             })
         })
         .collect()
 }
 
-fn material_of(
-    graph: &Graph,
-    path: &str,
-    ctx: &EvalContext,
-) -> ([f32; 4], [f32; 4], Option<NodeId>) {
-    let default = ([0.8, 0.8, 0.85, 1.0], [0.0, 0.4, 0.0, 0.0], None);
+/// The three edges of every triangle, as index pairs for a line list.
+///
+/// Deduplicated, so a closed mesh does not draw each shared edge twice — at a
+/// few thousand triangles that is half the work for an identical picture.
+fn triangle_edges(geometry: &otd_sop::Geometry) -> Vec<u32> {
+    let source: Vec<u32> = if geometry.indices.is_empty() {
+        (0..geometry.num_points() as u32).collect()
+    } else {
+        geometry.indices.clone()
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(source.len() * 2);
+    for tri in source.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if seen.insert(key) {
+                out.extend([a, b]);
+            }
+        }
+    }
+    out
+}
+
+/// What a Geometry COMP's Material parameter resolves to.
+pub struct Surface {
+    pub base_color: [f32; 4],
+    /// The four numbers the shader reads; what they mean depends on `shading`.
+    pub material: [f32; 4],
+    pub color_map: Option<NodeId>,
+    pub shading: scene::Shading,
+    /// Draw edges rather than faces.
+    pub wireframe: bool,
+}
+
+impl Default for Surface {
+    fn default() -> Self {
+        Surface {
+            base_color: [0.8, 0.8, 0.85, 1.0],
+            material: [0.0, 0.4, 0.0, 0.0],
+            color_map: None,
+            shading: scene::Shading::Pbr,
+            wireframe: false,
+        }
+    }
+}
+
+fn material_of(graph: &Graph, path: &str, ctx: &EvalContext) -> Surface {
     let path = path.trim();
     if path.is_empty() {
-        return default;
+        return Surface::default();
     }
-    let Some(id) = graph.find(path) else {
-        return default;
-    };
-    let Some(node) = graph.get(id) else {
-        return default;
+    let Some(node) = graph.find(path).and_then(|id| graph.get(id)) else {
+        return Surface::default();
     };
     if node.family != Family::Mat {
-        return default;
+        return Surface::default();
     }
     // A TOP wired into the material's input is its colour map.
     let map = node.inputs.first().copied().flatten();
-    (
-        scene::v4(node, ctx, "basecolor"),
-        [
-            scene::f(node, ctx, "metallic"),
-            scene::f(node, ctx, "roughness"),
-            scene::f(node, ctx, "emit"),
-            if map.is_some() { 1.0 } else { 0.0 },
-        ],
-        map,
-    )
+    let has_map = if map.is_some() { 1.0 } else { 0.0 };
+    let base_color = scene::v4(node, ctx, "basecolor");
+    let emit = scene::f(node, ctx, "emit");
+
+    match node.op_type.as_str() {
+        scene::CONSTANT_MAT => Surface {
+            base_color,
+            // A Constant material's Brightness is the emit term, since emit is
+            // the only one of the four that survives with the lighting off.
+            material: [0.0, 0.0, emit, has_map],
+            color_map: map,
+            shading: scene::Shading::Constant,
+            wireframe: false,
+        },
+        scene::WIREFRAME => Surface {
+            base_color,
+            material: [0.0, 0.0, emit, 0.0],
+            color_map: None,
+            shading: scene::Shading::Constant,
+            wireframe: true,
+        },
+        scene::PHONG => Surface {
+            base_color,
+            material: [
+                scene::f(node, ctx, "specular"),
+                scene::f(node, ctx, "shininess"),
+                emit,
+                has_map,
+            ],
+            color_map: map,
+            shading: scene::Shading::Phong,
+            wireframe: false,
+        },
+        _ => Surface {
+            base_color,
+            material: [
+                scene::f(node, ctx, "metallic"),
+                scene::f(node, ctx, "roughness"),
+                emit,
+                has_map,
+            ],
+            color_map: map,
+            shading: scene::Shading::Pbr,
+            wireframe: false,
+        },
+    }
 }
 
 /// The view and projection matrices for a camera, with a sensible default so
@@ -437,18 +519,34 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&vertex_data),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            let indices = if item.geometry.indices.is_empty() {
-                None
-            } else {
-                Some((
+            // Drawing a triangle index list as a line list would pair the
+            // indices up as they come — a-b, c-a, c-d — which silently loses
+            // one edge of every triangle. Expanding to real edge pairs is the
+            // difference between a wireframe and a mesh with holes in it.
+            // Per item as well as per render: a Wireframe MAT on one object
+            // in a lit scene is the useful case, and the Render TOP's own
+            // flag is the "show me everything as edges" override.
+            let lines = description.wireframe
+                || item.wireframe
+                || item.geometry.topology != otd_sop::Topology::Triangles;
+            let edges = (lines && item.geometry.topology == otd_sop::Topology::Triangles)
+                .then(|| triangle_edges(&item.geometry));
+
+            let index_data: Option<&[u32]> = match (&edges, item.geometry.indices.is_empty()) {
+                (Some(e), _) => Some(e),
+                (None, false) => Some(&item.geometry.indices),
+                (None, true) => None,
+            };
+            let indices = index_data.map(|data| {
+                (
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("otd geometry indices"),
-                        contents: bytemuck::cast_slice(&item.geometry.indices),
+                        contents: bytemuck::cast_slice(data),
                         usage: wgpu::BufferUsages::INDEX,
                     }),
-                    item.geometry.indices.len() as u32,
-                ))
-            };
+                    data.len() as u32,
+                )
+            });
             let instances = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("otd instances"),
                 contents: bytemuck::cast_slice(&item.instances),
@@ -468,7 +566,7 @@ impl Renderer {
                 light_color: description.light_color,
                 base_color: item.base_color,
                 material: item.material,
-                render: [description.ambient, 1.0, 0.0, 0.0],
+                render: [description.ambient, 1.0, item.shading as u8 as f32, 0.0],
             };
             let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("otd render3d uniforms"),
@@ -498,8 +596,6 @@ impl Renderer {
                 ],
             });
 
-            let lines =
-                description.wireframe || item.geometry.topology != otd_sop::Topology::Triangles;
             prepared.push(Prepared {
                 vertices,
                 indices,

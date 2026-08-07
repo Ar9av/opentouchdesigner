@@ -357,3 +357,100 @@ fn udp_out_sends_changes_and_only_changes() {
     let (len, _) = listener.recv_from(&mut buf).expect("changed datagram");
     assert_eq!(&buf[..len], b"cue 2");
 }
+
+// ------------------------------------------------------------ new operators
+
+#[test]
+fn sort_orders_numerically_and_keeps_the_header_on_top() {
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let t = add(&mut rig.graph, &reg, root, "tableDAT", "cues");
+    let s = add(&mut rig.graph, &reg, root, "sortDAT", "sorted");
+    rig.graph.connect(t, s, 0).unwrap();
+    rig.graph
+        .set_param(
+            t,
+            "text",
+            Value::Str("name\tlevel\nb\t10\na\t9\nc\t100".into()),
+        )
+        .unwrap();
+    rig.graph
+        .set_param(s, "column", Value::Str("level".into()))
+        .unwrap();
+    rig.run(s);
+
+    let d = rig.data(s);
+    assert_eq!(d.cell(0, 0), "name", "the header stays put");
+    // 9, 10, 100 — text order would put 10 and 100 before 9.
+    assert_eq!(
+        (d.cell(1, 1), d.cell(2, 1), d.cell(3, 1)),
+        ("9", "10", "100")
+    );
+}
+
+#[test]
+fn transpose_swaps_rows_and_columns() {
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let t = add(&mut rig.graph, &reg, root, "tableDAT", "grid");
+    let x = add(&mut rig.graph, &reg, root, "transposeDAT", "flipped");
+    rig.graph.connect(t, x, 0).unwrap();
+    rig.graph
+        .set_param(t, "text", Value::Str("a\tb\tc\n1\t2\t3".into()))
+        .unwrap();
+    rig.run(x);
+
+    let d = rig.data(x);
+    assert_eq!((d.num_rows(), d.num_cols()), (3, 2));
+    assert_eq!((d.cell(0, 0), d.cell(0, 1)), ("a", "1"));
+    assert_eq!((d.cell(2, 0), d.cell(2, 1)), ("c", "3"));
+}
+
+#[test]
+fn substitute_fills_a_template_from_a_lookup_table() {
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let t = add(&mut rig.graph, &reg, root, "tableDAT", "vars");
+    let s = add(&mut rig.graph, &reg, root, "substituteDAT", "msg");
+    rig.graph.connect(t, s, 0).unwrap();
+    rig.graph
+        .set_param(t, "text", Value::Str("cue\topener\nlevel\t0.8".into()))
+        .unwrap();
+    rig.graph
+        .set_param(s, "template", Value::Str("/go $cue $level".into()))
+        .unwrap();
+    rig.run(s);
+
+    assert_eq!(rig.data(s).as_text(), "/go opener 0.8");
+}
+
+#[test]
+fn convert_moves_between_a_table_and_text() {
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let t = add(&mut rig.graph, &reg, root, "tableDAT", "grid");
+    let c = add(&mut rig.graph, &reg, root, "convertDAT", "flat");
+    rig.graph.connect(t, c, 0).unwrap();
+    rig.graph
+        .set_param(t, "text", Value::Str("a\tb\n1\t2".into()))
+        .unwrap();
+    rig.graph
+        .set_param(c, "to", Value::Str("text".into()))
+        .unwrap();
+    rig.graph
+        .set_param(c, "delimiter", Value::Str("comma".into()))
+        .unwrap();
+    rig.run(c);
+
+    let d = rig.data(c);
+    assert!(d.is_text);
+    assert_eq!(d.as_text(), "a,b\n1,2");
+}

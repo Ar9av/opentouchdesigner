@@ -199,7 +199,9 @@ fn draw_wires(app: &OtdApp, ui: &egui::Ui, _origin: Pos2, rects: &[(NodeId, Rect
             let a = output_port_pos(src_rect);
             let b = input_port_pos(*dst_rect, i, count);
             let animated = app.cook.is_time_dependent(*src);
-            let color = family_color(node.family);
+            // Tinted by what the wire carries, not by what it arrives at, so a
+            // DAT feeding a DAT to CHOP still reads as a DAT wire.
+            let color = family_color(node.input_families.get(i).copied().unwrap_or(node.family));
             let color = if animated {
                 color
             } else {
@@ -390,6 +392,10 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     let op_label = node.op_type.clone();
     let input_count = node.inputs.len();
     let input_slots: Vec<Option<NodeId>> = node.inputs.clone();
+    // A converter's input accepts somebody else's family, and the port has to
+    // say so — the family colours are the type system made visible, and a
+    // green port that only takes a DAT would be worse than no colour at all.
+    let input_families: Vec<Family> = node.input_families.clone();
     let cook_us = app.cook.last_cook_us(id);
     let status = app.engines.node_status(&app.graph, id);
     let shader_error = status.is_some();
@@ -531,11 +537,12 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     for (i, slot) in input_slots.iter().enumerate() {
         let p = input_port_pos(rect, i, input_count);
         let filled = slot.is_some();
+        let accepts = input_families.get(i).copied().unwrap_or(family);
         painter.circle_filled(
             p,
             PORT_R * zoom,
             if filled {
-                family_color(family)
+                family_color(accepts)
             } else {
                 Color32::from_rgb(80, 82, 90)
             },
