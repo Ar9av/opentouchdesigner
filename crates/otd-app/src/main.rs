@@ -1,6 +1,7 @@
 //! OpenTouchDesigner — the editor shell.
 
 mod app;
+mod assistant;
 mod canvas;
 mod params;
 
