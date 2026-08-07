@@ -35,8 +35,15 @@ pub struct InputState {
 #[derive(Default)]
 pub struct Io {
     pub input: InputState,
+    /// The directory file parameters resolve against — the project's own,
+    /// set when it opens, so `stems/kick.wav` means the same thing on the
+    /// machine the project was authored on and the one it plays on.
+    pub base_dir: Option<std::path::PathBuf>,
     audio: HashMap<String, AudioIn>,
+    audio_out: HashMap<String, AudioOut>,
+    files: HashMap<String, AudioFile>,
     midi: HashMap<String, MidiIn>,
+    midi_out: HashMap<String, MidiOut>,
     osc_in: HashMap<String, OscIn>,
     osc_out: HashMap<String, OscOut>,
     dmx: HashMap<String, DmxOut>,
@@ -65,7 +72,10 @@ impl Io {
     /// Release every device. Called when a project is closed.
     pub fn reset(&mut self) {
         self.audio.clear();
+        self.audio_out.clear();
+        self.files.clear();
         self.midi.clear();
+        self.midi_out.clear();
         self.osc_in.clear();
         self.osc_out.clear();
         self.dmx.clear();
@@ -215,6 +225,426 @@ fn cook_audio_in(c: &mut ChopCtx) -> ChopData {
     let n = slice_len(rate, c.time);
     let samples: Vec<f32> = audio.take(n).into_iter().map(|s| s * volume).collect();
     ChopData::new(vec![Channel::new("chan1", samples)], rate, true)
+}
+
+// ----------------------------------------------------------- audio file
+
+struct AudioFile {
+    file: String,
+    wav: crate::wav::Wav,
+}
+
+fn params_audio_file() -> IndexMap<String, Param> {
+    let mut m = IndexMap::new();
+    m.insert("file".into(), Param::str("").with_label("File (.wav)"));
+    m.insert(
+        "play".into(),
+        Param::menu("loop", &["loop", "once"]).with_label("Play"),
+    );
+    m.insert(
+        "speed".into(),
+        Param::float(1.0).with_label("Speed").with_range(-4.0, 4.0),
+    );
+    m.insert(
+        "volume".into(),
+        Param::float(1.0).with_label("Volume").with_range(0.0, 8.0),
+    );
+    m
+}
+
+/// Playback is a *function of the timeline*, not a private play head: the
+/// sample at time `t` is always `wav[t * speed * rate]`. That is what makes
+/// scrubbing the timeline scrub the audio, a loop range loop it, and a
+/// headless render read the same samples the editor played.
+fn cook_audio_file(c: &mut ChopCtx) -> ChopData {
+    let get = |k: &str| c.node.param(k).map(|p| p.eval(c.eval));
+    let file = get("file").map(|v| v.as_str()).unwrap_or_default();
+    let looped = get("play").map(|v| v.as_str()).unwrap_or_default() != "once";
+    let speed = get("speed").map(|v| v.as_f64()).unwrap_or(1.0);
+    let volume = get("volume").map(|v| v.as_f32()).unwrap_or(1.0);
+    let path = c.path.to_string();
+
+    let silent = |c: &ChopCtx| {
+        let n = slice_len(CONTROL_RATE, c.time);
+        ChopData::new(vec![Channel::constant("chan1", 0.0, n)], CONTROL_RATE, true)
+    };
+    if file.trim().is_empty() {
+        c.io.files.remove(&path);
+        c.io.clear_note(&path);
+        return silent(c);
+    }
+
+    let stale =
+        c.io.files
+            .get(&path)
+            .map(|f| f.file != file)
+            .unwrap_or(true);
+    if stale {
+        let resolved = match &c.io.base_dir {
+            Some(dir) if !std::path::Path::new(&file).is_absolute() => dir.join(&file),
+            _ => std::path::PathBuf::from(&file),
+        };
+        let loaded = std::fs::read(&resolved)
+            .map_err(|e| format!("{}: {e}", resolved.display()))
+            .and_then(|bytes| crate::wav::parse(&bytes));
+        match loaded {
+            Ok(wav) => {
+                c.io.clear_note(&path);
+                c.io.files.insert(
+                    path.clone(),
+                    AudioFile {
+                        file: file.clone(),
+                        wav,
+                    },
+                );
+            }
+            Err(e) => {
+                c.io.note(&path, e);
+                c.io.files.remove(&path);
+            }
+        }
+    }
+
+    let Some(loaded) = c.io.files.get(&path) else {
+        return silent(c);
+    };
+    let wav = &loaded.wav;
+    if wav.samples.is_empty() {
+        return silent(c);
+    }
+    let len = wav.samples.len() as i64;
+    let rate = wav.sample_rate;
+    let n = slice_len(rate, c.time);
+    let samples: Vec<f32> = crate::data::slice_times(c.time, n)
+        .map(|t| {
+            let index = (t * speed * rate).floor() as i64;
+            let index = if looped {
+                index.rem_euclid(len)
+            } else if (0..len).contains(&index) {
+                index
+            } else {
+                return 0.0;
+            };
+            wav.samples[index as usize] * volume
+        })
+        .collect();
+    ChopData::new(vec![Channel::new("chan1", samples)], rate, true)
+}
+
+// ------------------------------------------------------------ audio out
+
+struct AudioOut {
+    /// Kept alive so the callback keeps running; never read directly.
+    _stream: cpal::Stream,
+    ring: Arc<Mutex<Vec<f32>>>,
+    sample_rate: f64,
+    device: String,
+}
+
+/// A quarter second of buffered output. Deeper would survive longer stalls;
+/// this deep already means the latency stays inside what a live performer
+/// stops noticing.
+const OUT_CAP_SECONDS: f64 = 0.25;
+
+impl AudioOut {
+    fn open(requested: &str) -> Result<AudioOut, String> {
+        let host = cpal::default_host();
+        let device = if requested.trim().is_empty() {
+            host.default_output_device()
+                .ok_or("no default audio output device")?
+        } else {
+            host.output_devices()
+                .map_err(|e| e.to_string())?
+                .find(|d| device_name(d).map(|n| n == requested).unwrap_or(false))
+                .ok_or_else(|| format!("no audio output device called `{requested}`"))?
+        };
+        let name = device_name(&device).unwrap_or_else(|| "?".to_string());
+        let config = device
+            .default_output_config()
+            .map_err(|e| format!("{name}: {e}"))?;
+        let sample_rate = config.sample_rate() as f64;
+        let channels = config.channels() as usize;
+
+        let ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let source = ring.clone();
+        let stream = device
+            .build_output_stream(
+                config.config(),
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    let Ok(mut buf) = source.lock() else {
+                        data.fill(0.0);
+                        return;
+                    };
+                    // Mono fanned to every hardware channel; underrun is
+                    // silence, which is the only honest thing to play.
+                    for frame in data.chunks_mut(channels.max(1)) {
+                        let s = if buf.is_empty() { 0.0 } else { buf.remove(0) };
+                        frame.fill(s);
+                    }
+                },
+                move |err| log::warn!("audio output error: {err}"),
+                None,
+            )
+            .map_err(|e| format!("{name}: {e}"))?;
+        stream.play().map_err(|e| format!("{name}: {e}"))?;
+
+        Ok(AudioOut {
+            _stream: stream,
+            ring,
+            sample_rate,
+            device: name,
+        })
+    }
+
+    /// Queue a slice for the callback, resampling to the device rate.
+    /// Overrun drops the *oldest* audio: latency must not grow all show.
+    fn push(&self, samples: &[f32], input_rate: f64) {
+        if samples.is_empty() {
+            return;
+        }
+        let Ok(mut buf) = self.ring.lock() else {
+            return;
+        };
+        let ratio = self.sample_rate / input_rate.max(1.0);
+        let out_len = ((samples.len() as f64) * ratio).round().max(1.0) as usize;
+        for i in 0..out_len {
+            // Linear interpolation — for a resample this short, transparent.
+            let pos = i as f64 / ratio;
+            let a = pos.floor() as usize;
+            let frac = (pos - a as f64) as f32;
+            let s0 = samples[a.min(samples.len() - 1)];
+            let s1 = samples[(a + 1).min(samples.len() - 1)];
+            buf.push(s0 + (s1 - s0) * frac);
+        }
+        let cap = (self.sample_rate * OUT_CAP_SECONDS) as usize;
+        if buf.len() > cap {
+            let excess = buf.len() - cap;
+            buf.drain(..excess);
+        }
+    }
+}
+
+fn params_audio_out() -> IndexMap<String, Param> {
+    let mut m = IndexMap::new();
+    m.insert(
+        "device".into(),
+        Param::str("").with_label("Device (blank = default)"),
+    );
+    m.insert(
+        "volume".into(),
+        Param::float(1.0).with_label("Volume").with_range(0.0, 2.0),
+    );
+    m.insert("active".into(), Param::bool(true).with_label("Active"));
+    m
+}
+
+fn cook_audio_out(c: &mut ChopCtx) -> ChopData {
+    let input = c.input(0).clone();
+    let get = |k: &str| c.node.param(k).map(|p| p.eval(c.eval));
+    let requested = get("device").map(|v| v.as_str()).unwrap_or_default();
+    let volume = get("volume").map(|v| v.as_f32()).unwrap_or(1.0);
+    let active = get("active").map(|v| v.as_bool()).unwrap_or(true);
+    let path = c.path.to_string();
+
+    if !active || input.num_channels() == 0 {
+        return input;
+    }
+
+    let needs_open = match c.io.audio_out.get(&path) {
+        Some(a) => !requested.trim().is_empty() && a.device != requested,
+        None => true,
+    };
+    if needs_open {
+        match AudioOut::open(&requested) {
+            Ok(a) => {
+                c.io.clear_note(&path);
+                c.io.audio_out.insert(path.clone(), a);
+            }
+            Err(e) => {
+                c.io.note(&path, e);
+                c.io.audio_out.remove(&path);
+            }
+        }
+    }
+
+    if let Some(out) = c.io.audio_out.get(&path) {
+        if let Some(ch) = input.channels.first() {
+            if volume == 1.0 {
+                out.push(&ch.samples, input.sample_rate);
+            } else {
+                let scaled: Vec<f32> = ch.samples.iter().map(|s| s * volume).collect();
+                out.push(&scaled, input.sample_rate);
+            }
+        }
+    }
+    input
+}
+
+// -------------------------------------------------------------- MIDI out
+
+struct MidiOut {
+    conn: midir::MidiOutputConnection,
+    port: String,
+    /// The last 7-bit value sent per channel name. MIDI is an event
+    /// protocol, unlike DMX: re-sending an unchanged control every frame
+    /// floods the port, so only changes go on the wire.
+    sent: HashMap<String, u8>,
+}
+
+impl MidiOut {
+    fn open(requested: &str) -> Result<MidiOut, String> {
+        let output = midir::MidiOutput::new("OpenTouchDesigner").map_err(|e| e.to_string())?;
+        let ports = output.ports();
+        if ports.is_empty() {
+            return Err("no MIDI output ports".into());
+        }
+        let port = if requested.trim().is_empty() {
+            ports[0].clone()
+        } else {
+            ports
+                .iter()
+                .find(|p| {
+                    output
+                        .port_name(p)
+                        .map(|n| n.contains(requested))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .ok_or_else(|| format!("no MIDI port matching `{requested}`"))?
+        };
+        let port_name = output.port_name(&port).unwrap_or_else(|_| "?".into());
+        let conn = output
+            .connect(&port, "otd-midi-out")
+            .map_err(|e| e.to_string())?;
+        Ok(MidiOut {
+            conn,
+            port: port_name,
+            sent: HashMap::new(),
+        })
+    }
+}
+
+/// What a channel name means on the wire. The naming mirrors MIDI In, so a
+/// patch that listens on `n36` can drive another machine's `n36` by wiring
+/// the same channels back out.
+enum MidiMapping {
+    Note(u8),
+    Control(u8),
+}
+
+fn midi_mapping(name: &str) -> Option<MidiMapping> {
+    if let Some(rest) = name.strip_prefix("cc") {
+        return rest
+            .parse::<u8>()
+            .ok()
+            .filter(|n| *n < 128)
+            .map(MidiMapping::Control);
+    }
+    if let Some(rest) = name.strip_prefix('n') {
+        return rest
+            .parse::<u8>()
+            .ok()
+            .filter(|n| *n < 128)
+            .map(MidiMapping::Note);
+    }
+    None
+}
+
+/// The messages a slice's worth of channel values implies, given what was
+/// already sent. Pure, so the wire format is testable with no port open.
+fn midi_messages(
+    channel: u8,
+    values: &[(String, f32)],
+    sent: &mut HashMap<String, u8>,
+) -> Vec<[u8; 3]> {
+    let ch = (channel.saturating_sub(1)) & 0x0f;
+    let mut out = Vec::new();
+    for (name, value) in values {
+        let Some(mapping) = midi_mapping(name) else {
+            continue;
+        };
+        let level = (value.clamp(0.0, 1.0) * 127.0).round() as u8;
+        let previous = sent.get(name).copied();
+        if previous == Some(level) {
+            continue;
+        }
+        match mapping {
+            MidiMapping::Note(note) => {
+                // A note is a threshold, not a level: crossing zero is the
+                // event. Velocity is the value at the moment it crossed.
+                let was_on = previous.unwrap_or(0) > 0;
+                let is_on = level > 0;
+                match (was_on, is_on) {
+                    (false, true) => out.push([0x90 | ch, note, level]),
+                    (true, false) => out.push([0x80 | ch, note, 0]),
+                    // Still held: a change of pressure is not a new note.
+                    _ => {}
+                }
+            }
+            MidiMapping::Control(cc) => out.push([0xb0 | ch, cc, level]),
+        }
+        sent.insert(name.clone(), level);
+    }
+    out
+}
+
+fn params_midi_out() -> IndexMap<String, Param> {
+    let mut m = IndexMap::new();
+    m.insert(
+        "device".into(),
+        Param::str("").with_label("Port (blank = first)"),
+    );
+    m.insert(
+        "channel".into(),
+        Param::int(1).with_label("Channel").with_range(1.0, 16.0),
+    );
+    m.insert("active".into(), Param::bool(true).with_label("Active"));
+    m
+}
+
+fn cook_midi_out(c: &mut ChopCtx) -> ChopData {
+    let input = c.input(0).clone();
+    let get = |k: &str| c.node.param(k).map(|p| p.eval(c.eval));
+    let requested = get("device").map(|v| v.as_str()).unwrap_or_default();
+    let channel = get("channel").map(|v| v.as_i64()).unwrap_or(1).clamp(1, 16) as u8;
+    let active = get("active").map(|v| v.as_bool()).unwrap_or(true);
+    let path = c.path.to_string();
+
+    if !active || input.num_channels() == 0 {
+        return input;
+    }
+
+    let needs_open = match c.io.midi_out.get(&path) {
+        Some(m) => !requested.trim().is_empty() && !m.port.contains(&requested),
+        None => true,
+    };
+    if needs_open {
+        match MidiOut::open(&requested) {
+            Ok(m) => {
+                c.io.clear_note(&path);
+                c.io.midi_out.insert(path.clone(), m);
+            }
+            Err(e) => {
+                c.io.note(&path, e);
+                c.io.midi_out.remove(&path);
+            }
+        }
+    }
+
+    if let Some(out) = c.io.midi_out.get_mut(&path) {
+        let values: Vec<(String, f32)> = input
+            .channels
+            .iter()
+            .map(|ch| (ch.name.clone(), ch.last()))
+            .collect();
+        for message in midi_messages(channel, &values, &mut out.sent) {
+            if let Err(e) = out.conn.send(&message) {
+                c.io.note(&path, format!("MIDI send: {e}"));
+                break;
+            }
+        }
+    }
+    input
 }
 
 // ------------------------------------------------------------- spectrum
@@ -931,7 +1361,10 @@ fn cook_keyboard_in(c: &mut ChopCtx) -> ChopData {
 // ------------------------------------------------------------ the table
 
 pub const AUDIO_IN: &str = "audiodeviceinCHOP";
+pub const AUDIO_OUT: &str = "audiodeviceoutCHOP";
+pub const AUDIO_FILE: &str = "audiofileinCHOP";
 pub const MIDI_IN: &str = "midiinCHOP";
+pub const MIDI_OUT: &str = "midioutCHOP";
 pub const OSC_IN: &str = "oscinCHOP";
 pub const OSC_OUT: &str = "oscoutCHOP";
 pub const SPECTRUM: &str = "audiospectrumCHOP";
@@ -948,6 +1381,22 @@ pub(crate) fn specs() -> Vec<ChopSpec> {
             cook_audio_in,
         ),
         spec_animated(
+            AUDIO_OUT,
+            "Audio Device Out",
+            &["in"],
+            "Plays its first channel on an audio output.",
+            params_audio_out,
+            cook_audio_out,
+        ),
+        spec_animated(
+            AUDIO_FILE,
+            "Audio File In",
+            &[],
+            "Plays a WAV file, following the timeline.",
+            params_audio_file,
+            cook_audio_file,
+        ),
+        spec_animated(
             SPECTRUM,
             "Audio Spectrum",
             &["in"],
@@ -962,6 +1411,14 @@ pub(crate) fn specs() -> Vec<ChopSpec> {
             "Notes, velocity, pitch bend and the controls you have moved.",
             params_midi_in,
             cook_midi_in,
+        ),
+        spec_animated(
+            MIDI_OUT,
+            "MIDI Out",
+            &["in"],
+            "Sends `nNN` channels as notes and `ccNN` channels as controls.",
+            params_midi_out,
+            cook_midi_out,
         ),
         spec_animated(
             OSC_IN,
@@ -1014,6 +1471,26 @@ pub fn audio_input_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Every audio output device the host can see, for the parameter menu.
+pub fn audio_output_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.output_devices()
+        .map(|ds| ds.filter_map(|d| device_name(&d)).collect())
+        .unwrap_or_default()
+}
+
+/// Every MIDI output port, for the parameter menu.
+pub fn midi_output_ports() -> Vec<String> {
+    let Ok(output) = midir::MidiOutput::new("OpenTouchDesigner") else {
+        return Vec::new();
+    };
+    output
+        .ports()
+        .iter()
+        .filter_map(|p| output.port_name(p).ok())
+        .collect()
+}
+
 /// Every MIDI input port, for the parameter menu.
 pub fn midi_input_ports() -> Vec<String> {
     let Ok(input) = midir::MidiInput::new("OpenTouchDesigner") else {
@@ -1064,6 +1541,44 @@ mod tests {
         apply_midi(&mut s, &[]);
         apply_midi(&mut s, &[0xf8, 0, 0]);
         assert_eq!(s.last_note, 0.0);
+    }
+
+    #[test]
+    fn midi_out_sends_changes_and_only_changes() {
+        let mut sent = HashMap::new();
+
+        // A note crossing zero is note-on with the value as velocity.
+        let on = midi_messages(1, &[("n36".into(), 1.0)], &mut sent);
+        assert_eq!(on, vec![[0x90, 36, 127]]);
+
+        // Held at a different pressure: not a new note, nothing sent.
+        assert!(midi_messages(1, &[("n36".into(), 0.5)], &mut sent).is_empty());
+
+        // Released: note-off.
+        let off = midi_messages(1, &[("n36".into(), 0.0)], &mut sent);
+        assert_eq!(off, vec![[0x80, 36, 0]]);
+
+        // A control sends on change and stays quiet otherwise — MIDI is an
+        // event protocol; a value repeated every frame must not be.
+        let cc = midi_messages(1, &[("cc74".into(), 0.5)], &mut sent);
+        assert_eq!(cc, vec![[0xb0, 74, 64]]);
+        assert!(midi_messages(1, &[("cc74".into(), 0.5)], &mut sent).is_empty());
+
+        // Channel 10 lands in the status nibble; unmapped names are ignored.
+        let ten = midi_messages(10, &[("cc1".into(), 1.0), ("chan1".into(), 1.0)], &mut sent);
+        assert_eq!(ten, vec![[0xb9, 1, 127]]);
+    }
+
+    #[test]
+    fn midi_out_names_mirror_midi_in() {
+        assert!(matches!(midi_mapping("n60"), Some(MidiMapping::Note(60))));
+        assert!(matches!(
+            midi_mapping("cc127"),
+            Some(MidiMapping::Control(127))
+        ));
+        assert!(midi_mapping("cc128").is_none());
+        assert!(midi_mapping("note").is_none());
+        assert!(midi_mapping("velocity").is_none());
     }
 
     #[test]

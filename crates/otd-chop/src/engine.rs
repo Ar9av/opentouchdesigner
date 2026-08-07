@@ -119,6 +119,12 @@ impl ChopEngine {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
 
+        // File parameters (Audio File In) resolve against the project's own
+        // directory, the same rule external components follow.
+        if self.io.base_dir.as_deref() != graph.base_dir() {
+            self.io.base_dir = graph.base_dir().map(|p| p.to_path_buf());
+        }
+
         // An In operator presents whatever is wired to its component from
         // outside; there is no operator to run.
         if node.connector == otd_core::Connector::In {

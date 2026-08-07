@@ -2,12 +2,14 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-71 operators.
+74 operators.
 
-**CHOP** (27)
+**CHOP** (30)
 
 - [animationCHOP](#animation--animationchop) — Keyframed curves over time.
 - [audiodeviceinCHOP](#audio-device-in--audiodeviceinchop) — Samples from an audio input, downmixed to mono.
+- [audiodeviceoutCHOP](#audio-device-out--audiodeviceoutchop) — Plays its first channel on an audio output.
+- [audiofileinCHOP](#audio-file-in--audiofileinchop) — Plays a WAV file, following the timeline.
 - [audiospectrumCHOP](#audio-spectrum--audiospectrumchop) — Energy per frequency band, log spaced.
 - [constantCHOP](#constant--constantchop) — Fixed values as channels.
 - [countCHOP](#count--countchop) — Count threshold crossings.
@@ -21,6 +23,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [mathCHOP](#math--mathchop) — Combine and scale channels.
 - [mergeCHOP](#merge--mergechop) — Put two CHOPs' channels side by side.
 - [midiinCHOP](#midi-in--midiinchop) — Notes, velocity, pitch bend and the controls you have moved.
+- [midioutCHOP](#midi-out--midioutchop) — Sends `nNN` channels as notes and `ccNN` channels as controls.
 - [mouseinCHOP](#mouse-in--mouseinchop) — Cursor position and buttons.
 - [noiseCHOP](#noise--noisechop) — Smooth or random noise over time.
 - [nullCHOP](#null--nullchop) — Pass-through. A stable name to export from.
@@ -128,6 +131,39 @@ Samples from an audio input, downmixed to mono.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Device (blank = default) | `device` | *(empty)* |  |
+| Volume | `volume` | `1` | 0 … 8 |
+
+### Audio Device Out — `audiodeviceoutCHOP`
+
+Plays its first channel on an audio output.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Device (blank = default) | `device` | *(empty)* |  |
+| Volume | `volume` | `1` | 0 … 2 |
+| Active | `active` | `true` |  |
+
+### Audio File In — `audiofileinCHOP`
+
+Plays a WAV file, following the timeline.
+
+Plays RIFF/WAVE — PCM in 8, 16, 24 or 32 bits, or 32-bit float — which is what a DAW bounces. Compressed formats wait for the video layer and its real media stack.
+
+Playback is a function of the timeline, not a private play head: the sample at time `t` is always the file at `t × speed`. Scrubbing the timeline scrubs the audio, a loop range loops it, and a headless render reads exactly the samples the editor played.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| File (.wav) | `file` | *(empty)* |  |
+| Play | `play` | `loop` | `loop` · `once` |
+| Speed | `speed` | `1` | -4 … 4 |
 | Volume | `volume` | `1` | 0 … 8 |
 
 ### Audio Spectrum — `audiospectrumCHOP`
@@ -307,6 +343,24 @@ Notes, velocity, pitch bend and the controls you have moved.
 |---|---|---|---|
 | Port (blank = first) | `device` | *(empty)* |  |
 | Notes (e.g. 36 38 42) | `notes` | *(empty)* |  |
+
+### MIDI Out — `midioutCHOP`
+
+Sends `nNN` channels as notes and `ccNN` channels as controls.
+
+Channel names mirror MIDI In: `n60` is note 60, `cc74` is control 74; anything else is ignored. A note fires when its value crosses zero, with the value at that moment as velocity — while it is held, changes of value are not new notes.
+
+Unlike DMX, MIDI is an event protocol, so only *changes* go on the wire; an unchanged control costs nothing per frame.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Port (blank = first) | `device` | *(empty)* |  |
+| Channel | `channel` | `1` | 1 … 16 |
+| Active | `active` | `true` |  |
 
 ### Mouse In — `mouseinCHOP`
 

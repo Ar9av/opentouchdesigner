@@ -603,3 +603,93 @@ fn a_keyframed_curve_drives_a_parameter_through_export() {
         p.value(m, "gain")
     );
 }
+
+#[test]
+fn an_audio_file_follows_the_timeline() {
+    // A one-second WAV whose sample value *is* its time in seconds, so the
+    // test can ask "what time is the player reading?" by looking at a sample.
+    const RATE: u32 = 1000;
+    let mut data = Vec::new();
+    for i in 0..RATE {
+        data.extend_from_slice(&(i as f32 / RATE as f32).to_le_bytes());
+    }
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&RATE.to_le_bytes());
+    wav.extend_from_slice(&(RATE * 4).to_le_bytes());
+    wav.extend_from_slice(&4u16.to_le_bytes());
+    wav.extend_from_slice(&32u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+
+    let dir = std::env::temp_dir().join(format!("otd-audiofile-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ramp.wav"), &wav).unwrap();
+
+    let mut p = Patch::new();
+    // A relative path, resolved against the project's directory — the same
+    // rule external components follow, and what makes a bundle portable.
+    p.graph.set_base_dir(Some(dir.clone()));
+    let f = p.add("audiofileinCHOP", "file1");
+    p.set(f, "file", Value::Str("ramp.wav".into()));
+
+    // Half a second in, the player must be reading the half-second sample:
+    // playback is a function of the timeline, not of a private play head.
+    p.run(f, 30);
+    assert!(
+        p.host.engine.status("/file1").is_none(),
+        "{:?}",
+        p.host.engine.status("/file1")
+    );
+    assert!(
+        (p.value(f, "chan1") - 0.5).abs() < 0.02,
+        "at t=0.5 expected ~0.5, got {}",
+        p.value(f, "chan1")
+    );
+
+    // Looping: at t=1.5 the file has wrapped and reads ~0.5 again.
+    p.run(f, 60);
+    assert!(
+        (p.value(f, "chan1") - 0.5).abs() < 0.02,
+        "looped read at t=1.5 gave {}",
+        p.value(f, "chan1")
+    );
+
+    // `once` instead holds silence after the end.
+    p.set(f, "play", Value::Str("once".into()));
+    p.run(f, 1);
+    assert_eq!(p.value(f, "chan1"), 0.0);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_missing_audio_file_is_reported_not_fatal() {
+    let mut p = Patch::new();
+    let f = p.add("audiofileinCHOP", "file1");
+    p.set(f, "file", Value::Str("no-such-file.wav".into()));
+    p.run(f, 2);
+    assert!(p.host.engine.status("/file1").is_some());
+    assert_eq!(p.value(f, "chan1"), 0.0);
+}
+
+#[test]
+fn a_missing_audio_output_passes_its_input_through() {
+    // Same rule as every output op: losing the device mid-show must not
+    // stop the render, and the channels keep flowing to whatever is next.
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "const1");
+    let out = p.add("audiodeviceoutCHOP", "audioout1");
+    p.graph.connect(c, out, 0).unwrap();
+    p.set(c, "value0", Value::Float(0.75));
+    p.set(out, "device", Value::Str("no such output device".into()));
+    p.run(out, 2);
+    assert!(p.host.engine.status("/audioout1").is_some());
+    assert_eq!(p.value(out, "chan1"), 0.75);
+}
