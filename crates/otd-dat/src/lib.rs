@@ -10,6 +10,7 @@
 //! values: a DAT is text, and the operator reading it decides what the text
 //! means.
 
+pub mod net;
 pub mod ops;
 
 use otd_core::{ChannelSource, CookContext, CookError, Cooker, EvalContext, Family, Graph, NodeId};
@@ -129,6 +130,8 @@ pub trait ScriptHost {
 pub struct DatEngine {
     /// Errors from Script DATs, shown on the node.
     pub status: std::collections::HashMap<String, String>,
+    /// Open sockets for the network DATs, keyed by node path.
+    pub net: net::Net,
 }
 
 impl DatEngine {
@@ -142,6 +145,7 @@ impl DatEngine {
 
     pub fn reset(&mut self) {
         self.status.clear();
+        self.net.reset();
     }
 
     /// Cook one DAT and return its contents.
@@ -187,6 +191,7 @@ impl DatEngine {
             eval,
             inputs,
             scripts,
+            net: &mut self.net,
             path: &path,
             error: None,
         };
