@@ -12,6 +12,7 @@
 
 pub mod demo;
 pub mod docs;
+pub mod replicator;
 
 use std::cell::RefCell;
 
@@ -41,6 +42,7 @@ pub fn registry() -> OpRegistry {
     }
     // The scene components and materials live with the renderer.
     otd_gpu::scene::register(&mut r);
+    r.register(replicator::DEF);
     r
 }
 

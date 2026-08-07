@@ -187,8 +187,13 @@ impl OtdApp {
         // Clones follow their master. An unchanged master costs one subtree
         // walk, so this is cheap enough to do every frame and means the
         // editor never shows a stale copy.
+        // Replicators first — they may create clones for syncing to fill.
+        let replicated =
+            otd_engine::replicator::sync(&mut self.graph, &self.engines.dats);
         let synced = self.graph.sync_clones(&self.registry);
-        if synced > 0 {
+        if replicated > 0 {
+            self.status = format!("replicated {replicated} node(s)");
+        } else if synced > 0 {
             self.status = format!("synced {synced} clone(s)");
         }
 

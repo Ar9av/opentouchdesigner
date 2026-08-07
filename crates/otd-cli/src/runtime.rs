@@ -91,6 +91,7 @@ impl Runtime {
     pub fn frame(&mut self, roots: &[NodeId], dt: f64) -> Result<FrameTiming, String> {
         let started = Instant::now();
         self.time.advance(dt);
+        otd_engine::replicator::sync(&mut self.graph, &self.engines.dats);
         self.graph.sync_clones(&self.registry);
 
         self.engines.begin_frame();

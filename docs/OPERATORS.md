@@ -2,7 +2,7 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-74 operators.
+77 operators.
 
 **CHOP** (30)
 
@@ -37,14 +37,15 @@ Generated from the operator registry — the same table the editor builds its me
 - [timerCHOP](#timer--timerchop) — A running timer with fraction, seconds, cycles and done.
 - [triggerCHOP](#trigger--triggerchop) — An attack/decay/sustain/release envelope per channel.
 
-**COMP** (4)
+**COMP** (5)
 
 - [cameraCOMP](#camera--cameracomp) — A viewpoint for a Render TOP.
 - [containerCOMP](#container--containercomp) — A component that holds a sub-network.
 - [geometryCOMP](#geometry--geometrycomp) — Places a SOP in the scene, optionally instanced.
 - [lightCOMP](#light--lightcomp) — A directional light, aimed from its position at the origin.
+- [replicatorCOMP](#replicator--replicatorcomp) — Keeps one clone of a master component per row of a table.
 
-**DAT** (9)
+**DAT** (11)
 
 - [inDAT](#in--indat) — A data input on this component's node.
 - [jsonDAT](#json--jsondat) — Parse JSON text into a path/value table.
@@ -55,6 +56,8 @@ Generated from the operator registry — the same table the editor builds its me
 - [selectDAT](#select--selectdat) — Pick rows and columns, by name or index.
 - [tableDAT](#table--tabledat) — A table of text, stored in the project file.
 - [textDAT](#text--textdat) — A block of text.
+- [udpinDAT](#udp-in--udpindat) — Datagrams received on a port, one message per row.
+- [udpoutDAT](#udp-out--udpoutdat) — Sends its input's text as a datagram when it changes.
 
 **MAT** (1)
 
@@ -584,6 +587,22 @@ A directional light, aimed from its position at the origin.
 | Color | `color` | `[1.0, 1.0, 1.0, 1.0]` |  |
 | Intensity | `intensity` | `1` | 0 … 8 |
 
+### Replicator — `replicatorCOMP`
+
+Keeps one clone of a master component per row of a table.
+
+Watches a template DAT and keeps one clone of its master component per data row. The first column names each replicant; any other column whose header matches a custom parameter on the master sets that parameter on the replicant — so the table *is* the population, and adding a row is adding an instance.
+
+Replicants are ordinary clones: they follow the master's network as it is edited, and anything you place inside the replicator by hand is yours and is left alone.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Master (path of the component to copy) | `master` | *(empty)* |  |
+| Template DAT (one replicant per row) | `template` | *(empty)* |  |
+| First Row/Column Are Names | `byname` | `true` |  |
+
 ---
 
 ## DAT
@@ -670,6 +689,31 @@ A block of text.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Text | `text` | *(empty)* |  |
+
+### UDP In — `udpinDAT`
+
+Datagrams received on a port, one message per row.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Port | `port` | `7000` | 1 … 65535 |
+| Rows Kept | `keep` | `20` | 1 … 1000 |
+
+### UDP Out — `udpoutDAT`
+
+Sends its input's text as a datagram when it changes.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Address | `address` | `127.0.0.1` |  |
+| Port | `port` | `7001` | 1 … 65535 |
+| Active | `active` | `true` |  |
 
 ---
 

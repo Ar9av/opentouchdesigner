@@ -90,6 +90,17 @@ const NOTES: &[(&str, &str)] = &[
          channel, which is the last sample of the slice.",
     ),
     (
+        "replicatorCOMP",
+        "Watches a template DAT and keeps one clone of its master component \
+         per data row. The first column names each replicant; any other \
+         column whose header matches a custom parameter on the master sets \
+         that parameter on the replicant — so the table *is* the population, \
+         and adding a row is adding an instance.\n\n\
+         Replicants are ordinary clones: they follow the master's network as \
+         it is edited, and anything you place inside the replicator by hand \
+         is yours and is left alone.",
+    ),
+    (
         "renderTOP",
         "Draws the 3D scene into an ordinary texture, so everything after it is a \
          normal TOP chain that neither knows nor cares a camera was involved.\n\n\
