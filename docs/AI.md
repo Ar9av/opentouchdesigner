@@ -89,7 +89,33 @@ The reply is JSON, and it is validated before anything is created:
 - **It is one undo.** A checkpoint is taken before the first node is created.
   `Cmd/Ctrl+Z` removes the whole thing.
 
+**Shaders are compiled before the node exists.** If the model reaches for a
+GLSL TOP, the source goes through naga — the same front end that would reject
+it a moment later — *before* anything is created. A shader that fails is sent
+back to the model with the compiler's own error, once. That error is the most
+useful thing anybody has; showing you a red node instead of using it is a
+waste of it. Once and not until it works: a model that cannot fix its own
+shader on the second go will not on the fifth, and you are waiting.
+
+Anything still broken after that is reported as a warning rather than left as
+a red node and a silently black output. So is a chain the model built and
+forgot to wire in — which is what they do when asked to *add* to a patch.
+
 The network is only ever added to. Nothing is deleted or rewired behind you.
+
+## Shaders: GLSL, not WGSL
+
+The assistant is told to write Shadertoy-style GLSL — `void mainImage(out
+vec4 fragColor, in vec2 fragCoord)` with `iTime` and `iResolution` — and to
+set the node's `language` to `glsl`, even though WGSL is this tool's primary
+dialect.
+
+That is deliberate and it is the single biggest thing that made shaders work.
+Asked for WGSL, `gpt-5-mini` produced a shader that would not compile, and
+*still* would not after being handed the compiler error. Asked for GLSL, it
+compiled first time. GLSL is the dialect with a million worked examples in
+every model's training data; WGSL is not, yet. Meeting the model where it is
+beats insisting on the house style, and the GLSL TOP accepts both anyway.
 
 ## Prompts that work
 

@@ -9,6 +9,15 @@
 use otd_ai::{Ask, Keys, Provider};
 use otd_core::{Graph, Project};
 
+/// The same compiler the editor checks with.
+fn check_shader(source: &str, is_glsl: bool) -> Result<(), String> {
+    if is_glsl {
+        otd_gpu::shader::validate_glsl(&otd_gpu::shader::wrap_glsl(source))
+    } else {
+        otd_gpu::shader::validate_wgsl(&otd_gpu::shader::wrap_wgsl(source))
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
@@ -40,13 +49,33 @@ fn main() {
 
     eprintln!("asking {} ({model})…", provider.label());
     let started = std::time::Instant::now();
-    let plan = match otd_ai::ask(&ask, &keys) {
+    let key = keys.get(provider).cloned().unwrap_or_default();
+    let request = otd_ai::request_for(&ask);
+    let reply = match otd_ai::complete_with_repair(&request, &key, &keys, Some(check_shader)) {
+        Ok(reply) => reply,
+        Err(e) => {
+            eprintln!("failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if reply.repaired {
+        eprintln!("  (a shader came back broken and was sent back to be fixed)");
+    }
+    let plan = match otd_ai::plan_from_reply(&reply.text, &registry) {
         Ok(plan) => plan,
         Err(e) => {
             eprintln!("failed: {e}");
             std::process::exit(1);
         }
     };
+    if let Ok(json) = otd_ai::patch::extract_json(&reply.text) {
+        for (node, error) in otd_ai::patch::shader_problems(&json, check_shader) {
+            eprintln!("  STILL BROKEN {node}: {error}");
+        }
+    }
+    for loose in otd_ai::patch::dangling(&plan) {
+        eprintln!("  loose (wired to nothing): {loose}");
+    }
     eprintln!("{:.1}s — {}", started.elapsed().as_secs_f64(), plan.notes);
 
     let mut graph = Graph::new();
