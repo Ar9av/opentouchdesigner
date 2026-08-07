@@ -699,7 +699,7 @@ fn referenced_target(graph: &Graph, id: NodeId, key: &str) -> Option<NodeId> {
     if path.is_empty() {
         return None;
     }
-    graph.find(path).filter(|t| *t != id)
+    graph.find_from(id, path).filter(|t| *t != id)
 }
 
 impl TopEngine {
