@@ -560,6 +560,8 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
         if resp.hovered() {
             if let Some(DragState::Wire { from }) = app.drag {
                 if ui.ctx().input(|inp| inp.pointer.any_released()) {
+                    app.edit("wire");
+                    app.history.end_gesture();
                     match app.graph.connect(from, id, i) {
                         Ok(()) => app.status = String::new(),
                         Err(e) => app.status = e.to_string(),
@@ -569,6 +571,8 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
             }
         }
         if resp.clicked() {
+            app.edit("unwire");
+            app.history.end_gesture();
             let _ = app.graph.disconnect(id, i);
         }
         if !resp.hovered() && input_count > 1 {
@@ -612,6 +616,9 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     if let Some(DragState::Node { id: drag_id, grab }) = app.drag {
         if drag_id == id {
             if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+                // One entry for the whole drag: the tag names the node, so
+                // every frame of it coalesces.
+                app.edit(&format!("move:{id:?}"));
                 let world = app.view.to_world(origin, pointer) - grab;
                 app.graph.node_mut_quiet(id).pos = [world.x, world.y];
             }
@@ -625,7 +632,11 @@ fn handle_keys(app: &mut OtdApp, ui: &egui::Ui, origin: Pos2, rect: Rect) {
     // hover handler, which runs before this.
     if ui.ctx().input(|i| i.pointer.any_released()) {
         app.drag = None;
+        // The gesture is over, so the next drag starts its own undo entry
+        // rather than coalescing into this one.
+        app.history.end_gesture();
     }
+
     if ui.ctx().egui_wants_keyboard_input() {
         return;
     }
@@ -646,6 +657,8 @@ fn handle_keys(app: &mut OtdApp, ui: &egui::Ui, origin: Pos2, rect: Rect) {
         if i.key_pressed(egui::Key::B) {
             if let Some(id) = app.selected {
                 let now = app.graph.node(id).flags.bypass;
+                app.edit("bypass");
+                app.history.end_gesture();
                 app.graph.node_mut(id).flags.bypass = !now;
             }
         }
@@ -734,6 +747,9 @@ fn create_dialog(app: &mut OtdApp, ui: &egui::Ui, _origin: Pos2) {
             // Auto-wire from the previously selected node, the way a
             // chain gets built in practice.
             if let Some(src) = connect_from.filter(|s| app.graph.contains(*s)) {
+                // No checkpoint: `create_node` already took one, and the
+                // auto-wire is part of the same action — undoing the creation
+                // has to take its wire with it.
                 let _ = app.graph.connect(src, new_id, 0);
             }
         }
