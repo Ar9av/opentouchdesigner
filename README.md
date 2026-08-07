@@ -88,6 +88,7 @@ budget  16.67 ms   1 frame(s) over
 | `I` / double-click a COMP | step inside a component |
 | `U` | step back out (or click the breadcrumb) |
 | `Cmd/Ctrl+Z` · `Cmd/Ctrl+Shift+Z` | undo · redo |
+| `Cmd/Ctrl+K` | the assistant bar — describe a patch, Enter builds it |
 | `F1` | perform mode — the editor disappears and the window is the output. `F1` or `Escape` to come back |
 | drag background | pan · scroll to zoom |
 | drag output port → input port | wire · click an input port to unwire |
@@ -153,8 +154,10 @@ instance. An unchanged table makes zero graph edits, a removed row removes
 exactly its node, and anything you place inside the replicator by hand is
 yours and is left alone.
 
-**Assistant** — ✨ in the top bar: describe a patch and have it built into the
-network you are looking at. Anthropic, OpenAI or OpenRouter; paste a key or
+**Assistant** — a floating bar over the canvas: describe a patch and have it
+built into the network you are looking at. `Cmd/Ctrl+K` from anywhere, Enter
+to build, `Escape` to collapse it to a pill, `✕` to hide it, and gone entirely
+in perform mode. Anthropic, OpenAI or OpenRouter; paste a key or
 set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`.
 
 It is not a chatbot bolted on the side. The model is told about the operators

@@ -23,7 +23,16 @@ use otd_ai::{Ask, Keys, Provider, patch};
 use crate::app::OtdApp;
 
 pub struct Assistant {
+    /// The settings window: providers, keys, what was skipped.
     pub open: bool,
+    /// The floating bar over the canvas. On by default — a feature behind a
+    /// menu is a feature nobody finds — and dismissable, because a bar over
+    /// your work that you cannot get rid of is worse than no bar.
+    pub bar: bool,
+    /// Collapsed to a pill. Out of the way without being gone.
+    pub collapsed: bool,
+    /// Set for one frame to move the caret into the bar.
+    focus_bar: bool,
     pub provider: Provider,
     pub model: String,
     /// What is in the key field right now. Saved on demand, never read back
@@ -52,6 +61,9 @@ impl Default for Assistant {
             .unwrap_or(Provider::Anthropic);
         Assistant {
             open: false,
+            bar: true,
+            collapsed: false,
+            focus_bar: false,
             provider,
             model: provider.default_model().to_string(),
             key_input: String::new(),
@@ -75,6 +87,11 @@ impl Assistant {
     fn has_key(&self, provider: Provider) -> bool {
         self.keys.get(provider).is_some()
     }
+
+    /// Nothing configured for the provider currently selected.
+    fn keys_missing(&self) -> bool {
+        !self.has_key(self.provider) && self.key_input.trim().is_empty()
+    }
 }
 
 /// A handful of prompts that produce something worth looking at, for the
@@ -85,6 +102,232 @@ const SUGGESTIONS: &[&str] = &[
     "A kaleidoscope over drifting noise, with trails",
     "Something that reacts to the microphone",
 ];
+
+/// The floating bar over the canvas.
+///
+/// Deliberately not a docked panel: it hovers, it takes no layout space, and
+/// it goes away. `Cmd/Ctrl+K` shows it and puts the caret in it from
+/// anywhere; `Escape` collapses it to a pill; the pill clicks back open. It
+/// is hidden entirely in perform mode, where the window is the show.
+pub fn bar(app: &mut OtdApp, ctx: &egui::Context) {
+    if app.perform {
+        return;
+    }
+
+    // Cmd/Ctrl+K from anywhere. The one shortcut worth spending, because a
+    // prompt box you have to go and find is a prompt box you do not use.
+    let summon = ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K));
+    if summon {
+        app.assistant.bar = true;
+        app.assistant.collapsed = false;
+        app.assistant.focus_bar = true;
+    }
+    if !app.assistant.bar {
+        return;
+    }
+
+    poll(app);
+
+    if app.assistant.collapsed {
+        collapsed_pill(app, ctx);
+        return;
+    }
+
+    egui::Area::new(egui::Id::new("assistant-bar"))
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            // The window frame from the active theme, so the bar looks like
+            // part of the program rather than pasted onto it.
+            egui::Frame::window(ui.style())
+                .corner_radius(egui::CornerRadius::same(14))
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    ui.set_width(560.0);
+                    bar_contents(app, ui);
+                });
+        });
+}
+
+fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
+    let busy = app.assistant.busy();
+
+    // ---- the prompt line
+    let edit = ui.add(
+        egui::TextEdit::multiline(&mut app.assistant.prompt)
+            .frame(egui::Frame::NONE)
+            .desired_rows(1)
+            .desired_width(f32::INFINITY)
+            .hint_text("Describe a patch, and it gets built here…"),
+    );
+    if std::mem::take(&mut app.assistant.focus_bar) {
+        edit.request_focus();
+    }
+    // Enter sends, Shift+Enter is a newline — the convention every chat box
+    // has trained everyone into.
+    let entered =
+        edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+    if entered {
+        // The newline arrives with the key press; take it back out.
+        let trimmed = app.assistant.prompt.trim_end_matches('\n').to_string();
+        app.assistant.prompt = trimmed;
+    }
+
+    ui.add_space(4.0);
+
+    // ---- the control row
+    ui.horizontal(|ui| {
+        if ui
+            .small_button("⚙")
+            .on_hover_text("Providers, API keys and what was skipped")
+            .clicked()
+        {
+            app.assistant.open = true;
+        }
+
+        // The model chip, as in every chat UI: provider and model in one
+        // place, because they are one decision.
+        let provider = app.assistant.provider;
+        let chip = format!("✨ {}", short_model(&app.assistant.model));
+        egui::ComboBox::from_id_salt("assistant-bar-model")
+            .selected_text(chip)
+            .show_ui(ui, |ui| {
+                for p in Provider::ALL {
+                    let has = app.assistant.has_key(*p);
+                    ui.label(
+                        RichText::new(format!("{} {}", if has { "●" } else { "○" }, p.label()))
+                            .small()
+                            .weak(),
+                    );
+                    for model in p.models() {
+                        let selected = provider == *p && app.assistant.model == *model;
+                        if ui.selectable_label(selected, *model).clicked() {
+                            app.assistant.provider = *p;
+                            app.assistant.model = model.to_string();
+                        }
+                    }
+                    ui.separator();
+                }
+                if ui.button("More settings…").clicked() {
+                    app.assistant.open = true;
+                }
+            });
+
+        if app.assistant.keys_missing() {
+            ui.label(
+                RichText::new("no key")
+                    .small()
+                    .color(Color32::from_rgb(235, 170, 90)),
+            )
+            .on_hover_text("Click ⚙ to paste an API key");
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button("✕")
+                .on_hover_text("Hide the bar (Cmd/Ctrl+K brings it back)")
+                .clicked()
+            {
+                app.assistant.bar = false;
+            }
+            if ui
+                .small_button("▾")
+                .on_hover_text("Collapse (Escape)")
+                .clicked()
+            {
+                app.assistant.collapsed = true;
+            }
+            if busy {
+                ui.spinner();
+            } else {
+                let ready = !app.assistant.prompt.trim().is_empty();
+                if ui
+                    .add_enabled(ready, egui::Button::new("➤"))
+                    .on_hover_text("Build it (Enter)")
+                    .clicked()
+                    || (entered && ready)
+                {
+                    send(app);
+                }
+            }
+        });
+    });
+
+    // ---- one line of what happened, so the bar answers on its own
+    if let Some(error) = &app.assistant.error {
+        ui.label(
+            RichText::new(one_line(error))
+                .small()
+                .color(Color32::from_rgb(235, 120, 120)),
+        )
+        .on_hover_text(error);
+    } else if let Some(notes) = &app.assistant.last {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(one_line(notes)).small().weak())
+                .on_hover_text(notes);
+            if !app.assistant.warnings.is_empty() && ui.small_button("⚠").clicked() {
+                app.assistant.open = true;
+            }
+        });
+    }
+
+    // Escape collapses rather than closing: the work you typed survives.
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !app.assistant.prompt.is_empty() {
+        app.assistant.collapsed = true;
+    }
+}
+
+fn collapsed_pill(app: &mut OtdApp, ctx: &egui::Context) {
+    egui::Area::new(egui::Id::new("assistant-pill"))
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::window(ui.style())
+                .corner_radius(egui::CornerRadius::same(14))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if app.assistant.busy() {
+                            ui.spinner();
+                        }
+                        if ui
+                            .button("✨ Assistant")
+                            .on_hover_text("Cmd/Ctrl+K")
+                            .clicked()
+                        {
+                            app.assistant.collapsed = false;
+                            app.assistant.focus_bar = true;
+                        }
+                    });
+                });
+        });
+}
+
+/// `anthropic/claude-sonnet-4.5` is too long for a chip; the last segment
+/// with the date suffix dropped is what identifies it to a human.
+fn short_model(model: &str) -> String {
+    let tail = model.rsplit('/').next().unwrap_or(model);
+    let trimmed = match tail.rsplit_once('-') {
+        // Drop a trailing 8-digit date, keep everything else.
+        Some((head, last)) if last.len() == 8 && last.chars().all(|c| c.is_ascii_digit()) => head,
+        _ => tail,
+    };
+    if trimmed.chars().count() > 22 {
+        format!("{}…", trimmed.chars().take(21).collect::<String>())
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// The first sentence, for a one-line status.
+fn one_line(text: &str) -> String {
+    let first = text.split(['\n', '.']).next().unwrap_or(text).trim();
+    if first.chars().count() > 90 {
+        format!("{}…", first.chars().take(89).collect::<String>())
+    } else {
+        first.to_string()
+    }
+}
 
 pub fn window(app: &mut OtdApp, ctx: &egui::Context) {
     if !app.assistant.open {
@@ -414,5 +657,51 @@ mod tests {
             assert!(s.len() > 20, "{s}");
             assert!(!s.ends_with('.'), "{s}");
         }
+    }
+}
+
+#[cfg(test)]
+mod bar_tests {
+    use super::*;
+
+    #[test]
+    fn a_model_name_is_shortened_to_something_that_fits_a_chip() {
+        // The provider prefix and the date suffix are the two parts nobody
+        // reads, and together they are most of the string.
+        assert_eq!(
+            short_model("anthropic/claude-sonnet-4.5"),
+            "claude-sonnet-4.5"
+        );
+        assert_eq!(
+            short_model("claude-sonnet-4-5-20250929"),
+            "claude-sonnet-4-5"
+        );
+        assert_eq!(short_model("gpt-5"), "gpt-5");
+        // A date-like tail that is not a date is left alone.
+        assert_eq!(short_model("llama-4-maverick"), "llama-4-maverick");
+        // And anything still absurd is truncated rather than blowing the row.
+        assert!(short_model(&"x".repeat(60)).chars().count() <= 22);
+    }
+
+    #[test]
+    fn a_status_line_is_one_line() {
+        let notes = "Built a tunnel.\nTurn decay1.brightness for trail length.";
+        assert_eq!(one_line(notes), "Built a tunnel");
+        assert!(!one_line(notes).contains('\n'));
+        let long = "a ".repeat(200);
+        assert!(one_line(&long).chars().count() <= 90);
+    }
+
+    #[test]
+    fn the_bar_is_on_by_default_and_can_be_got_rid_of() {
+        // A feature behind a menu is a feature nobody finds; a bar over your
+        // work that you cannot dismiss is worse than no bar.
+        let mut a = Assistant::default();
+        assert!(a.bar);
+        assert!(!a.collapsed);
+        a.collapsed = true;
+        assert!(a.bar, "collapsing is not hiding");
+        a.bar = false;
+        assert!(!a.bar);
     }
 }
