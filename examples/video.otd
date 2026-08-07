@@ -1,0 +1,75 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/decay1",
+      op: "levelTOP",
+      pos: (-260.0, 110.0),
+      inputs: [
+        "/fb1",
+      ],
+      params: {
+        "brightness": (
+          value: Float(0.9),
+        ),
+      },
+    ),
+    (
+      path: "/drift1",
+      op: "transformTOP",
+      pos: (-60.0, 110.0),
+      inputs: [
+        "/decay1",
+      ],
+      params: {
+        "scale": (
+          value: Vec2((1.03, 1.03)),
+        ),
+      },
+    ),
+    (
+      path: "/fb1",
+      op: "feedbackTOP",
+      pos: (-460.0, 110.0),
+      params: {
+        "target": (
+          value: Str("/out1"),
+        ),
+      },
+    ),
+    (
+      path: "/mix1",
+      op: "compositeTOP",
+      pos: (160.0, -20.0),
+      inputs: [
+        "/movie1",
+        "/drift1",
+      ],
+      params: {
+        "operation": (
+          value: Str("maximum"),
+        ),
+      },
+    ),
+    (
+      path: "/movie1",
+      op: "moviefileinTOP",
+      pos: (-460.0, -80.0),
+      params: {
+        "file": (
+          value: Str("media/testcard.mp4"),
+        ),
+      },
+    ),
+    (
+      path: "/out1",
+      op: "nullTOP",
+      pos: (380.0, -20.0),
+      inputs: [
+        "/mix1",
+      ],
+    ),
+  ],
+)
