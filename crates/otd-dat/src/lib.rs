@@ -126,6 +126,20 @@ pub trait ScriptHost {
         ctx: &EvalContext,
         path: &str,
     ) -> Result<Vec<Vec<String>>, String>;
+
+    /// Call one callback defined in `source`. `Ok(false)` means the script
+    /// simply does not define it, which is the normal case — an Execute DAT
+    /// implements the events it cares about and leaves the rest out.
+    fn call(
+        &self,
+        _source: &str,
+        _func: &str,
+        _args: &[otd_core::Value],
+        _ctx: &EvalContext,
+        _path: &str,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 #[derive(Default)]
@@ -134,6 +148,10 @@ pub struct DatEngine {
     pub status: std::collections::HashMap<String, String>,
     /// Open sockets for the network DATs, keyed by node path.
     pub net: net::Net,
+    /// What each Execute DAT saw last frame, so it can tell what changed.
+    /// Keyed by path: renaming one resets its memory, which is the right
+    /// answer anyway — a renamed node is a different node to a callback.
+    pub watched: std::collections::HashMap<String, ops::Watched>,
 }
 
 impl DatEngine {
@@ -190,6 +208,7 @@ impl DatEngine {
             path: Some(&path),
             ..*eval
         };
+        let mut watched = self.watched.remove(&path).unwrap_or_default();
         let mut cx = ops::DatCtx {
             node,
             eval,
@@ -197,11 +216,14 @@ impl DatEngine {
             foreign,
             scripts,
             net: &mut self.net,
+            watched: &mut watched,
             path: &path,
             error: None,
         };
         let out = (spec.cook)(&mut cx);
-        match cx.error {
+        let error = cx.error.take();
+        self.watched.insert(path.clone(), watched);
+        match error {
             Some(e) => {
                 self.status.insert(path, e);
             }

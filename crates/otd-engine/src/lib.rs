@@ -12,7 +12,9 @@
 
 pub mod demo;
 pub mod docs;
+pub mod execute;
 pub mod palette;
+pub mod panel;
 pub mod replicator;
 
 use std::cell::RefCell;
@@ -43,6 +45,7 @@ pub fn registry() -> OpRegistry {
     }
     // The scene components and materials live with the renderer.
     otd_gpu::scene::register(&mut r);
+    panel::register(&mut r);
     r.register(replicator::DEF);
     r
 }
@@ -61,6 +64,9 @@ struct FullNetwork<'a> {
 impl otd_core::ChannelSource for FullNetwork<'_> {
     fn channel(&self, op_path: &str, channel: &str) -> Option<f32> {
         self.chops.channel(op_path, channel)
+    }
+    fn channel_names(&self, op_path: &str) -> Vec<String> {
+        self.chops.channel_names(op_path)
     }
     fn param_value(&self, op_path: &str, param: &str) -> Option<otd_core::Value> {
         self.chops.param_value(op_path, param)
@@ -88,6 +94,20 @@ struct PythonScripts<'a> {
 }
 
 impl ScriptHost for PythonScripts<'_> {
+    fn call(
+        &self,
+        source: &str,
+        func: &str,
+        args: &[otd_core::Value],
+        ctx: &otd_core::EvalContext,
+        path: &str,
+    ) -> Result<bool, String> {
+        self.python
+            .try_borrow_mut()
+            .map_err(|_| "a callback cannot run inside another script".to_string())?
+            .call(source, func, args, ctx, path)
+    }
+
     fn run_table(
         &self,
         source: &str,
@@ -203,6 +223,14 @@ impl Engines {
             ..ctx.eval_ctx_with(&net)
         };
         Some(graph.get(id)?.param(key)?.eval(&eval))
+    }
+
+    /// The parameter changes callbacks asked for this frame.
+    ///
+    /// Drained by the host and applied between frames — see `otd_core::edit`
+    /// for why the write cannot happen where it is written.
+    pub fn take_edits(&mut self) -> Vec<otd_core::ParamEdit> {
+        self.python.borrow_mut().take_edits()
     }
 
     /// Why Python is unavailable, if it is.

@@ -259,6 +259,15 @@ fn params_phong() -> IndexMap<String, Param> {
     }
 }
 
+fn params_point_sprite() -> IndexMap<String, Param> {
+    params! {
+        "basecolor" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Color"),
+        "size" => Param::float(0.1).with_label("Size (world units)").with_range(0.001, 4.0),
+        "emit" => Param::float(1.0).with_label("Brightness").with_range(0.0, 4.0),
+        "round" => Param::bool(true).with_label("Round"),
+    }
+}
+
 fn params_wireframe() -> IndexMap<String, Param> {
     params! {
         "basecolor" => Param::rgba([0.6, 0.9, 1.0, 1.0]).with_label("Color"),
@@ -280,6 +289,9 @@ pub enum Shading {
     /// Lambert plus an explicit Blinn highlight, dialled by shininess rather
     /// than derived from roughness.
     Phong = 2,
+    /// Every point becomes a camera-facing quad. Unlit, like Constant: a
+    /// sprite is a picture, not a surface.
+    PointSprite = 3,
 }
 
 pub const GEOMETRY: &str = "geometryCOMP";
@@ -289,6 +301,7 @@ pub const PBR: &str = "pbrMAT";
 pub const CONSTANT_MAT: &str = "constantMAT";
 pub const PHONG: &str = "phongMAT";
 pub const WIREFRAME: &str = "wireframeMAT";
+pub const POINT_SPRITE: &str = "pointspriteMAT";
 
 /// The scene components and materials.
 ///
@@ -360,6 +373,17 @@ pub fn defs() -> Vec<OpDef> {
             summary: "Diffuse and a Blinn highlight, dialled by shininess.",
             time_dependent: false,
             params: params_phong,
+            connector: Connector::None,
+        },
+        OpDef {
+            type_name: POINT_SPRITE,
+            input_families: &[],
+            label: "Point Sprite",
+            family: Family::Mat,
+            inputs: &["color"],
+            summary: "Draws every point as a camera-facing quad.",
+            time_dependent: false,
+            params: params_point_sprite,
             connector: Connector::None,
         },
         OpDef {

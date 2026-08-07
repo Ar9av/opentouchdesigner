@@ -76,7 +76,11 @@ impl Runtime {
         self.graph
             .walk()
             .into_iter()
-            .filter(|id| *id != self.graph.root() && self.graph.node(*id).flags.render)
+            .filter(|id| {
+                *id != self.graph.root()
+                    && (self.graph.node(*id).flags.render
+                        || otd_engine::execute::is_execute(&self.graph.node(*id).op_type))
+            })
             .collect()
     }
 
@@ -99,6 +103,12 @@ impl Runtime {
             self.cook
                 .cook_frame(&self.graph, roots, &self.time.clone(), &mut self.engines);
         self.engines.end_frame();
+        // Callbacks' parameter changes land here, between frames — the same
+        // phase that syncs clones and replicators above.
+        let edits = self.engines.take_edits();
+        if !edits.is_empty() {
+            otd_core::edit::apply(&mut self.graph, &edits);
+        }
         result.map_err(|e| e.to_string())?;
 
         Ok(FrameTiming {

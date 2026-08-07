@@ -21,7 +21,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::CString;
 
-use otd_core::{ChannelSource, EvalContext, Value};
+use otd_core::{ChannelSource, EvalContext, ParamEdit, Value};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
@@ -37,6 +37,11 @@ type NetPtr = *const (dyn ChannelSource + 'static);
 thread_local! {
     static NETWORK: Cell<Option<NetPtr>> = const { Cell::new(None) };
     static NODE_PATH: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    /// Parameter changes a callback has asked for, drained by the host after
+    /// the frame. See `otd_core::edit` for why they are queued rather than
+    /// applied where they are written.
+    static EDITS: std::cell::RefCell<Vec<ParamEdit>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 struct NetworkGuard;
@@ -79,6 +84,19 @@ fn with_network<R>(f: impl FnOnce(&dyn ChannelSource, &str) -> R) -> Option<R> {
 #[pyo3(signature = (op_path, channel = "chan1"))]
 fn ch(op_path: &str, channel: &str) -> f64 {
     with_network(|net, _| net.channel(op_path, channel).unwrap_or(0.0) as f64).unwrap_or(0.0)
+}
+
+/// `setpar('/blur1', 'size', 12)` — ask for a parameter change.
+///
+/// Queued, not applied: the cook is in progress and must see one unchanging
+/// graph. The host applies the queue between frames, so the change lands next
+/// frame. Nothing here can fail loudly — a bad path is reported when the queue
+/// is applied, because that is where it is discovered.
+#[pyfunction]
+fn setpar(op_path: &str, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    let value = py_to_value(value).map_err(pyo3::exceptions::PyTypeError::new_err)?;
+    EDITS.with(|e| e.borrow_mut().push(ParamEdit::new(op_path, name, value)));
+    Ok(())
 }
 
 /// `par('/blur1', 'size')` — another operator's parameter value.
@@ -165,6 +183,12 @@ pub struct PyEngine {
     globals: Py<PyDict>,
     /// Compiled expressions, keyed by source.
     cache: HashMap<String, Py<PyAny>>,
+    /// One namespace per callback source, so the `def`s in an Execute DAT are
+    /// executed once rather than on every frame that fires one of them. Keyed
+    /// by source, so editing the script rebuilds exactly that namespace — and
+    /// module-level state written by a callback survives between frames, which
+    /// is what makes a counter in an Execute DAT work at all.
+    namespaces: HashMap<String, Py<PyDict>>,
     /// Modules the user has asked for, kept so `import` costs happen once.
     pub startup_error: Option<String>,
 }
@@ -179,6 +203,7 @@ impl PyEngine {
         let mut engine = PyEngine {
             globals: Python::attach(|py| PyDict::new(py).unbind()),
             cache: HashMap::new(),
+            namespaces: HashMap::new(),
             startup_error: None,
         };
         if let Err(e) = engine.build_scope() {
@@ -217,6 +242,12 @@ impl PyEngine {
                 .set_item(
                     "parent",
                     wrap_pyfunction!(parent, py).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+            globals
+                .set_item(
+                    "setpar",
+                    wrap_pyfunction!(setpar, py).map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| e.to_string())?;
             // Helpers with no Python equivalent that artists expect.
@@ -328,6 +359,69 @@ def smoothstep(lo, hi, v):
                 _ => Ok(None),
             }
         })
+    }
+
+    /// Call a function defined in `source`, if it defines one by that name.
+    ///
+    /// Returns whether the function existed, so an Execute DAT can leave the
+    /// callbacks it does not care about undefined rather than having to write
+    /// an empty body for each.
+    pub fn call(
+        &mut self,
+        source: &str,
+        func: &str,
+        args: &[Value],
+        ctx: &EvalContext,
+        path: &str,
+    ) -> Result<bool, String> {
+        if let Some(e) = &self.startup_error {
+            return Err(e.clone());
+        }
+        let _guard = NetworkGuard::set(ctx.channels, path);
+        // Rebuild the namespace only when the source changed.
+        if !self.namespaces.contains_key(source) {
+            let built = Python::attach(|py| -> Result<Py<PyDict>, String> {
+                let ns = PyDict::new(py);
+                let src = CString::new(source).map_err(|_| "script contains a NUL byte")?;
+                py.run(&src, Some(self.globals.bind(py)), Some(&ns))
+                    .map_err(|e| format_error(py, &e))?;
+                Ok(ns.unbind())
+            })?;
+            // One namespace per Execute DAT in a project is the realistic
+            // count; this bound is only here so a script being retyped does
+            // not accumulate one per keystroke.
+            if self.namespaces.len() > 64 {
+                self.namespaces.clear();
+            }
+            self.namespaces.insert(source.to_string(), built);
+        }
+
+        Python::attach(|py| {
+            let ns = self.namespaces[source].bind(py);
+            let Ok(Some(f)) = ns.get_item(func) else {
+                return Ok(false);
+            };
+            if !f.is_callable() {
+                return Ok(false);
+            }
+            // `me`, `absTime` and `frame` are globals for a callback rather
+            // than arguments, so a signature stays about the event.
+            ns.set_item("me", path).ok();
+            ns.set_item("absTime", ctx.abs_time).ok();
+            ns.set_item("time", ctx.time).ok();
+            ns.set_item("frame", ctx.frame).ok();
+
+            let args: Vec<Py<PyAny>> = args.iter().map(|v| value_to_py(py, v)).collect();
+            let tuple = PyTuple::new(py, &args).map_err(|e| format_error(py, &e))?;
+            f.call1(tuple).map_err(|e| format_error(py, &e))?;
+            Ok(true)
+        })
+    }
+
+    /// Take the parameter changes callbacks have asked for since the last
+    /// drain. The host applies them between frames — see `otd_core::edit`.
+    pub fn take_edits(&mut self) -> Vec<ParamEdit> {
+        EDITS.with(|e| std::mem::take(&mut *e.borrow_mut()))
     }
 
     /// Rows of text produced by a script, for a Script DAT.
