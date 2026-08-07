@@ -200,6 +200,16 @@ bound and animated like any others. Scalars share a `vec4` rather than each
 taking one, and a shader that wants more uniform space than exists is refused
 with a message instead of quietly aliasing onto the last slot.
 
+**Performance monitor** — the *Perf* button lists every node that has cooked,
+ranked by what it costs a *typical frame* rather than by what one cook costs.
+Those differ in a demand-driven engine, and the difference is the whole design
+made legible: in the `keyframes` patch the static Ramp TOP costs 0.81 ms per
+cook and 0.007 ms per frame, because it cooks on 1% of them. Ranking by cook
+time would put it at the top of the list and send you optimising the wrong
+node. Clicking a row selects it. GPU memory — resident, pooled, textures
+created — is on the same panel, and `otd stats` prints the same table
+headless.
+
 **Keyframes** — an Animation CHOP holds named curves with `constant`, `linear`,
 `smooth` and `spline` keys. Making them a CHOP rather than a new subsystem is
 the whole design: a keyed value is a value over time, which is what a channel
