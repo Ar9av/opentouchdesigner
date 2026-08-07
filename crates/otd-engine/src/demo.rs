@@ -339,6 +339,11 @@ pub fn plasma(registry: &OpRegistry) -> (Graph, NodeId) {
 /// the feedback loop, the level and the transform after it have no idea a
 /// decoder was involved, and the Movie File In sits in the chain exactly
 /// where a Noise TOP would.
+///
+/// The clip it plays is a recording of the `plasma` patch, made by this
+/// program — see `scripts/make-example-media.sh`. It replaced ffmpeg's test
+/// card, which was the right thing to verify a decoder against and the wrong
+/// thing to put in front of somebody opening a visual tool.
 pub fn video(registry: &OpRegistry) -> (Graph, NodeId) {
     let mut graph = Graph::new();
     let root = graph.root();
@@ -375,7 +380,7 @@ pub fn video(registry: &OpRegistry) -> (Graph, NodeId) {
     graph.connect(mix, out, 0).unwrap();
 
     graph
-        .set_param(movie, "file", Value::Str("media/testcard.mp4".into()))
+        .set_param(movie, "file", Value::Str("media/plasma.mp4".into()))
         .unwrap();
     graph
         .set_param(fb, "target", Value::Str("/out1".into()))

@@ -186,7 +186,7 @@ fn write_demo(args: &Args) -> Result<(), String> {
             otd_engine::demo::NAMES.join(", ")
         )
     })?;
-    // File references in a demo are already relative — `media/testcard.mp4`,
+    // File references in a demo are already relative — `media/plasma.mp4`,
     // not a path on the machine that built it — so they land correct as long
     // as the project is written beside the media, which is what `examples/`
     // is.

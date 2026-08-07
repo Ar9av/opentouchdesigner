@@ -59,7 +59,7 @@
       pos: (-460.0, -80.0),
       params: {
         "file": (
-          value: Str("media/testcard.mp4"),
+          value: Str("media/plasma.mp4"),
         ),
       },
     ),
