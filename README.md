@@ -4,13 +4,14 @@ An open-source, cross-platform, node-based realtime visual programming
 environment in the spirit of TouchDesigner. Written in Rust on wgpu, so
 `cargo run` works on macOS, Windows and Linux.
 
-**Status: Phases 0–4 complete apart from video I/O.** See [PLAN.md](PLAN.md)
-for the research and the full roadmap. What exists today is a working graph,
-cook engine, GPU texture pipeline with live shader compilation, a channel
-pipeline with audio, MIDI and OSC input, the four-mode parameter system, a
-text project format, component encapsulation with embedded Python, an
-instanced 3D pipeline, a node editor and projector output — not yet a tool
-you would take to a show.
+**Status: PLAN.md Phases 0–6 complete**, apart from the pieces that need
+system SDKs (video I/O, Spout/Syphon/NDI, Ableton Link — see below). What
+exists today is a working graph, cook engine, GPU texture pipeline with live
+shader compilation, a channel pipeline with audio, MIDI, OSC and DMX on both
+directions, the four-mode parameter system, a text project format, component
+encapsulation with embedded Python, clones and a Replicator, an instanced 3D
+pipeline, keyframes and a timeline, undo/redo, a performance monitor, a
+component palette, a node editor with projector output, and a headless CLI.
 
 ## Try it
 
@@ -129,6 +130,23 @@ diff. A component can instead **clone** another one in the same project,
 following its structure while keeping its own parameter values. Either way,
 re-reading a shared definition never resets the values an artist dialled in.
 
+The **Replicator** is built out of those pieces: it watches a template DAT
+and keeps one clone of its master component per data row — the first column
+names each replicant, and a column whose header matches a custom parameter on
+the master sets it. The table *is* the population; adding a row is adding an
+instance. An unchanged table makes zero graph edits, a removed row removes
+exactly its node, and anything you place inside the replicator by hand is
+yours and is left alone.
+
+**Palette** — *File → Palette* holds prebuilt components: `trails` (a
+packaged feedback loop), `bloom`, `vignette` (a shader with knobs) and
+`audiolevel` (microphone to one smoothed channel). Each is an ordinary
+component you can step inside, so opening one up is the tutorial on building
+your own. Their internal references are *relative* — the trails Feedback
+targets `out1`, not an absolute path — which is why the same component works
+wherever it lands; operator reference parameters resolve like file paths,
+from the referencing node's own component.
+
 **Python** (`otd-py`) — expressions are evaluated in two tiers. A small
 built-in language handles the common case with no interpreter and no GIL;
 anything it cannot parse goes to embedded CPython, with `math`, `random`,
@@ -138,9 +156,14 @@ path quoted inside an expression or a script becomes a cook dependency, so
 `ch('/lfo1', 'chan1')` makes `/lfo1` cook first rather than reading it stale.
 A failing expression keeps its constant and reports one line.
 
-**DATs** (`otd-dat`) — Table, Text, Select, Merge, JSON, Script and Null. A
-table's contents live in the project file, so a cue list is versioned with the
-patch that uses it. Script DATs run Python and return rows.
+**DATs** (`otd-dat`) — Table, Text, Select, Merge, JSON, Script, UDP In, UDP
+Out and Null. A table's contents live in the project file, so a cue list is
+versioned with the patch that uses it. Script DATs run Python and return
+rows. UDP In presents received datagrams as a table, one message per row;
+UDP Out sends its input's text as one datagram when it *changes* — a DAT
+cooks whenever anything upstream does, and resending an unchanged payload
+every cook would turn a cook into a broadcast. Both are tested as real
+loopbacks, like OSC and DMX.
 
 **3D** (`otd-sop`, `otd-gpu`) — Box, Sphere, Grid, Line, Transform, Noise,
 Color, Merge, Copy and Null SOPs; Geometry, Camera and Light components; a
@@ -159,9 +182,19 @@ and colour each named by parameter. A single-sample channel broadcasts to all
 of them, which is how one audio band makes the whole grid breathe.
 
 **CHOPs** (`otd-chop`) — Constant, LFO, Noise, Pattern, Math, Lag, Filter,
-Logic, Trigger, Timer, Speed, Count, Select, Merge, Switch, Null, plus Audio
-Device In, Audio Spectrum, MIDI In, OSC In, OSC Out, DMX Out, Mouse In and
-Keyboard In.
+Logic, Trigger, Timer, Speed, Count, Select, Merge, Switch, Animation, Null,
+plus Audio Device In, Audio Device Out, Audio File In, Audio Spectrum, MIDI
+In, MIDI Out, OSC In, OSC Out, DMX Out, Mouse In and Keyboard In.
+
+**Audio File In** reads RIFF/WAVE itself — PCM in 8/16/24/32 bits or 32-bit
+float, which is what a DAW bounces — rather than pulling in a media stack for
+the one container that needs no codec. Playback is a function of the
+timeline, not a private play head: the sample at time *t* is always the file
+at *t*×speed, so scrubbing the timeline scrubs the audio and a headless
+render reads exactly the samples the editor played. **MIDI Out** mirrors MIDI
+In's channel naming (`n60`, `cc74`) and sends only *changes* — MIDI is an
+event protocol, unlike DMX — with a note firing on the zero crossing and the
+value at that moment as its velocity.
 
 **DMX** — the DMX Out CHOP speaks Art-Net and sACN (E1.31), each channel a
 slot in a universe. Neither protocol needs a vendor SDK — they are documented
@@ -314,13 +347,20 @@ criterion is asserted rather than claimed:
 - [`otd-cli/tests/cli.rs`](crates/otd-cli/tests/cli.rs) — the real binary
   against real project files, including a bundle that still runs after the
   component it was authored against is deleted and the folder is moved
+- [`otd-engine/tests/replicator.rs`](crates/otd-engine/tests/replicator.rs) —
+  two table rows render two different pictures, an unchanged table makes zero
+  graph edits, and a removed row removes exactly its replicant
+- [`otd-engine/tests/palette.rs`](crates/otd-engine/tests/palette.rs) — every
+  palette item is proven to do its job in pixels or channels, not merely to
+  build: trails move a static image, bloom brightens, the vignette darkens
+  corners and not the centre
 
 The OSC and DMX tests are real UDP loopbacks and the spectrum test is a real
 FFT, so those paths are exercised rather than mocked.
 
 ## Docs
 
-[`docs/OPERATORS.md`](docs/OPERATORS.md) is the operator reference — all 71,
+[`docs/OPERATORS.md`](docs/OPERATORS.md) is the operator reference — all 77,
 with their inputs, parameters, defaults and ranges. It is *generated* from the
 same registry the editor builds its menus and parameter pages from, so it
 cannot drift from what the operators actually do:
