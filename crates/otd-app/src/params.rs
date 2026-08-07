@@ -40,6 +40,21 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
     ui.label(RichText::new(summary).weak().small());
 
+    // The longer note, from the same table the operator reference is built
+    // from — one source, two surfaces, so the editor and the docs cannot say
+    // different things.
+    if let Some(note) = otd_engine::docs::note(&op_type) {
+        ui.collapsing("How this works", |ui| {
+            for para in note.split("\n\n") {
+                // The notes are written as markdown for the reference; the
+                // emphasis markers would be noise in a tooltip-sized panel.
+                let plain = para.replace("**", "").replace('`', "");
+                ui.label(RichText::new(plain).small());
+                ui.add_space(2.0);
+            }
+        });
+    }
+
     ui.horizontal(|ui| {
         let mut bypass = app.graph.node(id).flags.bypass;
         if ui.checkbox(&mut bypass, "Bypass").changed() {

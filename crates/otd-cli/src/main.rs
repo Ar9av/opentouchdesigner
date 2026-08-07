@@ -4,7 +4,7 @@
 //! project, and a way to render a project to files. Both are the editor's
 //! frame loop with the editor removed, so both live here.
 //!
-//! Argument parsing is by hand. A CLI with three subcommands and eight flags
+//! Argument parsing is by hand. A CLI with five subcommands and four flags
 //! does not need a dependency, and the error messages here can say what to do
 //! next, which is worth more than the flag parsing is worth saving.
 
@@ -23,6 +23,7 @@ USAGE:
     otd render <project.otd> --node <path> [--frames N] [--out DIR] [--fps N]
     otd stats <project.otd> [--frames N] [--fps N] [--node PATH]
     otd bundle <project.otd> --out <dir>
+    otd docs [--out FILE]
 
 COMMANDS:
     run       Cook the project in realtime. Output CHOPs (DMX, OSC) keep
@@ -32,6 +33,7 @@ COMMANDS:
     stats     Cook a fixed number of frames and report the timings.
     bundle    Copy the project and every component it references into one
               folder, with the references rewritten to be relative to it.
+    docs      Write the operator reference, generated from the registry.
 
 OPTIONS:
     --frames N   How many frames to run. `run` defaults to forever.
@@ -77,6 +79,10 @@ struct Args {
     fps: Option<f64>,
     node: Option<String>,
     out: PathBuf,
+    /// Whether `--out` was actually given, as opposed to defaulted. `docs`
+    /// prints to stdout without it, so a sentinel comparison against the
+    /// default would break the day somebody asks for `--out frames`.
+    out_given: bool,
 }
 
 fn parse(argv: Vec<String>) -> Result<Args, Fail> {
@@ -85,13 +91,19 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
     if command == "-h" || command == "--help" || command == "help" {
         return Err(Fail::Help);
     }
-    if !["run", "render", "stats", "bundle"].contains(&command.as_str()) {
+    if !["run", "render", "stats", "bundle", "docs"].contains(&command.as_str()) {
         return Err(format!("unknown command `{command}`\n\n{USAGE}").into());
     }
-    let project = PathBuf::from(
-        it.next()
-            .ok_or_else(|| Fail::Err(format!("`{command}` needs a project file\n\n{USAGE}")))?,
-    );
+    // `docs` reads the operator registry, not a project — it is about the
+    // build, not about anything an artist made.
+    let project = if command == "docs" {
+        PathBuf::new()
+    } else {
+        PathBuf::from(
+            it.next()
+                .ok_or_else(|| Fail::Err(format!("`{command}` needs a project file\n\n{USAGE}")))?,
+        )
+    };
 
     let mut args = Args {
         command,
@@ -100,8 +112,8 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
         fps: None,
         node: None,
         out: PathBuf::from("frames"),
+        out_given: false,
     };
-    let mut saw_out = false;
     while let Some(flag) = it.next() {
         let mut value = || -> Result<String, Fail> {
             it.next()
@@ -128,7 +140,7 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
             "--node" => args.node = Some(value()?),
             "--out" => {
                 args.out = PathBuf::from(value()?);
-                saw_out = true;
+                args.out_given = true;
             }
             other => return Err(format!("unknown option `{other}`\n\n{USAGE}").into()),
         }
@@ -136,7 +148,7 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
     if args.command == "render" && args.node.is_none() {
         return Err(Fail::Err("`render` needs --node, e.g. --node /out1".into()));
     }
-    if args.command == "bundle" && !saw_out {
+    if args.command == "bundle" && !args.out_given {
         return Err(Fail::Err(
             "`bundle` needs --out <dir>, the folder to write the bundle into".into(),
         ));
@@ -152,6 +164,9 @@ fn run() -> Result<(), Fail> {
     // does not have one.
     if args.command == "bundle" {
         return Ok(bundle(&args)?);
+    }
+    if args.command == "docs" {
+        return Ok(docs(&args)?);
     }
 
     let mut rt = Runtime::open(&args.project)?;
@@ -264,6 +279,22 @@ fn render(rt: &mut Runtime, args: &Args, dt: f64) -> Result<(), String> {
         "wrote {frames} frame(s) to {}/00000.png..",
         args.out.display()
     );
+    Ok(())
+}
+
+/// Write the operator reference.
+fn docs(args: &Args) -> Result<(), String> {
+    let text = otd_engine::docs::reference(&otd_engine::registry());
+    // No --out: straight to stdout, so it composes with a pipe.
+    if !args.out_given {
+        print!("{text}");
+        return Ok(());
+    }
+    if let Some(parent) = args.out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(&args.out, &text).map_err(|e| format!("{}: {e}", args.out.display()))?;
+    eprintln!("wrote {}", args.out.display());
     Ok(())
 }
 

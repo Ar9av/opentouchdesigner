@@ -11,6 +11,7 @@
 //! immutably by the parameters of whatever cooks next.
 
 pub mod demo;
+pub mod docs;
 
 use std::cell::RefCell;
 
