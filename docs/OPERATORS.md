@@ -2,7 +2,7 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-77 operators.
+79 operators.
 
 **CHOP** (30)
 
@@ -78,7 +78,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [sphereSOP](#sphere--spheresop) — A UV sphere.
 - [transformSOP](#transform--transformsop) — Translate, rotate and scale points.
 
-**TOP** (18)
+**TOP** (20)
 
 - [blurTOP](#blur--blurtop) — Separable Gaussian blur.
 - [cacheTOP](#cache--cachetop) — Holds the last frame it saw when Active is off.
@@ -89,6 +89,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [glslTOP](#glsl--glsltop) — Your own shader, compiled live. WGSL or Shadertoy-style GLSL.
 - [inTOP](#in--intop) — A texture input on this component's node.
 - [levelTOP](#level--leveltop) — Brightness, contrast, gamma, black/white levels.
+- [moviefileinTOP](#movie-file-in--moviefileintop) — Plays an image or a movie file.
 - [noiseTOP](#noise--noisetop) — Fractal value noise. Animate Translate Z to make it move.
 - [nullTOP](#null--nulltop) — Pass-through. A stable name to reference and to view.
 - [outTOP](#out--outtop) — This component's texture output.
@@ -98,6 +99,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [selectTOP](#select--selecttop) — This frame's output of another TOP, by path.
 - [switchTOP](#switch--switchtop) — Select one of two inputs, optionally blending between them.
 - [transformTOP](#transform--transformtop) — Translate, rotate and scale, with an extend mode.
+- [videodeviceinTOP](#video-device-in--videodeviceintop) — Frames from a camera or capture device.
 
 ---
 
@@ -981,6 +983,28 @@ Brightness, contrast, gamma, black/white levels.
 | White Level | `whitelevel` | `1` | 0 … 1 |
 | Invert | `invert` | `0` | 0 … 1 |
 
+### Movie File In — `moviefileinTOP`
+
+Plays an image or a movie file.
+
+Still images — PNG, JPEG, WebP, BMP, TGA, TIFF — are decoded in-process, with no external tool involved. Everything that moves goes through an `ffmpeg` subprocess, so mp4, mov, mkv, webm, avi and animated GIF all play if ffmpeg is on the PATH, and the node says so plainly if it is not.
+
+Playback is a function of the timeline, not a private play head: the frame shown at time `t` is always the file at `t × speed`. Scrubbing the timeline scrubs the movie, the loop range loops it, and a headless `otd render` writes exactly the frames the editor showed. Seeking backwards restarts the decode at the new time, which is why a scrub is a real scrub rather than a rewind.
+
+The picture's own size wins: `Fallback W`/`H` is only what to show before the first frame arrives, or if the file cannot be read.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| File | `file` | *(empty)* |  |
+| Play | `play` | `loop` | `loop` · `once` · `hold` |
+| Speed | `speed` | `1` | -4 … 4 |
+| Fallback W | `resw` | `1280` | 1 … 16384 |
+| Fallback H | `resh` | `720` | 1 … 16384 |
+
 ### Noise — `noiseTOP`
 
 Fractal value noise. Animate Translate Z to make it move.
@@ -1098,4 +1122,24 @@ Translate, rotate and scale, with an extend mode.
 | Rotate | `rotate` | `0` | -180 … 180 |
 | Scale | `scale` | `[1.0, 1.0]` |  |
 | Extend | `extend` | `zero` | `zero` · `hold` · `repeat` · `mirror` |
+
+### Video Device In — `videodeviceinTOP`
+
+Frames from a camera or capture device.
+
+A camera, through ffmpeg. `Requested W`/`H` and the frame rate are requests rather than commands — a capture device only does the modes it does — so they are negotiated to the nearest mode the device actually reports, and the node shows what the device said if none will work.
+
+On macOS the first use raises the system camera-permission prompt, and nothing arrives until it is granted. The picture is always the newest frame decoded, so latency stays at about one frame; pausing the timeline pauses this like everything else in the network.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Device (blank = default) | `device` | *(empty)* |  |
+| Requested W | `resw` | `1280` | 1 … 16384 |
+| Requested H | `resh` | `720` | 1 … 16384 |
+| Requested Frame Rate | `fps` | `30` | 1 … 240 |
+| Active | `active` | `true` |  |
 

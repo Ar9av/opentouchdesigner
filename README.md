@@ -5,7 +5,7 @@ environment in the spirit of TouchDesigner. Written in Rust on wgpu, so
 `cargo run` works on macOS, Windows and Linux.
 
 **Status: PLAN.md Phases 0–6 complete**, apart from the pieces that need
-system SDKs (video I/O, Spout/Syphon/NDI, Ableton Link — see below). What
+platform SDKs (Spout/Syphon/NDI, Ableton Link — see below). What
 exists today is a working graph, cook engine, GPU texture pipeline with live
 shader compilation, a channel pipeline with audio, MIDI, OSC and DMX on both
 directions, the four-mode parameter system, a text project format, component
@@ -34,6 +34,7 @@ a CHOP shows its waveform.
 | `components` | one visualiser component used twice, listening to different bands |
 | `instances3d` | 256 instanced spheres driven by audio, rendered and bloomed |
 | `keyframes` | three keyed curves — eased, splined and stepped — driving rotation, scale and brightness |
+| `video` | a movie file playing through a feedback trail |
 
 ### Headless
 
@@ -87,10 +88,12 @@ cheaper as well as darker: with nothing on the canvas, every node that was
 cooking only because it was visible stops, and what is left is the output
 chain and anything explicitly flagged for render.
 
-**File → Export Bundle…** copies the project and every `.otdc` component it
-uses into one folder, with the references rewritten relative to it, so the
-folder can be moved to a show machine and still open. `otd bundle` does the
-same from the command line and needs no GPU.
+**File → Export Bundle…** copies the project, every `.otdc` component it uses
+*and* every movie, image and audio file it references into one folder, with
+the references rewritten relative to it, so the folder can be moved to a show
+machine and still open. `otd bundle` does the same from the command line and
+needs no GPU. Anything it could not find is listed rather than swallowed — a
+bundle missing a file fails at 8pm, not at export time.
 
 ## What works
 
@@ -211,10 +214,30 @@ silence rather than failing the cook, because losing a device mid-show must
 not stop the render.
 
 **TOPs** (`otd-gpu`) — Constant, Noise, Ramp, GLSL, Level, Transform, Blur,
-Displace, Composite, Switch, Resolution, Cache, Select, Null, Out, Feedback.
-All 16-bit float, no resolution cap. One command encoder per frame; transient
-textures are pooled and node outputs are retained for as long as their cache
-is valid.
+Displace, Composite, Switch, Resolution, Cache, Select, Null, Out, Feedback,
+Movie File In, Video Device In. All 16-bit float, no resolution cap. One
+command encoder per frame; transient textures are pooled and node outputs are
+retained for as long as their cache is valid.
+
+**Video and image in** — a Movie File In TOP plays stills (PNG, JPEG, WebP,
+BMP, TGA, TIFF), movies (mp4, mov, mkv, webm, avi) and animated GIF; a Video
+Device In TOP reads a camera. Stills are decoded in-process by the `image`
+crate; everything that moves goes through an **ffmpeg subprocess** piping raw
+RGBA, which is what PLAN.md §3 sanctions and is the honest alternative to
+GStreamer — a system dependency that cannot be built or verified here. The
+trade is real and worth stating: a pipe costs a memcpy and an upload per
+frame where GStreamer would hand over a hardware surface. What it buys is
+that it works on all three platforms today and nothing extra is needed to
+*compile* OpenTouchDesigner. If ffmpeg is not installed, the node says so by
+name and produces black.
+
+Playback is a function of the timeline, like the Animation CHOP and Audio
+File In: the frame at time *t* is always the file at *t*×speed, so scrubbing
+the timeline scrubs the movie and `otd render` writes exactly the frames the
+editor showed. Scrubbing backwards restarts the decode at the new time, since
+a pipe cannot seek. A camera negotiates: `Requested W`/`H` and the frame rate
+are requests, matched against the modes the device actually reports, because
+AVFoundation refuses a mode it hasn't got rather than picking a near one.
 
 **GLSL TOP** — your own shader, compiled while you type. WGSL is the primary
 language: write a fragment body and `in.uv`, `U.time.x`, `U.res` and
@@ -278,9 +301,9 @@ copy, no readback.
 
 ## What doesn't exist yet
 
-**Video I/O** — Movie File In/Out and Video Device In are the one part of
-Phase 1 not built. They need GStreamer, which is a system dependency rather
-than a crate, and none of it can be verified without it installed.
+**Movie File Out** — recording to a video file is not written. Reading is
+(see above); `otd render` writes a PNG sequence, which `ffmpeg` will turn
+into a movie in one command.
 
 **Texture sharing** — Spout, Syphon and NDI all need platform SDKs that cannot
 be built or verified here, so none of them is written.
@@ -350,6 +373,11 @@ criterion is asserted rather than claimed:
 - [`otd-engine/tests/replicator.rs`](crates/otd-engine/tests/replicator.rs) —
   two table rows render two different pictures, an unchanged table makes zero
   graph edits, and a removed row removes exactly its replicant
+- [`otd-gpu/tests/video.rs`](crates/otd-gpu/tests/video.rs) — a still lands
+  in the texture at its own size with its halves the right way round, and a
+  real H.264 clip of one red, one green and one blue second proves the
+  timeline picks the frame — including scrubbing backwards, which can only
+  work by re-seeking a pipe that cannot seek
 - [`otd-engine/tests/palette.rs`](crates/otd-engine/tests/palette.rs) — every
   palette item is proven to do its job in pixels or channels, not merely to
   build: trails move a static image, bloom brightens, the vignette darkens

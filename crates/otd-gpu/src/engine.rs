@@ -48,6 +48,22 @@ struct NodeGpu {
     /// the last working shader instead of going black.
     shader_key: Option<String>,
     shader_error: Option<String>,
+    /// A message from something that is not a shader — a missing movie file,
+    /// a camera that would not open. Shown on the node body.
+    status: Option<String>,
+    /// The RGBA8 texture a decoded video frame is uploaded into, and the
+    /// decoder revision it holds, so a frame is uploaded once rather than
+    /// every time the node cooks.
+    upload: Option<Upload>,
+}
+
+/// A CPU-written texture: where a decoded frame lands before the GPU sees it.
+struct Upload {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    revision: u64,
 }
 
 pub struct TopEngine {
@@ -66,6 +82,10 @@ pub struct TopEngine {
     /// for it.
     glsl_vertex: Option<wgpu::ShaderModule>,
     nodes: SecondaryMap<NodeId, NodeGpu>,
+    /// One decoder per Movie File In / Video Device In node. Held here
+    /// rather than in `NodeGpu` because dropping one kills a thread and a
+    /// subprocess, and that must happen exactly when the node goes away.
+    videos: SecondaryMap<NodeId, crate::video::Source>,
     pool: TexturePool,
     encoder: Option<wgpu::CommandEncoder>,
     /// Scratch targets used by two-pass operators, returned to the pool at
@@ -179,6 +199,7 @@ impl TopEngine {
             failed: HashMap::new(),
             glsl_vertex: None,
             nodes: SecondaryMap::new(),
+            videos: SecondaryMap::new(),
             pool: TexturePool::new(),
             encoder: None,
             scratch: Vec::new(),
@@ -376,8 +397,18 @@ impl TopEngine {
         self.nodes.get(id).and_then(|n| n.shader_error.as_deref())
     }
 
+    /// A non-shader message — a missing movie file, a camera that would not
+    /// open — for display on the node body.
+    pub fn status(&self, id: NodeId) -> Option<&str> {
+        self.nodes.get(id).and_then(|n| n.status.as_deref())
+    }
+
     /// Drop a node's GPU resources, returning its texture to the pool.
+    ///
+    /// Dropping the decoder is what stops its thread and kills its ffmpeg
+    /// process, so deleting a camera node releases the camera.
     pub fn forget(&mut self, id: NodeId) {
+        self.videos.remove(id);
         if let Some(mut n) = self.nodes.remove(id) {
             if let Some(t) = n.output.take() {
                 self.pool.release(t);
@@ -641,6 +672,248 @@ impl TopEngine {
     /// Copy another node's current texture into `id`'s output. Shared by
     /// Feedback (which reads before the target re-cooks) and Select (which
     /// reads after, because it declares the target as a dependency).
+    /// Cook a Movie File In or a Video Device In.
+    ///
+    /// The shape is the same as every device operator in this codebase: open
+    /// on demand, keyed by what the parameters ask for; take whatever the
+    /// worker thread has produced; and turn a failure into a message on the
+    /// node rather than into a failed cook.
+    fn cook_video(
+        &mut self,
+        graph: &Graph,
+        id: NodeId,
+        ctx: &CookContext,
+        eval: &EvalContext,
+        label: &str,
+    ) -> Result<(), CookError> {
+        let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
+        let camera = node.op_type == ops::VIDEO_DEVICE_IN;
+        let get = |key: &str| node.param(key).map(|p| p.eval(eval));
+        let fallback = ops::generator_size(node, eval);
+
+        // ---- What is being asked for, as one string. A change to it is
+        // what reopens the source, so nothing else has to track staleness.
+        let (key, file) = if camera {
+            let device = get("device").map(|v| v.as_str()).unwrap_or_default();
+            let fps = get("fps")
+                .map(|v| v.as_f64())
+                .unwrap_or(30.0)
+                .clamp(1.0, 240.0);
+            (
+                format!("camera:{device}:{}x{}:{fps}", fallback.0, fallback.1),
+                device,
+            )
+        } else {
+            let file = get("file").map(|v| v.as_str()).unwrap_or_default();
+            let resolved = if file.trim().is_empty() {
+                String::new()
+            } else {
+                graph.resolve_external(file.trim()).display().to_string()
+            };
+            (format!("file:{resolved}"), resolved)
+        };
+
+        let active = get("active").map(|v| v.as_bool()).unwrap_or(true);
+        if !active || file.trim().is_empty() {
+            // Nothing asked for: release the device and show black at the
+            // fallback size, so a downstream chain still has a shape.
+            self.videos.remove(id);
+            let entry = self.nodes.entry(id).unwrap().or_default();
+            entry.status = None;
+            self.ensure_output(id, fallback.0, fallback.1);
+            return self.clear_to_black(id, ctx, label);
+        }
+
+        // ---- Open, if this is a different source from the one running.
+        if self.videos.get(id).map(|s| s.key.as_str()) != Some(key.as_str()) {
+            self.videos.remove(id);
+            let opened = if camera {
+                let fps = get("fps")
+                    .map(|v| v.as_f64())
+                    .unwrap_or(30.0)
+                    .clamp(1.0, 240.0);
+                crate::video::Source::camera(key.clone(), &file, fallback.0, fallback.1, fps)
+            } else if crate::video::is_still(&file) {
+                Ok(crate::video::Source::still(
+                    key.clone(),
+                    std::path::Path::new(&file),
+                ))
+            } else {
+                match crate::video::probe(&file) {
+                    Some(info) => crate::video::Source::file(key.clone(), &file, info, 0),
+                    None if !std::path::Path::new(&file).exists() => {
+                        Err(format!("no file at {file}"))
+                    }
+                    None => Err(format!(
+                        "could not read {file} — ffmpeg/ffprobe not installed, \
+                         or not a video this build can decode"
+                    )),
+                }
+            };
+            let entry = self.nodes.entry(id).unwrap().or_default();
+            match opened {
+                Ok(source) => {
+                    entry.status = None;
+                    self.videos.insert(id, source);
+                }
+                Err(e) => {
+                    entry.status = Some(e);
+                    self.ensure_output(id, fallback.0, fallback.1);
+                    return self.clear_to_black(id, ctx, label);
+                }
+            }
+        }
+
+        // ---- Which frame the timeline is asking for. Playback is a
+        // function of the timeline, not a private play head, so scrubbing
+        // scrubs the picture and a headless render reads the same frames the
+        // editor showed.
+        let (wanted, ended_message) = {
+            let source = &self.videos[id];
+            if camera || source.info.fps <= 0.0 {
+                (0, false)
+            } else {
+                let speed = get("speed").map(|v| v.as_f64()).unwrap_or(1.0);
+                let raw = (ctx.time * speed * source.info.fps).floor() as i64;
+                let length = (source.info.duration * source.info.fps).round() as i64;
+                let mode = get("play").map(|v| v.as_str()).unwrap_or_default();
+                match mode.as_str() {
+                    "loop" if length > 1 => (raw.rem_euclid(length), false),
+                    "hold" if length > 1 => (raw.clamp(0, length - 1), false),
+                    "once" if length > 1 => (raw.clamp(0, length - 1), raw >= length),
+                    _ => (raw.max(0), false),
+                }
+            }
+        };
+
+        let path_for_seek = file.clone();
+        let frame = self.videos[id].advance(&path_for_seek, wanted).cloned();
+        let revision = self.videos[id].revision;
+
+        let Some(frame) = frame else {
+            // Still decoding the first frame — one or two frames of a fresh
+            // patch, not an error — unless the worker reported why not.
+            let problem = self.videos[id].problem();
+            self.nodes.entry(id).unwrap().or_default().status = problem;
+            self.ensure_output(id, fallback.0, fallback.1);
+            return self.clear_to_black(id, ctx, label);
+        };
+
+        // `once` past the end shows black rather than freezing, so a clip
+        // that has finished looks finished.
+        if ended_message {
+            self.ensure_output(id, frame.width, frame.height);
+            return self.clear_to_black(id, ctx, label);
+        }
+
+        self.upload_frame(id, &frame, revision);
+        self.ensure_output(id, frame.width, frame.height);
+
+        let source_view = self.nodes[id].upload.as_ref().unwrap().view.clone();
+        let out = self.nodes[id].output.as_ref().unwrap().view.clone();
+        let uniforms = self.uniforms(frame.width, frame.height, ctx, [[0.0; 4]; 4]);
+        let buf = self.write_uniform(id, 0, uniforms);
+        let dummy = self.dummy.clone();
+        self.run_pass(Pass {
+            label,
+            pipeline: PipelineRef::Builtin(ops::NULL),
+            target: &out,
+            uniform: &buf,
+            in0: &source_view,
+            in1: &dummy,
+            nearest: false,
+        })
+    }
+
+    /// Copy a decoded frame into this node's upload texture.
+    ///
+    /// The texture is sRGB, so the hardware does the colour conversion on
+    /// sample: an 8-bit JPEG lands in the 16-bit float pipeline linearised,
+    /// which is what makes compositing it behave.
+    fn upload_frame(&mut self, id: NodeId, frame: &crate::video::Frame, revision: u64) {
+        let entry = self.nodes.entry(id).unwrap().or_default();
+        let reusable = entry
+            .upload
+            .as_ref()
+            .map(|u| u.width == frame.width && u.height == frame.height)
+            .unwrap_or(false);
+        if reusable && entry.upload.as_ref().unwrap().revision == revision {
+            return; // Nothing new to send.
+        }
+        if !reusable {
+            let texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("otd video upload"),
+                size: wgpu::Extent3d {
+                    width: frame.width.max(1),
+                    height: frame.height.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.nodes[id].upload = Some(Upload {
+                texture,
+                view,
+                width: frame.width,
+                height: frame.height,
+                revision: u64::MAX,
+            });
+        }
+        let upload = self.nodes[id].upload.as_mut().unwrap();
+        upload.revision = revision;
+        self.ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &upload.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &frame.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(frame.width * 4),
+                rows_per_image: Some(frame.height),
+            },
+            wgpu::Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// A pass that produces black — what a source with nothing to show
+    /// presents, so downstream operators always have a texture.
+    fn clear_to_black(
+        &mut self,
+        id: NodeId,
+        ctx: &CookContext,
+        label: &str,
+    ) -> Result<(), CookError> {
+        let (w, h) = {
+            let out = self.nodes[id].output.as_ref().unwrap();
+            (out.key.width, out.key.height)
+        };
+        let out = self.nodes[id].output.as_ref().unwrap().view.clone();
+        let uniforms = self.uniforms(w, h, ctx, [[0.0; 4]; 4]);
+        let buf = self.write_uniform(id, 0, uniforms);
+        let dummy = self.dummy.clone();
+        self.run_pass(Pass {
+            label,
+            pipeline: PipelineRef::Builtin(ops::NULL),
+            target: &out,
+            uniform: &buf,
+            in0: &dummy,
+            in1: &dummy,
+            nearest: false,
+        })
+    }
+
     fn blit_from(
         &mut self,
         graph: &Graph,
@@ -812,6 +1085,11 @@ impl TopEngine {
             let target = referenced_target(graph, id, "top");
             return self.blit_from(graph, id, target, ctx, &path);
         }
+        // ---- Video: the pixels come from a decoder thread, not a shader.
+        if node.op_type == ops::MOVIE_IN || node.op_type == ops::VIDEO_DEVICE_IN {
+            return self.cook_video(graph, id, ctx, eval, &path);
+        }
+
         // ---- Cache holds whatever it last saw while Active is off.
         if node.op_type == ops::CACHE {
             let active = node

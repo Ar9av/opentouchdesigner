@@ -162,6 +162,65 @@ pub fn lfo_driven(registry: &OpRegistry) -> (Graph, NodeId) {
     (graph, out)
 }
 
+/// Video in, through a trail, out.
+///
+/// The point of the patch is that once a movie is a texture, it is a texture:
+/// the feedback loop, the level and the transform after it have no idea a
+/// decoder was involved, and the Movie File In sits in the chain exactly
+/// where a Noise TOP would.
+pub fn video(registry: &OpRegistry) -> (Graph, NodeId) {
+    let mut graph = Graph::new();
+    let root = graph.root();
+    // The clip ships beside the examples, and the reference to it is
+    // relative — the same rule external components follow, so the patch keeps
+    // working when the folder moves.
+    graph.set_base_dir(Some(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples"),
+    ));
+
+    let add = |graph: &mut Graph, op: &str, name: &str, pos: [f32; 2]| {
+        let def = registry.get(op).unwrap().clone();
+        let id = graph.create(root, &def, Some(name)).unwrap();
+        graph.node_mut_quiet(id).pos = pos;
+        id
+    };
+
+    let movie = add(
+        &mut graph,
+        otd_gpu::ops::MOVIE_IN,
+        "movie1",
+        [-460.0, -80.0],
+    );
+    let fb = add(&mut graph, otd_gpu::ops::FEEDBACK, "fb1", [-460.0, 110.0]);
+    let decay = add(&mut graph, "levelTOP", "decay1", [-260.0, 110.0]);
+    let drift = add(&mut graph, "transformTOP", "drift1", [-60.0, 110.0]);
+    let mix = add(&mut graph, "compositeTOP", "mix1", [160.0, -20.0]);
+    let out = add(&mut graph, otd_gpu::ops::NULL, "out1", [380.0, -20.0]);
+
+    graph.connect(movie, mix, 0).unwrap();
+    graph.connect(fb, decay, 0).unwrap();
+    graph.connect(decay, drift, 0).unwrap();
+    graph.connect(drift, mix, 1).unwrap();
+    graph.connect(mix, out, 0).unwrap();
+
+    graph
+        .set_param(movie, "file", Value::Str("media/testcard.mp4".into()))
+        .unwrap();
+    graph
+        .set_param(fb, "target", Value::Str("/out1".into()))
+        .unwrap();
+    graph
+        .set_param(mix, "operation", Value::Str("maximum".into()))
+        .unwrap();
+    graph
+        .set_param(decay, "brightness", Value::Float(0.9))
+        .unwrap();
+    graph
+        .set_param(drift, "scale", Value::Vec2([1.03, 1.03]))
+        .unwrap();
+    (graph, out)
+}
+
 /// Build one audio-visualiser component: a self-contained band-reactive
 /// visual with three knobs on its node.
 ///
@@ -570,6 +629,7 @@ bright     4     0.5    linear
 pub fn by_name(name: &str, registry: &OpRegistry) -> Option<(Graph, NodeId)> {
     match name {
         "keyframes" => Some(keyframes(registry)),
+        "video" => Some(video(registry)),
         "starter" => Some(starter(registry)),
         "feedback" => Some(feedback(registry, 1920, 1080)),
         "audioreactive" => Some(audio_reactive(registry)),
@@ -588,4 +648,5 @@ pub const NAMES: &[&str] = &[
     "components",
     "instances3d",
     "keyframes",
+    "video",
 ];

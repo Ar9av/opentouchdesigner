@@ -13,6 +13,7 @@ pub mod render3d;
 pub mod scene;
 pub mod shader;
 pub mod texture;
+pub mod video;
 
 pub use context::GpuContext;
 pub use engine::TopEngine;

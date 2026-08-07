@@ -120,6 +120,12 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             text_editor(app, ui, id);
             continue;
         }
+        // A file parameter gets a Browse button. Typing an absolute path
+        // from memory is nobody's idea of patching.
+        if key == "file" && app.graph.node(id).op_type == otd_gpu::ops::MOVIE_IN {
+            movie_file_row(app, ui, id);
+            continue;
+        }
 
         let (label, mode, mut value, mut expression, range, menu, error, evaluated) = {
             let p = &app.graph.node(id).params[&key];
@@ -511,6 +517,51 @@ fn channel_list(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
 }
 
 /// The code editor for a GLSL TOP's `source` parameter.
+/// The Movie File In file field: a text box you can paste into, and a Browse
+/// button for everyone else.
+fn movie_file_row(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
+    let mut path = app.graph.node(id).param("file").unwrap().value.as_str();
+    ui.horizontal(|ui| {
+        ui.label("File");
+        if ui.button("Browse…").clicked() {
+            let picked = rfd::FileDialog::new()
+                .add_filter(
+                    "Image or movie",
+                    &[
+                        "png", "jpg", "jpeg", "webp", "bmp", "tga", "tif", "tiff", "mp4", "mov",
+                        "m4v", "mkv", "webm", "avi", "gif",
+                    ],
+                )
+                .pick_file();
+            if let Some(p) = picked {
+                app.edit(&format!("file:{id:?}"));
+                let _ = app
+                    .graph
+                    .set_param(id, "file", Value::Str(p.display().to_string()));
+                path = p.display().to_string();
+            }
+        }
+    });
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut path)
+            .desired_width(f32::INFINITY)
+            .hint_text("a path, or drop a file on the canvas"),
+    );
+    if response.changed() {
+        app.edit(&format!("file:{id:?}"));
+        let _ = app.graph.set_param(id, "file", Value::Str(path));
+    }
+    // Relative paths resolve against the project, which is what makes a
+    // bundle portable — worth saying where somebody is about to type one.
+    if let Some(dir) = app.graph.base_dir() {
+        ui.label(
+            RichText::new(format!("relative to {}", dir.display()))
+                .weak()
+                .small(),
+        );
+    }
+}
+
 fn shader_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
     let mut source = app.graph.node(id).params["source"].value.as_str();
     let is_glsl = app

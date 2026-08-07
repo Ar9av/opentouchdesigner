@@ -236,7 +236,10 @@ struct AudioFile {
 
 fn params_audio_file() -> IndexMap<String, Param> {
     let mut m = IndexMap::new();
-    m.insert("file".into(), Param::str("").with_label("File (.wav)"));
+    m.insert(
+        "file".into(),
+        Param::str("").with_label("File (.wav)").as_file_ref(),
+    );
     m.insert(
         "play".into(),
         Param::menu("loop", &["loop", "once"]).with_label("Play"),
