@@ -1,11 +1,20 @@
-//! The three providers, behind one call.
+//! The five providers, behind one call.
 //!
-//! OpenAI and OpenRouter speak the same wire format — OpenRouter exists to be
-//! a drop-in for it — so they share a request builder and differ only in host
-//! and headers. Anthropic's is close but not the same: the system prompt is a
-//! top-level field rather than a message, auth is `x-api-key` rather than a
-//! bearer token, and it wants a version header. That is the whole difference,
-//! and it is small enough that a trait would cost more than it saved.
+//! Three of them are a URL and a key. OpenAI and OpenRouter speak the same
+//! wire format — OpenRouter exists to be a drop-in for it — so they share a
+//! request builder and differ only in host and headers. Anthropic's is close
+//! but not the same: the system prompt is a top-level field rather than a
+//! message, auth is `x-api-key` rather than a bearer token, and it wants a
+//! version header. That is the whole difference, and it is small enough that
+//! a trait would cost more than it saved.
+//!
+//! Two of them are not a URL at all. Claude Code and Codex are subprocesses
+//! run against the login already on the machine, so somebody paying for one
+//! of those subscriptions does not also have to buy API credit. Everything
+//! they need is in [`crate::cli`]; [`complete`] dispatches to it and the rest
+//! of the crate never learns the difference. [`Provider::needs_key`] is the
+//! seam — a provider that does not need a key does not get a key field, an
+//! env var, or a line in `keys.conf`.
 //!
 //! Everything here is blocking. The caller runs it on a worker thread, which
 //! is the same rule every device in this codebase follows: nothing that can
@@ -20,11 +29,29 @@ pub enum Provider {
     Anthropic,
     OpenAi,
     OpenRouter,
+    /// The `claude` CLI, on this machine's login.
+    ClaudeCode,
+    /// The `codex` CLI, on this machine's login.
+    Codex,
 }
 
 impl Provider {
-    pub const ALL: &'static [Provider] =
-        &[Provider::Anthropic, Provider::OpenAi, Provider::OpenRouter];
+    pub const ALL: &'static [Provider] = &[
+        Provider::Anthropic,
+        Provider::OpenAi,
+        Provider::OpenRouter,
+        Provider::ClaudeCode,
+        Provider::Codex,
+    ];
+
+    /// Whether this provider is paid for with an API key.
+    ///
+    /// `false` means it runs a CLI that is already signed in, and every piece
+    /// of key handling — the config file, the env var, the password field —
+    /// should skip it rather than show an empty box nobody can fill.
+    pub fn needs_key(&self) -> bool {
+        !matches!(self, Provider::ClaudeCode | Provider::Codex)
+    }
 
     /// The stable name used in the config file and in the UI.
     pub fn id(&self) -> &'static str {
@@ -32,6 +59,8 @@ impl Provider {
             Provider::Anthropic => "anthropic",
             Provider::OpenAi => "openai",
             Provider::OpenRouter => "openrouter",
+            Provider::ClaudeCode => "claude-code",
+            Provider::Codex => "codex",
         }
     }
 
@@ -40,6 +69,8 @@ impl Provider {
             Provider::Anthropic => "Anthropic",
             Provider::OpenAi => "OpenAI",
             Provider::OpenRouter => "OpenRouter",
+            Provider::ClaudeCode => "Claude Code",
+            Provider::Codex => "Codex",
         }
     }
 
@@ -50,30 +81,38 @@ impl Provider {
             .find(|p| p.id().eq_ignore_ascii_case(name.trim()))
     }
 
-    /// The environment variable this provider's key is conventionally in.
-    pub fn env_var(&self) -> &'static str {
+    /// The environment variable this provider's key is conventionally in, if
+    /// it takes a key at all.
+    pub fn env_var(&self) -> Option<&'static str> {
         match self {
-            Provider::Anthropic => "ANTHROPIC_API_KEY",
-            Provider::OpenAi => "OPENAI_API_KEY",
-            Provider::OpenRouter => "OPENROUTER_API_KEY",
+            Provider::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Provider::OpenAi => Some("OPENAI_API_KEY"),
+            Provider::OpenRouter => Some("OPENROUTER_API_KEY"),
+            Provider::ClaudeCode | Provider::Codex => None,
         }
     }
 
-    pub fn endpoint(&self) -> &'static str {
+    /// The URL this provider is spoken to over, if it is spoken to over one.
+    /// `None` means it is a subprocess — see [`crate::cli`].
+    pub fn endpoint(&self) -> Option<&'static str> {
         match self {
-            Provider::Anthropic => "https://api.anthropic.com/v1/messages",
-            Provider::OpenAi => "https://api.openai.com/v1/chat/completions",
-            Provider::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
+            Provider::Anthropic => Some("https://api.anthropic.com/v1/messages"),
+            Provider::OpenAi => Some("https://api.openai.com/v1/chat/completions"),
+            Provider::OpenRouter => Some("https://openrouter.ai/api/v1/chat/completions"),
+            Provider::ClaudeCode | Provider::Codex => None,
         }
     }
 
-    /// Where a user goes to get one. Shown next to an empty key field,
-    /// because "paste your API key" is useless if you have not got one.
+    /// Where a user goes to get set up. Shown next to an empty key field,
+    /// because "paste your API key" is useless if you have not got one — and
+    /// for the CLI providers, where to go and install the thing.
     pub fn console_url(&self) -> &'static str {
         match self {
             Provider::Anthropic => "https://console.anthropic.com/settings/keys",
             Provider::OpenAi => "https://platform.openai.com/api-keys",
             Provider::OpenRouter => "https://openrouter.ai/keys",
+            Provider::ClaudeCode => "https://docs.claude.com/en/docs/claude-code/overview",
+            Provider::Codex => "https://developers.openai.com/codex/cli",
         }
     }
 
@@ -94,6 +133,15 @@ impl Provider {
                 "google/gemini-2.5-pro",
                 "meta-llama/llama-4-maverick",
             ],
+            // Aliases rather than dated names: the CLI resolves them to
+            // whatever is current, which is the point of using it.
+            Provider::ClaudeCode => &["sonnet", "opus", "haiku"],
+            // Empty first, and it means "whatever this CLI is configured to
+            // use". Not politeness — Codex hard-fails on a model the
+            // signed-in account has no access to, and which models those are
+            // depends on the plan, so guessing a default breaks first use for
+            // somebody. The CLI already knows; let it answer.
+            Provider::Codex => &["", "gpt-5.1-codex", "gpt-5"],
         }
     }
 
@@ -111,6 +159,8 @@ pub struct Request {
     pub model: String,
     pub system: String,
     pub user: String,
+    /// A reference image to work from, if there is one. See [`crate::vision`].
+    pub image: Option<crate::vision::Image>,
     pub max_tokens: u32,
     pub timeout: Duration,
 }
@@ -122,6 +172,7 @@ impl Request {
             model: model.into(),
             system: String::new(),
             user: String::new(),
+            image: None,
             max_tokens: 8192,
             // Long enough for a reasoning model on a cold start, short enough
             // that a hung provider does not leave a thread waiting all show.
@@ -139,6 +190,39 @@ impl Request {
         self
     }
 
+    /// Attach a reference image to work from.
+    pub fn image(mut self, image: impl Into<Option<crate::vision::Image>>) -> Request {
+        self.image = image.into();
+        self
+    }
+
+    /// The user turn as content blocks, in whichever dialect was asked for.
+    ///
+    /// The image goes *before* the text in both. Anthropic say so outright,
+    /// and it is the better order anyway: the instructions that follow are
+    /// about the picture, and a model that has not seen it yet is being asked
+    /// to remember a brief rather than apply one.
+    fn content(&self, anthropic: bool) -> serde_json::Value {
+        let Some(image) = &self.image else {
+            return serde_json::Value::String(self.user.clone());
+        };
+        let block = match anthropic {
+            true => serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.media_type(),
+                    "data": image.base64(),
+                },
+            }),
+            false => serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": image.data_uri() },
+            }),
+        };
+        serde_json::json!([block, { "type": "text", "text": self.user }])
+    }
+
     /// The JSON body for this provider.
     pub fn body(&self) -> serde_json::Value {
         match self.provider {
@@ -146,15 +230,18 @@ impl Request {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
                 "system": self.system,
-                "messages": [{ "role": "user", "content": self.user }],
+                "messages": [{ "role": "user", "content": self.content(true) }],
             }),
+            // No wire body: these are subprocesses, and the prompt goes on
+            // stdin. See `cli::complete`.
+            Provider::ClaudeCode | Provider::Codex => serde_json::Value::Null,
             // OpenAI and OpenRouter: the system prompt is a message.
-            _ => serde_json::json!({
+            Provider::OpenAi | Provider::OpenRouter => serde_json::json!({
                 "model": self.model,
                 "max_completion_tokens": self.max_tokens,
                 "messages": [
                     { "role": "system", "content": self.system },
-                    { "role": "user", "content": self.user },
+                    { "role": "user", "content": self.content(false) },
                 ],
             }),
         }
@@ -186,7 +273,13 @@ pub fn extract_text(provider: Provider, body: &serde_json::Value) -> Result<Stri
                     .join("")
             })
             .unwrap_or_default(),
-        _ => body
+        // Never reached: `complete` sends these to `cli` before there is a
+        // body to read. Explicit rather than swept into the arm below, so
+        // that a wire shape is never invented for a provider that has none.
+        Provider::ClaudeCode | Provider::Codex => {
+            return Err(format!("{} has no wire format", provider.label()));
+        }
+        Provider::OpenAi | Provider::OpenRouter => body
             .get("choices")
             .and_then(|c| c.as_array())
             .and_then(|c| c.first())
@@ -224,11 +317,23 @@ fn finish_reason(provider: Provider, body: &serde_json::Value) -> Option<String>
 ///
 /// Blocking. Call it from a worker thread.
 pub fn complete(request: &Request, key: &Key, keys: &Keys) -> Result<String, String> {
+    // The two that are not a URL. Dispatched before anything HTTP-shaped
+    // happens, so no key, agent, or endpoint is consulted for them.
+    if !request.provider.needs_key() {
+        return crate::cli::complete(request);
+    }
+
+    let Some(endpoint) = request.provider.endpoint() else {
+        return Err(format!("{} has no endpoint", request.provider.label()));
+    };
     if key.is_empty() {
         return Err(format!(
             "no API key for {} — paste one, or set {}",
             request.provider.label(),
-            request.provider.env_var()
+            request
+                .provider
+                .env_var()
+                .unwrap_or("it in the environment")
         ));
     }
 
@@ -241,7 +346,7 @@ pub fn complete(request: &Request, key: &Key, keys: &Keys) -> Result<String, Str
         .build()
         .new_agent();
 
-    let mut call = agent.post(request.provider.endpoint());
+    let mut call = agent.post(endpoint);
     call = match request.provider {
         Provider::Anthropic => call
             .header("x-api-key", key.expose())
@@ -419,9 +524,102 @@ mod tests {
         for p in Provider::ALL {
             assert_eq!(Provider::parse(p.id()), Some(*p));
             assert_eq!(Provider::parse(&p.id().to_uppercase()), Some(*p));
-            assert!(!p.default_model().is_empty());
-            assert!(p.endpoint().starts_with("https://"));
+            assert!(!p.models().is_empty());
+            assert!(p.console_url().starts_with("https://"));
         }
         assert_eq!(Provider::parse("gemini"), None);
+    }
+
+    #[test]
+    fn a_key_provider_has_somewhere_to_send_the_key() {
+        // The two halves of the enum, stated as the invariant that keeps
+        // `complete` honest: needing a key and having an endpoint are the
+        // same question asked twice, and nothing may answer them differently.
+        for p in Provider::ALL {
+            assert_eq!(
+                p.needs_key(),
+                p.endpoint().is_some(),
+                "{p:?} disagrees with itself"
+            );
+            assert_eq!(p.needs_key(), p.env_var().is_some(), "{p:?}");
+            if p.needs_key() {
+                assert!(p.endpoint().unwrap().starts_with("https://"));
+                assert!(!p.default_model().is_empty(), "{p:?}");
+            }
+        }
+        assert!(!Provider::ClaudeCode.needs_key());
+        assert!(!Provider::Codex.needs_key());
+    }
+
+    #[test]
+    fn codex_defaults_to_whatever_its_cli_is_configured_for() {
+        // Empty is deliberate and `cli::complete` reads it as "pass no
+        // -m flag". Codex hard-fails on a model the account cannot use, and
+        // the plan decides which those are, so there is no safe guess to
+        // make from here.
+        assert_eq!(Provider::Codex.default_model(), "");
+        // Claude Code has no such problem: the aliases always resolve.
+        assert_eq!(Provider::ClaudeCode.default_model(), "sonnet");
+    }
+
+    /// A tiny real PNG, so the image path is exercised with bytes rather than
+    /// a stub that cannot be decoded.
+    fn image() -> crate::vision::Image {
+        let buffer = image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(buffer)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        crate::vision::Image::decode(&png.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn without_an_image_the_user_turn_stays_a_plain_string() {
+        // The shape three providers have always taken, and the one thing that
+        // must not change for anybody not using this feature.
+        let request = Request::new(Provider::Anthropic, "m").user("hello");
+        assert_eq!(request.body()["messages"][0]["content"], "hello");
+        let openai = Request::new(Provider::OpenAi, "m").user("hello");
+        assert_eq!(openai.body()["messages"][1]["content"], "hello");
+    }
+
+    #[test]
+    fn an_image_goes_out_in_each_providers_own_dialect() {
+        let request = Request::new(Provider::Anthropic, "m")
+            .user("rebuild this")
+            .image(image());
+        let content = &request.body()["messages"][0]["content"];
+        // Image first: the instructions after it are about the picture.
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "image/jpeg");
+        assert!(!content[0]["source"]["data"].as_str().unwrap().is_empty());
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "rebuild this");
+
+        // OpenAI takes the same picture as a data URI, and OpenRouter is
+        // OpenAI on the wire here too.
+        for provider in [Provider::OpenAi, Provider::OpenRouter] {
+            let request = Request::new(provider, "m")
+                .user("rebuild this")
+                .image(image());
+            let content = &request.body()["messages"][1]["content"];
+            assert_eq!(content[0]["type"], "image_url");
+            let url = content[0]["image_url"]["url"].as_str().unwrap();
+            assert!(url.starts_with("data:image/jpeg;base64,"), "{url:.40}");
+            assert_eq!(content[1]["text"], "rebuild this");
+        }
+    }
+
+    #[test]
+    fn a_cli_provider_has_no_wire_format() {
+        // Rather than quietly borrowing OpenAI's, which would produce a body
+        // that looks sendable and is not.
+        let request = Request::new(Provider::ClaudeCode, "sonnet")
+            .system("s")
+            .user("u");
+        assert!(request.body().is_null());
+        let body = serde_json::json!({ "choices": [] });
+        assert!(extract_text(Provider::Codex, &body).is_err());
     }
 }
