@@ -90,8 +90,8 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if reply.repaired {
-        eprintln!("  (a shader came back broken and was sent back to be fixed)");
+    if let Some(repair) = reply.repaired {
+        eprintln!("  (came back broken and was sent back to be fixed: {})", repair.label());
     }
     let plan = match otd_ai::plan_from_reply(&reply.text, &registry) {
         Ok(plan) => plan,

@@ -102,47 +102,113 @@ pub fn ask(ask: &Ask, keys: &Keys) -> Result<Plan, String> {
 /// What a completion produced, and whether it took two goes.
 pub struct Reply {
     pub text: String,
-    /// A shader came back broken and was sent back to be fixed.
-    pub repaired: bool,
+    /// What came back broken and was sent back to be fixed, if anything.
+    pub repaired: Option<Repair>,
 }
 
-/// Send a request, and if the reply contains a shader that will not compile,
-/// hand the compiler's own error back to the model once.
+/// Which of the two things a reply can get wrong was handed back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repair {
+    /// The reply was not JSON the parser would take.
+    Json,
+    /// A shader in it would not compile.
+    Shader,
+}
+
+impl Repair {
+    /// For the status line, after a "·".
+    pub fn label(self) -> &'static str {
+        match self {
+            Repair::Json => "reformatted on retry",
+            Repair::Shader => "shader fixed on retry",
+        }
+    }
+}
+
+/// Ask again, quoting what came back and what was wrong with it.
 ///
-/// This is the difference between "it built you a patch" and "it built you a
-/// patch with a red node in it". The error is the most useful thing anybody
-/// has — a compiler saying exactly which identifier does not exist — and
-/// throwing it away to show a user a broken node is a waste of it.
+/// The reply is included in full rather than described: a model correcting
+/// its own output needs the output, and asking for "the same JSON with the
+/// error fixed" without showing it gets a fresh answer to a different
+/// question.
+fn repair_request(request: &Request, reply: &str, complaint: &str) -> Request {
+    Request {
+        user: format!("{}\n\nYou replied with this:\n{reply}\n\n{complaint}", request.user),
+        ..request.clone()
+    }
+}
+
+/// Send a request, and hand back whatever the reply got wrong — once each.
 ///
-/// Once, not until it works: a model that cannot fix its own shader on the
-/// second go is not going to on the fifth, and the user is waiting.
+/// Two things can come back broken, and both have the same answer: the error
+/// is the most useful thing anybody has, and throwing it away to show the
+/// user a failure is a waste of it.
+///
+///  * **It is not JSON.** A shader full of braces and quotes inside a JSON
+///    string is exactly where a model drops an escape, and the reply dies at
+///    the parser with a column number. That column number is the fix — the
+///    model gets its own output back with the parse error against it.
+///  * **A shader will not compile.** The compiler says which identifier does
+///    not exist; that goes back too. This is the difference between "it built
+///    you a patch" and "it built you a patch with a red node in it".
+///
+/// Once each, not until it works: a model that cannot fix its own output on
+/// the second go is not going to on the fifth, and the user is waiting. The
+/// two are separate failures, so a reply that arrives malformed and comes
+/// back with a bad shader still gets the shader looked at.
 pub fn complete_with_repair(
     request: &Request,
     key: &Key,
     keys: &Keys,
     check: Option<patch::ShaderCheck>,
 ) -> Result<Reply, String> {
-    let text = provider::complete(request, key, keys)?;
-    let Some(check) = check else {
-        return Ok(Reply {
-            text,
-            repaired: false,
-        });
+    let first = provider::complete(request, key, keys)?;
+
+    // ---- Is it JSON at all? Nothing else can be asked until it is.
+    let (text, json, repaired) = match patch::extract_json(&first) {
+        Ok(json) => (first, json, None),
+        Err(problem) => {
+            let retry = repair_request(
+                request,
+                &first,
+                &format!(
+                    "That could not be parsed: {problem}\n\n\
+                     Reply with the same patch again as ONE valid JSON object and \
+                     nothing else. Mind the strings: a JSON string cannot contain a \
+                     literal newline, tab or unescaped double quote, so shader source \
+                     must have its newlines written as \\n and its quotes as \\\". \
+                     Change nothing about the patch itself.",
+                ),
+            );
+            let Ok(second) = provider::complete(&retry, key, keys) else {
+                // The retry failed outright. The first answer is no worse for
+                // having been tried, and the caller reports its parse error.
+                return Ok(Reply {
+                    text: first,
+                    repaired: None,
+                });
+            };
+            match patch::extract_json(&second) {
+                Ok(json) => (second, json, Some(Repair::Json)),
+                // Still not JSON. Hand back the second attempt and let the
+                // caller report it: two goes is the budget.
+                Err(_) => {
+                    return Ok(Reply {
+                        text: second,
+                        repaired: Some(Repair::Json),
+                    });
+                }
+            }
+        }
     };
-    let Ok(json) = patch::extract_json(&text) else {
-        // Not JSON: let the caller report that, rather than asking the model
-        // to fix shaders in something that has no shaders in it.
-        return Ok(Reply {
-            text,
-            repaired: false,
-        });
+
+    // ---- It parses. Do the shaders in it compile?
+    let Some(check) = check else {
+        return Ok(Reply { text, repaired });
     };
     let problems = patch::shader_problems(&json, check);
     if problems.is_empty() {
-        return Ok(Reply {
-            text,
-            repaired: false,
-        });
+        return Ok(Reply { text, repaired });
     }
 
     let complaints = problems
@@ -150,28 +216,25 @@ pub fn complete_with_repair(
         .map(|(name, error)| format!("- {name}: {error}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let retry = Request {
-        user: format!(
-            "{}\n\nYou replied with this:\n{}\n\nThe shader compiler rejected it:\n{}\n\n\
-             Reply with the same JSON again, with those shaders fixed. Keep everything \
-             else identical. If you cannot fix a shader, replace that node's source with \
-             something simple that compiles.",
-            request.user, text, complaints
+    let retry = repair_request(
+        request,
+        &text,
+        &format!(
+            "The shader compiler rejected it:\n{complaints}\n\n\
+             Reply with the same JSON again, with those shaders fixed. Keep \
+             everything else identical. If you cannot fix a shader, replace that \
+             node's source with something simple that compiles."
         ),
-        ..request.clone()
-    };
+    );
     match provider::complete(&retry, key, keys) {
         // Take the second answer even if it is still imperfect: the caller
         // validates it again and reports what is left.
         Ok(second) => Ok(Reply {
             text: second,
-            repaired: true,
+            repaired: Some(Repair::Shader),
         }),
         // The retry failed outright — the first answer is still better than
         // an error, and its broken shader will be reported as a warning.
-        Err(_) => Ok(Reply {
-            text,
-            repaired: false,
-        }),
+        Err(_) => Ok(Reply { text, repaired }),
     }
 }
