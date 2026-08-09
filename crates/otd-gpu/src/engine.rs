@@ -980,9 +980,12 @@ impl TopEngine {
                     None if !std::path::Path::new(&file).exists() => {
                         Err(format!("no file at {file}"))
                     }
+                    None if !crate::video::tools_installed() => Err(format!(
+                        "could not read {file} — {}",
+                        crate::video::missing_ffmpeg()
+                    )),
                     None => Err(format!(
-                        "could not read {file} — ffmpeg/ffprobe not installed, \
-                         or not a video this build can decode"
+                        "could not read {file} — not a video ffmpeg can decode"
                     )),
                 }
             };

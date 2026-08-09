@@ -67,8 +67,9 @@ const NOTES: &[(&str, &str)] = &[
         "Still images — PNG, JPEG, WebP, BMP, TGA, TIFF — are decoded \
          in-process, with no external tool involved. Everything that moves \
          goes through an `ffmpeg` subprocess, so mp4, mov, mkv, webm, avi and \
-         animated GIF all play if ffmpeg is on the PATH, and the node says so \
-         plainly if it is not.\n\n\
+         animated GIF all play if ffmpeg is installed. It is looked for on the \
+         PATH and in the usual install directories, so a double-clicked app \
+         finds it too, and the node says so plainly when it cannot.\n\n\
          Playback is a function of the timeline, not a private play head: the \
          frame shown at time `t` is always the file at `t × speed`. Scrubbing \
          the timeline scrubs the movie, the loop range loops it, and a \
