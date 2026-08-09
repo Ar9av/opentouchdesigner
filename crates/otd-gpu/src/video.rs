@@ -29,11 +29,12 @@
 //! not stop the render.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::OnceLock;
 
 /// One decoded frame, RGBA8, tightly packed.
 pub struct Frame {
@@ -74,12 +75,93 @@ pub struct Info {
     pub duration: f64,
 }
 
+// -------------------------------------------------------- finding the tools
+
+/// Places to look for ffmpeg beyond `PATH`.
+///
+/// `Command::new("ffmpeg")` searches `PATH`, which is the right answer only
+/// when the app was started from a shell. Launched from Finder or the Dock, a
+/// bundle inherits `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else — so a
+/// Homebrew ffmpeg is invisible, and every movie node reports the tool as
+/// missing on a machine where it is plainly installed. These are the
+/// directories the installers actually use.
+const TOOL_DIRECTORIES: &[&str] = &[
+    "/opt/homebrew/bin", // Homebrew on Apple silicon
+    "/usr/local/bin",    // Homebrew on Intel, and most manual installs
+    "/opt/local/bin",    // MacPorts
+    "/usr/bin",
+    "/snap/bin",
+];
+
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// `PATH` first, so a deliberately chosen build still wins over a stray one.
+/// The search path is a parameter so a test can pose as a Finder launch
+/// without writing to the environment every other test is reading.
+fn find_tool_in(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    let exe = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    std::env::split_paths(path)
+        .chain(TOOL_DIRECTORIES.iter().map(PathBuf::from))
+        .map(|dir| dir.join(&exe))
+        .find(|candidate| is_executable(candidate))
+}
+
+fn find_tool(name: &str) -> Option<PathBuf> {
+    find_tool_in(name, &std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// The tools are looked for once: a miss is as worth caching as a hit, since
+/// this is asked on every failed cook.
+fn tool_path(name: &'static str) -> Option<&'static Path> {
+    static FFMPEG: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static FFPROBE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    let cell = if name == "ffprobe" { &FFPROBE } else { &FFMPEG };
+    cell.get_or_init(|| find_tool(name)).as_deref()
+}
+
+fn ffmpeg_command() -> Option<Command> {
+    tool_path("ffmpeg").map(Command::new)
+}
+
+fn ffprobe_command() -> Option<Command> {
+    tool_path("ffprobe").map(Command::new)
+}
+
+/// Whether both tools were found. Lets a caller say "ffmpeg is missing"
+/// rather than guessing at why a file would not open.
+pub fn tools_installed() -> bool {
+    tool_path("ffmpeg").is_some() && tool_path("ffprobe").is_some()
+}
+
+/// One wording for the one thing the user has to do about it.
+pub fn missing_ffmpeg() -> String {
+    "ffmpeg is not installed, or not where this app can find it \
+     (macOS: brew install ffmpeg)"
+        .to_string()
+}
+
 // ------------------------------------------------------------------ probing
 
 /// Ask ffprobe what a file is. Returns `None` when ffprobe is missing or the
 /// file is not media — the caller turns that into a message on the node.
 pub fn probe(path: &str) -> Option<Info> {
-    let out = Command::new("ffprobe")
+    let out = ffprobe_command()?
         .args([
             "-v",
             "error",
@@ -184,7 +266,10 @@ fn parse_mode_line(line: &str) -> Option<Mode> {
 /// of a second and no camera warm-up, which is far cheaper than opening the
 /// device several times to find out by trial.
 pub fn camera_modes(format: &str, device: &str) -> Vec<Mode> {
-    let out = Command::new("ffmpeg")
+    let Some(mut ffmpeg) = ffmpeg_command() else {
+        return Vec::new();
+    };
+    let out = ffmpeg
         .args(["-hide_banner", "-v", "error", "-f", format])
         .args(["-video_size", "1x1", "-framerate", "1"])
         .args(["-i", device, "-frames:v", "1", "-f", "null", "-"])
@@ -376,7 +461,7 @@ impl Source {
             None => (width, height, fps),
         };
 
-        let mut command = Command::new("ffmpeg");
+        let mut command = ffmpeg_command().ok_or_else(missing_ffmpeg)?;
         command.args(["-hide_banner", "-v", "error", "-f", format]);
         // AVFoundation's default of yuv420p is not one of the formats a Mac
         // camera offers; uyvy422 is what they all do.
@@ -408,7 +493,7 @@ impl Source {
     }
 
     fn spawn_file(&self, path: &str, start_index: i64) -> Result<Reader, String> {
-        let mut command = Command::new("ffmpeg");
+        let mut command = ffmpeg_command().ok_or_else(missing_ffmpeg)?;
         command.args(["-v", "error"]);
         if start_index > 0 {
             // Before -i, so ffmpeg seeks the container rather than decoding
@@ -627,6 +712,27 @@ mod tests {
         // A still image reports 0/0; it must not become an infinity.
         assert_eq!(parse_rational("0/0"), None);
         assert_eq!(parse_rational("nonsense"), None);
+    }
+
+    #[test]
+    fn ffmpeg_is_found_with_the_path_a_double_clicked_app_gets() {
+        // The bug this guards: launched from Finder, the app inherits only
+        // the system directories, so a Homebrew ffmpeg vanishes and every
+        // movie node claims the tool is not installed on a machine where it
+        // is plainly there.
+        //
+        // Skipped where ffmpeg genuinely is not installed — there is nothing
+        // to find, and this is a search test, not an ffmpeg test.
+        if find_tool("ffmpeg").is_none() {
+            return;
+        }
+        let bundle_path = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
+        let found = find_tool_in("ffmpeg", bundle_path);
+        assert!(
+            found.is_some(),
+            "ffmpeg is installed but was not found with a Finder-style PATH"
+        );
+        assert!(is_executable(&found.unwrap()));
     }
 
     #[test]
