@@ -105,7 +105,11 @@ impl Keys {
     pub fn load() -> Keys {
         let mut keys = Keys::from_file(&config_path()).unwrap_or_default();
         for provider in Provider::ALL {
-            if let Ok(value) = std::env::var(provider.env_var()) {
+            let Some(var) = provider.env_var() else {
+                // A CLI provider has no key to find. See `cli`.
+                continue;
+            };
+            if let Ok(value) = std::env::var(var) {
                 let key = Key::new(value);
                 if !key.is_empty() {
                     keys.set(*provider, key);

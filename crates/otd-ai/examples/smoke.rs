@@ -54,6 +54,7 @@ fn main() {
             provider: *provider,
             model: provider.default_model().to_string(),
             prompt: prompt.to_string(),
+            image: None,
             graph: &graph,
             parent: root,
             registry: &registry,

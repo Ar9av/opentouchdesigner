@@ -1,8 +1,9 @@
 //! `otd-ai` — describe a patch in a sentence and get operators.
 //!
-//! Three providers behind one call — Anthropic, OpenAI, OpenRouter — and one
-//! skill: turn a request into nodes, wires and parameter values in the
-//! network you are looking at.
+//! Five providers behind one call — Anthropic, OpenAI and OpenRouter over
+//! HTTP with a key; Claude Code and Codex as subprocesses on a subscription
+//! this machine is already signed in to — and one skill: turn a request into
+//! nodes, wires and parameter values in the network you are looking at.
 //!
 //! The two things worth knowing before reading further:
 //!
@@ -15,13 +16,16 @@
 //! No GPU, no UI, and no network call on the cook thread: [`ask`] blocks, and
 //! the editor runs it on a worker.
 
+pub mod cli;
 pub mod keys;
 pub mod patch;
 pub mod provider;
+pub mod vision;
 
 pub use keys::{Key, Keys};
 pub use patch::{Applied, Plan};
 pub use provider::{Provider, Request};
+pub use vision::Image;
 
 use otd_core::{Graph, NodeId, OpRegistry};
 
@@ -30,6 +34,11 @@ pub struct Ask<'a> {
     pub provider: Provider,
     pub model: String,
     pub prompt: String,
+    /// A still to work back from, if there is one. With an image attached the
+    /// request grows a second brief — see [`patch::reverse_engineer_prompt`] —
+    /// and the prompt itself becomes optional, because pointing at a picture
+    /// is a complete request on its own.
+    pub image: Option<vision::Image>,
     pub graph: &'a Graph,
     pub parent: NodeId,
     pub registry: &'a OpRegistry,
@@ -43,13 +52,31 @@ pub struct Ask<'a> {
 /// UI thread where the graph lives — so nothing that touches the network ever
 /// touches a frame.
 pub fn request_for(ask: &Ask) -> Request {
+    let network = patch::describe(ask.graph, ask.parent);
+    let prompt = ask.prompt.trim();
+
+    let user = match &ask.image {
+        // With an image, the reverse-engineering brief carries the request and
+        // anything typed is a refinement on top of it — "like this but slower",
+        // "these colours, no feedback". An empty box is a complete ask here,
+        // which it never is without a picture.
+        Some(_) => {
+            let mut text = format!("{network}\n\n{}", patch::reverse_engineer_prompt());
+            if !prompt.is_empty() {
+                text.push_str(&format!(
+                    "\n\nAND WHAT THEY ASKED FOR ON TOP OF THAT\n\
+                     Where this conflicts with the image, this wins:\n{prompt}"
+                ));
+            }
+            text
+        }
+        None => format!("{network}\n\nThe request:\n{prompt}"),
+    };
+
     Request::new(ask.provider, &ask.model)
         .system(patch::system_prompt(ask.registry))
-        .user(format!(
-            "{}\n\nThe request:\n{}",
-            patch::describe(ask.graph, ask.parent),
-            ask.prompt.trim()
-        ))
+        .user(user)
+        .image(ask.image.clone())
 }
 
 /// Turn a raw reply into a validated plan.
