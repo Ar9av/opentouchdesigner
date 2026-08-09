@@ -728,17 +728,37 @@ mod tests {
 /// shader a moment later on the node.
 pub type ShaderCheck = fn(source: &str, is_glsl: bool) -> Result<(), String>;
 
+/// The operators whose `source` parameter holds a shader, lowercased.
+///
+/// `source` is not a shader-only parameter name — the script DATs keep their
+/// Python in one — and a model will occasionally hang a stray `source` on an
+/// operator that has no such parameter at all. Neither is WGSL, and neither
+/// should be compiled as if it were.
+const SHADER_OPS: &[&str] = &["glsltop"];
+
 /// Every shader in a reply that will not compile, as `(node, error)`.
 ///
 /// Worth doing *before* the nodes exist. A model that writes a shader
 /// referencing something it invented produces a node that outlines red and an
 /// output that is silently black — the patch looks built and is not.
+///
+/// Keyed on the node's operator, not on it having a `source`: a stray `source`
+/// on a levelTOP is a parameter [`apply`] drops on the floor, and compiling it
+/// as WGSL buys nothing but a repair round trip the model cannot act on.
 pub fn shader_problems(value: &serde_json::Value, check: ShaderCheck) -> Vec<(String, String)> {
     let mut problems = Vec::new();
     let Some(nodes) = value.get("nodes").and_then(|n| n.as_array()) else {
         return problems;
     };
     for (i, node) in nodes.iter().enumerate() {
+        let is_shader = node
+            .get("op")
+            .and_then(|o| o.as_str())
+            .map(|op| SHADER_OPS.contains(&op.to_lowercase().as_str()))
+            .unwrap_or(false);
+        if !is_shader {
+            continue;
+        }
         let Some(params) = node.get("params").and_then(|p| p.as_object()) else {
             continue;
         };
@@ -826,6 +846,23 @@ mod shader_tests {
         });
         // `c` has a `text` parameter, not a `source` one — checking every
         // string a model wrote would reject prose.
+        assert!(shader_problems(&value, fake_check).is_empty());
+    }
+
+    #[test]
+    fn a_stray_source_param_on_a_non_shader_operator_is_not_checked() {
+        // Seen in the wild: the model hangs a `source` on a levelTOP, the
+        // string is compiled as WGSL, and a syntax error nobody can act on
+        // costs a repair round trip — the model quite correctly answers that
+        // the patch has no glslTOP in it. `apply` drops the parameter anyway.
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "threshold1", "op": "levelTOP",
+                  "params": { "source": "ghost" } },
+                { "name": "callbacks1", "op": "executeDAT",
+                  "params": { "source": "def onCook(dat):\n\tghost()\n" } }
+            ]
+        });
         assert!(shader_problems(&value, fake_check).is_empty());
     }
 
