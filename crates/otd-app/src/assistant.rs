@@ -885,6 +885,7 @@ fn send(app: &mut OtdApp) {
         image: app.assistant.image.clone(),
         graph: &app.graph,
         parent: app.current,
+        selected: app.selected,
         registry: &app.registry,
     });
 

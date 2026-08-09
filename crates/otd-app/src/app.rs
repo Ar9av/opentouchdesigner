@@ -744,6 +744,29 @@ impl OtdApp {
                     });
                 });
 
+                // Undo is on the bar, not only in the menu and the shortcut.
+                // It is the one thing reached for in a hurry and while looking
+                // at the network rather than at the menu, and a step you
+                // cannot see how to take is a step you do not take. Disabled
+                // when there is nothing to undo, so the bar also answers
+                // "is there anything to go back to".
+                ui.separator();
+                let (back, ahead) = self.history.depth();
+                if ui
+                    .add_enabled(back > 0, egui::Button::new("↶"))
+                    .on_hover_text("Undo (Cmd+Z)")
+                    .clicked()
+                {
+                    self.undo();
+                }
+                if ui
+                    .add_enabled(ahead > 0, egui::Button::new("↷"))
+                    .on_hover_text("Redo (Cmd+Shift+Z)")
+                    .clicked()
+                {
+                    self.redo();
+                }
+
                 ui.separator();
                 let icon = if self.playing { "⏸" } else { "▶" };
                 if ui.button(icon).on_hover_text("Play / pause time").clicked() {

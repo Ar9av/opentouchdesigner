@@ -41,6 +41,9 @@ pub struct Ask<'a> {
     pub image: Option<vision::Image>,
     pub graph: &'a Graph,
     pub parent: NodeId,
+    /// What the user has clicked on, if anything. This is the referent of
+    /// "it" in a request, and the node a new chain most likely hangs off.
+    pub selected: Option<NodeId>,
     pub registry: &'a OpRegistry,
 }
 
@@ -52,7 +55,7 @@ pub struct Ask<'a> {
 /// UI thread where the graph lives — so nothing that touches the network ever
 /// touches a frame.
 pub fn request_for(ask: &Ask) -> Request {
-    let network = patch::describe(ask.graph, ask.parent);
+    let network = patch::describe(ask.graph, ask.parent, ask.selected, ask.registry);
     let prompt = ask.prompt.trim();
 
     let user = match &ask.image {
