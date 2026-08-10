@@ -15,6 +15,7 @@ pub mod graph;
 pub mod history;
 pub mod param;
 pub mod project;
+pub mod tools;
 pub mod value;
 
 #[cfg(test)]
