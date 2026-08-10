@@ -454,6 +454,32 @@ impl OtdApp {
         }
     }
 
+    /// Cmd/Ctrl+S, and Cmd/Ctrl+Shift+S for Save As.
+    ///
+    /// Deliberately *not* behind the "is a text field focused" guard that
+    /// history uses. Undo defers to egui's character-level undo while you are
+    /// typing, which is right; saving has no such conflict, and the moment
+    /// somebody most wants Cmd+S is right after typing a name into a
+    /// parameter.
+    fn file_keys(&mut self, ctx: &egui::Context) {
+        let (save, save_as) = ctx.input(|i| {
+            let cmd = i.modifiers.command;
+            (
+                cmd && !i.modifiers.shift && i.key_pressed(egui::Key::S),
+                cmd && i.modifiers.shift && i.key_pressed(egui::Key::S),
+            )
+        });
+        if save_as {
+            self.save(None);
+        } else if save {
+            // `save` falls back to asking for a path when the project has
+            // never been written, so this is Save As for an untitled patch
+            // without being a second shortcut.
+            let path = self.project_path.clone();
+            self.save(path);
+        }
+    }
+
     /// Record the graph before a change, so it can be undone.
     ///
     /// `tag` names what is being edited. While it stays the same the edits are
@@ -619,6 +645,7 @@ impl eframe::App for OtdApp {
         self.cook_frame();
 
         self.history_keys(ui.ctx());
+        self.file_keys(ui.ctx());
 
         // F1 anywhere, including out of perform mode — a performer who cannot
         // find the way back out of a black screen has a real problem.
@@ -680,12 +707,18 @@ impl OtdApp {
                         self.open(None);
                         ui.close();
                     }
-                    if ui.button("Save").clicked() {
+                    if ui
+                        .add(egui::Button::new("Save").shortcut_text("Cmd+S"))
+                        .clicked()
+                    {
                         let p = self.project_path.clone();
                         self.save(p);
                         ui.close();
                     }
-                    if ui.button("Save As…").clicked() {
+                    if ui
+                        .add(egui::Button::new("Save As…").shortcut_text("Cmd+Shift+S"))
+                        .clicked()
+                    {
                         self.save(None);
                         ui.close();
                     }
