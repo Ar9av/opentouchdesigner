@@ -10,7 +10,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [animationCHOP](#animation--animationchop) — Keyframed curves over time.
 - [audiodeviceinCHOP](#audio-device-in--audiodeviceinchop) — Samples from an audio input, downmixed to mono.
 - [audiodeviceoutCHOP](#audio-device-out--audiodeviceoutchop) — Plays its first channel on an audio output.
-- [audiofileinCHOP](#audio-file-in--audiofileinchop) — Plays a WAV file, following the timeline.
+- [audiofileinCHOP](#audio-file-in--audiofileinchop) — Plays an audio file, following the timeline.
 - [audiospectrumCHOP](#audio-spectrum--audiospectrumchop) — Energy per frequency band, log spaced.
 - [beatCHOP](#beat--beatchop) — A tempo clock: ramp, pulse, count and bar.
 - [clockCHOP](#clock--clockchop) — Wall-clock time, which keeps running when the timeline is paused.
@@ -211,9 +211,9 @@ Plays its first channel on an audio output.
 
 ### Audio File In — `audiofileinCHOP`
 
-Plays a WAV file, following the timeline.
+Plays an audio file, following the timeline.
 
-Plays RIFF/WAVE — PCM in 8, 16, 24 or 32 bits, or 32-bit float — which is what a DAW bounces. Compressed formats wait for the video layer and its real media stack.
+Plays RIFF/WAVE — PCM in 8, 16, 24 or 32 bits, or 32-bit float — which is what a DAW bounces, decoded in-process with no external tool. Anything else — m4a, mp3, ogg, flac, or the soundtrack of a movie file — is decoded by `ffmpeg`, the same one Movie File In uses, so it plays if ffmpeg is installed and the node says so plainly if it is not.
 
 Playback is a function of the timeline, not a private play head: the sample at time `t` is always the file at `t × speed`. Scrubbing the timeline scrubs the audio, a loop range loops it, and a headless render reads exactly the samples the editor played.
 
