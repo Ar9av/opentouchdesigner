@@ -1796,7 +1796,7 @@ Frames from a camera or capture device.
 
 A camera, through ffmpeg. `Requested W`/`H` and the frame rate are requests rather than commands — a capture device only does the modes it does — so they are negotiated to the nearest mode the device actually reports, and the node shows what the device said if none will work.
 
-On macOS the first use raises the system camera-permission prompt, and nothing arrives until it is granted. The picture is always the newest frame decoded, so latency stays at about one frame; pausing the timeline pauses this like everything else in the network.
+On macOS the first use raises the system camera-permission prompt, and nothing arrives until it is granted. That prompt only appears for a properly signed bundle: macOS reads the usage description out of a *sealed* `Info.plist`, and a build whose bundle was never codesigned has none to read, so it is refused without ever being asked about. A refused camera is silent — the session opens, no error is printed and no frame ever comes — so the node says so itself after a few seconds rather than staying black with nothing to go on. The picture is always the newest frame decoded, so latency stays at about one frame; pausing the timeline pauses this like everything else in the network.
 
 *No inputs — this is a generator.*
 

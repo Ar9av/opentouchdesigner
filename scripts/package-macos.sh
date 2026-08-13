@@ -92,6 +92,23 @@ PLIST
 echo "==> icon"
 "$ROOT/scripts/make-icon.sh" "$APP/Contents/Resources/AppIcon.icns"
 
+echo "==> signing (ad-hoc)"
+# Ad-hoc, not a Developer ID — but *a* signature over the bundle, which is a
+# different thing from the linker-signed binary cargo leaves behind. Without
+# this step `codesign -dv` reports "Info.plist=not bound" and "Sealed
+# Resources=none", and that is not cosmetic: TCC reads the camera and
+# microphone usage descriptions out of a bundle's *sealed* Info.plist. Unbound,
+# there is no usage string to show, so macOS declines to prompt at all — and a
+# camera it will not ask about is a camera that never works. The node just sits
+# black, because a denied AVFoundation session reports nothing.
+#
+# Last, after the icon and both binaries are in place: signing seals what is
+# there, and anything written into the bundle afterwards breaks the seal.
+codesign --force --deep --sign - \
+    --identifier dev.opentouchdesigner.editor \
+    "$APP"
+codesign --verify --deep --strict "$APP" && echo "    sealed"
+
 echo "==> dmg"
 STAGE="$DIST/stage"
 mkdir -p "$STAGE"

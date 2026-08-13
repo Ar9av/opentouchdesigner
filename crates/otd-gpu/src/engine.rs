@@ -950,7 +950,7 @@ impl TopEngine {
         };
 
         let active = get("active").map(|v| v.as_bool()).unwrap_or(true);
-        if !active || file.trim().is_empty() {
+        if !active || crate::ops::nothing_to_open(camera, &file) {
             // Nothing asked for: release the device and show black at the
             // fallback size, so a downstream chain still has a shape.
             self.videos.remove(id);
