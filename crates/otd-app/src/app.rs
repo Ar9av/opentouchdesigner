@@ -554,7 +554,7 @@ impl OtdApp {
             )
         });
         if save_as {
-            self.save(None);
+            self.save_as();
         } else if save {
             // `save` falls back to asking for a path when the project has
             // never been written, so this is Save As for an untitled patch
@@ -688,6 +688,36 @@ impl OtdApp {
 
     // -------------------------------------------------------- project files
 
+    /// Ask where to put it, always.
+    ///
+    /// Not `save(None)`, which is what Save As used to call: that falls back
+    /// to the project's own path, so the one command whose entire job is to
+    /// ask never asked. It silently wrote over the file you were trying to
+    /// save a copy *of* — a Save As that behaves like Save is worse than one
+    /// that does nothing, because you only find out later.
+    pub fn save_as(&mut self) {
+        // Seeded with the current name, the way every other application does
+        // it: Save As is usually "the same thing, somewhere else" or "…with a
+        // number on the end", and retyping the name is the annoying part.
+        let suggested = self
+            .project_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "untitled.otd".to_string());
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("OpenTouchDesigner project", &["otd"])
+            .set_file_name(&suggested);
+        if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.save_file() {
+            self.save(Some(path));
+        }
+    }
+
+    /// Write the project. `path` if given, the project's own path if it has
+    /// one, and otherwise ask — an untitled patch has nowhere to go.
     pub fn save(&mut self, path: Option<PathBuf>) {
         let path = match path.or_else(|| self.project_path.clone()) {
             Some(p) => p,
@@ -834,7 +864,7 @@ impl OtdApp {
                         .add(egui::Button::new("Save As…").shortcut_text("Cmd+Shift+S"))
                         .clicked()
                     {
-                        self.save(None);
+                        self.save_as();
                         ui.close();
                     }
                     if ui
