@@ -353,3 +353,75 @@ fn a_torus_wraps_around_the_hole() {
         );
     }
 }
+
+#[test]
+fn a_blend_sop_morphs_from_one_shape_to_the_other() {
+    // Blend 0 must be exactly A and blend 1 exactly B's positions, or the
+    // ends of a morph animation snap. The middle must be somewhere between
+    // the two rather than either of them, which is what distinguishes a
+    // morph from a switch.
+    let mut p = Patch::new();
+    let a = p.add("boxSOP", "box1");
+    let b = p.add("sphereSOP", "sphere1");
+    let blend = p.add("blendSOP", "blend1");
+    // Move the sphere well off the box, so "did it move" is unambiguous.
+    p.set(b, "center", Value::Vec3([10.0, 0.0, 0.0]));
+    p.graph.connect(a, blend, 0).unwrap();
+    p.graph.connect(b, blend, 1).unwrap();
+
+    p.set(blend, "blend", Value::Float(0.0));
+    p.run(blend);
+    let at_zero: Vec<[f32; 3]> = p.geo(blend).points.iter().map(|q| q.position).collect();
+    let box_points: Vec<[f32; 3]> = p.geo(a).points.iter().map(|q| q.position).collect();
+    assert_eq!(at_zero, box_points, "blend 0 is input A untouched");
+
+    p.set(blend, "blend", Value::Float(1.0));
+    p.run(blend);
+    let at_one: Vec<[f32; 3]> = p.geo(blend).points.iter().map(|q| q.position).collect();
+    assert!(
+        at_one.iter().all(|q| q[0] > 5.0),
+        "blend 1 should have every point over at the sphere"
+    );
+
+    p.set(blend, "blend", Value::Float(0.5));
+    p.run(blend);
+    let half = p.geo(blend).points[0].position;
+    assert!(
+        half[0] > 1.0 && half[0] < 9.0,
+        "halfway should be between the two, got {half:?}"
+    );
+
+    // A morph is a deformation of A, so it keeps A's topology and point
+    // count however many points B has.
+    assert_eq!(p.geo(blend).points.len(), box_points.len());
+}
+
+#[test]
+fn blending_shapes_of_different_sizes_moves_every_point() {
+    // The failure this catches: pairing point n with point n and stopping at
+    // the shorter input leaves most of the larger shape sitting still, so a
+    // morph between two different primitives looks like a corner tearing off
+    // rather than a shape becoming another shape. `stretch` walks B
+    // proportionally instead.
+    let mut p = Patch::new();
+    let a = p.add("sphereSOP", "sphere1");
+    let b = p.add("circleSOP", "circle1");
+    let blend = p.add("blendSOP", "blend1");
+    p.set(b, "center", Value::Vec3([0.0, 20.0, 0.0]));
+    p.graph.connect(a, blend, 0).unwrap();
+    p.graph.connect(b, blend, 1).unwrap();
+    p.set(blend, "blend", Value::Float(1.0));
+    p.run(blend);
+
+    let n_a = p.geo(a).points.len();
+    let n_b = p.geo(b).points.len();
+    assert!(n_a != n_b, "the point counts must differ for this to mean anything");
+
+    let stuck = p
+        .geo(blend)
+        .points
+        .iter()
+        .filter(|q| q.position[1] < 5.0)
+        .count();
+    assert_eq!(stuck, 0, "{stuck} of {n_a} points never made it to input B");
+}

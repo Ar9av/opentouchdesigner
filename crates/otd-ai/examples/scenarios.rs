@@ -128,6 +128,30 @@ const SCENARIOS: &[Scenario] = &[
         wants_image: false,
     },
     Scenario {
+        name: "looks",
+        asking: "the named looks — should reach ditherTOP / voronoiTOP / \
+                 toonTOP / flowTOP rather than writing a shader for each",
+        prompt: "give me a retro dithered 1-bit look, and a separate branch \
+                 with cracked-glass cells drifting",
+        setup: empty,
+        wants_image: false,
+    },
+    Scenario {
+        name: "morph",
+        asking: "blendSOP plus a moving blend — a morph that actually animates",
+        prompt: "morph a sphere into a torus, back and forth, rendered in 3d",
+        setup: empty,
+        wants_image: false,
+    },
+    Scenario {
+        name: "depth",
+        asking: "renderTOP depth output feeding something, rather than a fake \
+                 depth made out of a ramp",
+        prompt: "render a 3d scene and use its depth to add fog in the distance",
+        setup: empty,
+        wants_image: false,
+    },
+    Scenario {
         name: "simplify",
         asking: "removing rather than adding — does it reach for `delete` and `set`, \
                  and does it leave the source and the output alone",

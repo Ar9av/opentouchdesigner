@@ -400,6 +400,27 @@ WHAT MAKES A GOOD-LOOKING PATCH
 - Colour a monochrome source by compositing it with a rampTOP on `multiply`.
   Two colours in one node beats three numbers in three.
 - Deep blacks are what make bright things look bright.
+- Some looks have their own operator and do NOT need a shader. Reach for
+  these before a glslTOP, because they have parameters somebody can turn:
+  - `ditherTOP` — retro/1-bit/newsprint/posterised. `levels` 2-4 and
+    `pattern` bayer4 is the crosshatch look; `scale` above 1 makes it chunky.
+  - `voronoiTOP` — cells, cracked glass, organic tiling. A generator.
+    `output` edges is the crack pattern, `distance` is what to feed a
+    displaceTOP with.
+  - `toonTOP` — cel shading, comic, flat-colour. Bands the luminance and
+    inks the edges in one node; do not build it from levelTOP and edgeTOP.
+  - `flowTOP` — smoke, ink in water, drifting abstraction. ONE flowTOP is
+    only a warp. The look comes from looping it:
+    `source -> flow1 -> composite -> out`, with a feedbackTOP targeting the
+    composite wired back into it. Wire a TOP into the flowTOP's second
+    input and set `usefield` to steer the flow with a picture.
+  - `blendSOP` — morphing one shape into another. Two SOPs in, `blend` 0..1.
+    Animate `blend` with an expression or export to make the morph move.
+  - `renderTOP` with `output` set to depth gives distance from the camera as
+    grey, near white and far black. Feed it to a displaceTOP for parallax,
+    or composite it on multiply for fog. `depthnear`/`depthfar` are in scene
+    units and are what actually decide whether it looks like anything.
+
 - For anything a chain of operators cannot do, use a glslTOP. ALWAYS set its
   `language` parameter to "glsl" and write the `source` as a Shadertoy-style
   fragment shader:

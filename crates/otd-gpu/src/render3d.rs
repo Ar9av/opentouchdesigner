@@ -30,6 +30,7 @@ struct SceneUniforms {
     base_color: [f32; 4],
     material: [f32; 4],
     render: [f32; 4],
+    depth_range: [f32; 4],
 }
 
 /// One thing to draw: geometry, where it is, what it looks like, and how many
@@ -59,6 +60,10 @@ pub struct SceneDescription {
     pub light_color: [f32; 4],
     pub background: [f32; 4],
     pub ambient: f32,
+    /// Render distance-from-camera as grey instead of shading the scene.
+    pub depth: bool,
+    pub depth_near: f32,
+    pub depth_far: f32,
     pub cull: Option<wgpu::Face>,
     pub wireframe: bool,
 }
@@ -94,6 +99,9 @@ pub fn describe(
         light_color,
         background: scene::v4(render_node, ctx, "background"),
         ambient: scene::f(render_node, ctx, "ambient"),
+        depth: scene::s(render_node, ctx, "output") == "depth",
+        depth_near: scene::f(render_node, ctx, "depthnear"),
+        depth_far: scene::f(render_node, ctx, "depthfar"),
         cull: match scene::menu(render_node, ctx, "cull") {
             1 => Some(wgpu::Face::Front),
             2 => None,
@@ -640,7 +648,13 @@ impl Renderer {
                 light_color: description.light_color,
                 base_color: item.base_color,
                 material: item.material,
-                render: [description.ambient, 1.0, item.shading as u8 as f32, 0.0],
+                render: [
+                    description.ambient,
+                    1.0,
+                    item.shading as u8 as f32,
+                    if description.depth { 1.0 } else { 0.0 },
+                ],
+                depth_range: [description.depth_near, description.depth_far, 0.0, 0.0],
             };
             let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("otd render3d uniforms"),

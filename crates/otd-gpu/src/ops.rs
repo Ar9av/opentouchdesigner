@@ -678,6 +678,14 @@ fn params_render() -> IndexMap<String, Param> {
         "ambient" => Param::float(0.12).with_label("Ambient").with_range(0.0, 1.0),
         "wireframe" => Param::bool(false).with_label("Wireframe"),
         "cull" => Param::menu("back", &["back", "front", "none"]).with_label("Cull"),
+        // A depth pass is the same draw with the shading skipped, so it is a
+        // mode on this operator rather than a second one you have to keep in
+        // sync with it — the camera, the geometry and the resolution all have
+        // to match for the result to line up with the colour render, and the
+        // surest way to guarantee that is for there to be one of each.
+        "output" => Param::menu("color", &["color", "depth"]).with_label("Output"),
+        "depthnear" => Param::float(0.1).with_label("Depth Near").with_range(0.0, 1000.0),
+        "depthfar" => Param::float(20.0).with_label("Depth Far").with_range(0.01, 10000.0),
     })
 }
 
@@ -805,6 +813,113 @@ fn pack_glsl(n: &Node, c: &EvalContext) -> PackedParams {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------- dither TOP
+
+fn params_dither() -> IndexMap<String, Param> {
+    params! {
+        "levels" => Param::int(4).with_label("Levels").with_range(2.0, 64.0),
+        "pattern" => Param::menu("bayer4", &["bayer4", "bayer8", "noise", "none"])
+            .with_label("Pattern"),
+        "strength" => Param::float(1.0).with_label("Strength").with_range(0.0, 1.0),
+        "scale" => Param::float(1.0).with_label("Pixel Size").with_range(1.0, 32.0),
+        "monochrome" => Param::bool(false).with_label("Monochrome"),
+    }
+}
+
+fn pack_dither(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "levels"),
+            menu(n, c, "pattern"),
+            f(n, c, "strength"),
+            b(n, c, "monochrome"),
+        ],
+        [f(n, c, "scale"), 0.0, 0.0, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// --------------------------------------------------------------- voronoi TOP
+
+fn params_voronoi() -> IndexMap<String, Param> {
+    with_res(params! {
+        "scale" => Param::float(8.0).with_label("Cells").with_range(1.0, 128.0),
+        "speed" => Param::float(0.4).with_label("Speed").with_range(0.0, 8.0),
+        "jitter" => Param::float(1.0).with_label("Jitter").with_range(0.0, 1.0),
+        "output" => Param::menu("cells", &["cells", "edges", "distance"])
+            .with_label("Output"),
+        "color1" => Param::rgba([0.0, 0.0, 0.0, 1.0]).with_label("Color 1"),
+        "color2" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Color 2"),
+    })
+}
+
+fn pack_voronoi(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "scale"),
+            f(n, c, "speed"),
+            f(n, c, "jitter"),
+            menu(n, c, "output"),
+        ],
+        v4(n, c, "color1"),
+        v4(n, c, "color2"),
+        [0.0; 4],
+    ]
+}
+
+// ------------------------------------------------------------------ toon TOP
+
+fn params_toon() -> IndexMap<String, Param> {
+    params! {
+        "bands" => Param::int(4).with_label("Bands").with_range(2.0, 32.0),
+        "edge" => Param::float(2.0).with_label("Ink Strength").with_range(0.0, 16.0),
+        "edgewidth" => Param::float(1.0).with_label("Ink Width (px)").with_range(0.0, 8.0),
+        "saturation" => Param::float(1.3).with_label("Saturation").with_range(0.0, 4.0),
+        "inkcolor" => Param::rgba([0.0, 0.0, 0.0, 1.0]).with_label("Ink Color"),
+    }
+}
+
+fn pack_toon(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "bands"),
+            f(n, c, "edge"),
+            f(n, c, "edgewidth"),
+            f(n, c, "saturation"),
+        ],
+        v4(n, c, "inkcolor"),
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// ------------------------------------------------------------------ flow TOP
+
+fn params_flow() -> IndexMap<String, Param> {
+    params! {
+        "amount" => Param::float(6.0).with_label("Amount (px)").with_range(0.0, 128.0),
+        "scale" => Param::float(3.0).with_label("Field Scale").with_range(0.1, 32.0),
+        "speed" => Param::float(0.3).with_label("Field Speed").with_range(0.0, 8.0),
+        "usefield" => Param::bool(false).with_label("Steer From Input 2"),
+        "fieldmix" => Param::float(1.0).with_label("Field Mix").with_range(0.0, 1.0),
+    }
+}
+
+fn pack_flow(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "amount"),
+            f(n, c, "scale"),
+            f(n, c, "speed"),
+            b(n, c, "usefield"),
+        ],
+        [f(n, c, "fieldmix"), 0.0, 0.0, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+    ]
 }
 
 /// Whether a video node has been given nothing to open.
@@ -1208,6 +1323,80 @@ fn specs() -> &'static Vec<TopSpec> {
                 two_pass: false,
                 dynamic_shader: false,
                 pack: pack_threshold,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "ditherTOP",
+                    label: "Dither",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Quantise to few levels, with an ordered or noise dither.",
+                    time_dependent: false,
+                    params: params_dither,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/dither.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_dither,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "voronoiTOP",
+                    label: "Voronoi",
+                    family: Family::Top,
+                    inputs: &[],
+                    input_families: &[],
+                    summary: "Cellular noise, as flat cells, edges or a distance field.",
+                    // Animated: the cells wander unless Speed is zero, and
+                    // proving that from here would cost more than cooking it.
+                    time_dependent: true,
+                    params: params_voronoi,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/voronoi.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_voronoi,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "toonTOP",
+                    label: "Toon",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Cel shading: flatten the luminance into bands and ink the edges.",
+                    time_dependent: false,
+                    params: params_toon,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/toon.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_toon,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "flowTOP",
+                    label: "Flow",
+                    family: Family::Top,
+                    inputs: &["in", "field"],
+                    input_families: &[],
+                    summary: "Advect the picture along a curl-noise field. Loop it for smoke.",
+                    time_dependent: true,
+                    params: params_flow,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/flow.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_flow,
             },
             TopSpec {
                 def: OpDef {

@@ -88,6 +88,93 @@ const NOTES: &[(&str, &str)] = &[
          it. Scrubbing is unaffected — a jump seeks rather than races.",
     ),
     (
+        "flowTOP",
+        "One Flow TOP is a warp: every pixel reads from upstream of a \
+         curl-noise field, so the picture leans. The look people mean by \
+         *flow* — smoke, ink in water, drifting abstraction — is that warp \
+         **in a loop**, where each frame advects the last one a little \
+         further:\n\n\
+         `source -> flow1 -> compositeTOP` with a Feedback TOP targeting the \
+         composite and wired back into it.\n\n\
+         The field is the curl of a noise field rather than the noise itself, \
+         and that is not a detail. A curl is divergence-free: it swirls \
+         without compressing the image into a point or tearing a hole in it, \
+         which a plain noise vector field does within a second of being \
+         looped. Wire a TOP into the second input and turn on Steer From \
+         Input 2 to drive the flow with a picture — a Ramp for a wind \
+         direction, a camera difference for something that follows you.",
+    ),
+    (
+        "ditherTOP",
+        "Quantising alone gives flat bands. Dithering adds a pattern *before* \
+         the quantiser so the rounding error alternates between neighbouring \
+         pixels and the eye averages it back into the tone that was there — \
+         which is how two colours can look like a gradient.\n\n\
+         Which pattern is the whole look: `bayer4` and `bayer8` are the \
+         ordered crosshatch of early games and newsprint, `noise` is closer \
+         to film grain, and `none` is hard posterisation with no dither at \
+         all. Pixel Size above 1 enlarges the matrix, which is what makes it \
+         read as chunky rather than as texture.",
+    ),
+    (
+        "voronoiTOP",
+        "Every pixel finds the nearest of a set of points scattered one per \
+         cell. What you do with that answer is `output`: `cells` flat-fills \
+         each region, which is stained glass; `edges` draws where two \
+         regions meet, which is cracked glass and antialiases for free \
+         because it is the *difference* between the two nearest distances; \
+         `distance` is the raw field, and is what you want when this feeds a \
+         Displace TOP rather than being looked at.\n\n\
+         A generator, so nothing is wired in. Jitter at 0 is a regular grid \
+         and at 1 the points wander on their own phases, so the pattern \
+         boils rather than sliding as one sheet.",
+    ),
+    (
+        "toonTOP",
+        "Cel shading is two ideas that only look like one, and this operator \
+         is both because they want to share a threshold — ink drawn where \
+         the bands already change is invisible, and ink drawn anywhere else \
+         is a mess.\n\n\
+         Posterising the *luminance*, and only the luminance, collapses a \
+         smooth gradient into flat steps while leaving hue alone, which is \
+         what keeps the result looking painted rather than colour-crushed. \
+         Flattening luminance washes colour out, so Saturation defaults \
+         above 1 to put it back. The ink is a Sobel edge multiplied over the \
+         top: multiplied rather than added, because added lines glow, which \
+         is the opposite of a drawn line.",
+    ),
+    (
+        "blendSOP",
+        "Interpolating point positions is the whole trick, and it only works \
+         when the two shapes agree about which point is which. They almost \
+         never do, so the interesting parameter is Match Points, which is \
+         how the correspondence gets invented.\n\n\
+         `stretch` walks input B proportionally — point 0 of a 100-point \
+         shape pairs with point 0 of a 500-point one, point 50 with point \
+         250 — so both surfaces are traversed end to end and a morph between \
+         two different primitives moves every point. `index` pairs point *n* \
+         with point *n*, which is right when the two are the same topology \
+         deformed two ways, and wrong otherwise.\n\n\
+         The output keeps input A's topology and point count. Blend is a \
+         deformation of A towards B, so at 1 you have A's connectivity \
+         holding B's shape; geometry whose triangles rewired themselves \
+         halfway through would be a cut, not a morph.",
+    ),
+    (
+        "renderTOP",
+        "Depth output is the same draw with the shading skipped, writing \
+         distance from the camera as grey — near white, far black, so an \
+         unwritten background is black and the result multiplies straight \
+         into a composite as a mask.\n\n\
+         It is metric distance between Depth Near and Depth Far, not the \
+         depth buffer's own value. That one is `1/z` shaped by the \
+         projection and puts almost all of its precision in the first few \
+         units, so everything past arm's length reads the same white and \
+         anything downstream sees a flat card. Set the near and far to the \
+         part of the scene you care about; they are what decide whether the \
+         pass looks like anything.",
+    ),
+    (
         "videodeviceinTOP",
         "A camera, through ffmpeg. `Requested W`/`H` and the frame rate are \
          requests rather than commands — a capture device only does the modes \
