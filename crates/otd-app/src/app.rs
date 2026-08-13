@@ -6,7 +6,7 @@
 //! visible to the user: pan a heavy branch off screen and it stops costing
 //! anything (PLAN.md §4).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,12 +39,25 @@ pub struct OtdApp {
     pub smoothed_fps: f64,
     pub smoothed_cook_ms: f64,
 
+    /// The node the parameter panel is showing, and the referent of "it" in
+    /// an assistant request. The *primary* of the selection rather than a
+    /// second idea of what is selected: whenever `selection` is non-empty this
+    /// is one of its members, and clearing one clears the other. Keeping it
+    /// separate is what lets a five-node selection still have a parameter
+    /// panel — the alternative is showing nothing the moment you select two
+    /// things, which is worse.
     pub selected: Option<NodeId>,
+    /// Everything selected, primary included. Delete and drag act on all of
+    /// it; the parameter panel acts on `selected`.
+    pub selection: BTreeSet<NodeId>,
     pub viewer: Option<NodeId>,
     /// The component whose network is on screen. Entering a component is
     /// just changing this — the graph is one tree throughout.
     pub current: NodeId,
     pub view: CanvasView,
+    /// Where the network editor was drawn last frame. Drag-and-drop needs it
+    /// to turn a pointer position into a place in the network.
+    pub canvas_rect: egui::Rect,
     pub drag: Option<DragState>,
     pub create_dialog: Option<CreateDialog>,
     pub show_perf: bool,
@@ -117,9 +130,11 @@ impl OtdApp {
             smoothed_fps: 60.0,
             smoothed_cook_ms: 0.0,
             selected: None,
+            selection: BTreeSet::new(),
             viewer: None,
             current: NodeId::default(),
             view: CanvasView::default(),
+            canvas_rect: egui::Rect::NOTHING,
             drag: None,
             create_dialog: None,
             show_perf: true,
@@ -163,7 +178,10 @@ impl OtdApp {
         self.time = CookContext::default();
         self.current = self.graph.root();
         self.viewer = Some(out);
-        self.selected = self.graph.walk().into_iter().nth(1);
+        self.clear_selection();
+        if let Some(first) = self.graph.walk().into_iter().nth(1) {
+            self.select_only(first);
+        }
         self.status = format!("{name} patch");
     }
 
@@ -297,30 +315,33 @@ impl OtdApp {
         else {
             return;
         };
+        self.import_component_at(&path);
+    }
+
+    /// The same, for a `.otdc` that arrived by being dropped on the network.
+    pub fn import_component_at(&mut self, path: &std::path::Path) -> Option<NodeId> {
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "component".into());
-        let Some(def) = self.registry.get("containerCOMP").cloned() else {
-            return;
-        };
+        let def = self.registry.get("containerCOMP").cloned()?;
         let parent = self.current;
         self.edit("import component");
         self.history.end_gesture();
-        let Ok(id) = self.graph.create(parent, &def, Some(&name)) else {
-            return;
-        };
+        let id = self.graph.create(parent, &def, Some(&name)).ok()?;
         match self
             .graph
             .attach_external(id, &path.to_string_lossy(), &self.registry)
         {
             Ok(()) => {
-                self.selected = Some(id);
+                self.select_only(id);
                 self.status = format!("Imported {}", path.display());
+                Some(id)
             }
             Err(e) => {
                 let _ = self.graph.remove(id);
                 self.status = format!("Import failed: {e}");
+                None
             }
         }
     }
@@ -406,6 +427,69 @@ impl OtdApp {
         }
     }
 
+    // --------------------------------------------------------- selection
+    //
+    // Every path in and out of the selection goes through these, so the
+    // invariant — `selected` is in `selection`, or both are empty — holds by
+    // construction rather than by everybody remembering.
+
+    /// Click with no modifier: this node and nothing else.
+    pub fn select_only(&mut self, id: NodeId) {
+        self.selection.clear();
+        self.selection.insert(id);
+        self.selected = Some(id);
+    }
+
+    /// Shift- or Cmd-click: add if absent, remove if present.
+    pub fn select_toggle(&mut self, id: NodeId) {
+        if self.selection.remove(&id) {
+            // Removing the primary promotes whatever is left, so a selection
+            // that still has members still has a parameter panel.
+            if self.selected == Some(id) {
+                self.selected = self.selection.iter().next().copied();
+            }
+        } else {
+            self.selection.insert(id);
+            self.selected = Some(id);
+        }
+    }
+
+    /// Cmd/Ctrl+A: everything in the network on screen.
+    ///
+    /// The network on screen, not the whole graph — the canvas is the thing
+    /// being selected into, and reaching inside components you are not
+    /// looking at would make the next Delete much bigger than it looked.
+    pub fn select_all(&mut self) {
+        self.selection = self.graph.node(self.current).children.iter().copied().collect();
+        // Keep the primary if it survived, so Cmd+A does not swap the
+        // parameter panel out from under you.
+        if !self.selected.map(|s| self.selection.contains(&s)).unwrap_or(false) {
+            self.selected = self.selection.iter().next().copied();
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.selected = None;
+    }
+
+    pub fn is_selected(&self, id: NodeId) -> bool {
+        self.selection.contains(&id)
+    }
+
+    /// Cmd/Ctrl+A, and Escape to drop the selection.
+    ///
+    /// Behind the text-focus guard: Cmd+A in a parameter field is select-all
+    /// *text*, and stealing it would make the fields hard to edit.
+    fn selection_keys(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A)) {
+            self.select_all();
+        }
+    }
+
     // -------------------------------------------------------- navigation
 
     /// Step inside a component. Anything else is ignored, so a stray
@@ -413,7 +497,7 @@ impl OtdApp {
     pub fn enter(&mut self, id: NodeId) {
         if self.graph.get(id).map(|n| n.family) == Some(otd_core::Family::Comp) {
             self.current = id;
-            self.selected = None;
+            self.clear_selection();
             self.view = CanvasView::default();
         }
     }
@@ -423,7 +507,7 @@ impl OtdApp {
         if let Some(parent) = self.graph.get(self.current).and_then(|n| n.parent) {
             let was = self.current;
             self.current = parent;
-            self.selected = Some(was);
+            self.select_only(was);
             self.view = CanvasView::default();
         }
     }
@@ -519,6 +603,10 @@ impl OtdApp {
     fn restore(&mut self, graph: Graph) {
         self.graph = graph;
         self.selected = self.selected.filter(|id| self.graph.contains(*id));
+        self.selection.retain(|id| self.graph.contains(*id));
+        if self.selected.is_none() {
+            self.selected = self.selection.iter().next().copied();
+        }
         self.viewer = self.viewer.filter(|id| self.graph.contains(*id));
         if !self.graph.contains(self.current) {
             self.current = self.graph.root();
@@ -529,40 +617,61 @@ impl OtdApp {
 
     // ---------------------------------------------------------- graph edits
 
+    /// Delete everything selected, as one undo step.
     pub fn delete_selected(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
         self.edit("delete");
         self.history.end_gesture();
-        let Some(id) = self.selected.take() else {
-            return;
-        };
-        // Rescue the wire: if the node had exactly one input and one consumer,
-        // reconnect them so deleting from the middle of a chain isn't
-        // destructive.
-        let input = self.graph.node(id).inputs.first().copied().flatten();
-        let consumers = self.graph.consumers(id);
-        if let Some(src) = input {
-            for c in &consumers {
-                let slots: Vec<usize> = self
-                    .graph
-                    .node(*c)
-                    .inputs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| **s == Some(id))
-                    .map(|(i, _)| i)
-                    .collect();
-                for slot in slots {
-                    let _ = self.graph.connect(src, *c, slot);
-                }
+        let doomed: Vec<NodeId> = std::mem::take(&mut self.selection).into_iter().collect();
+        self.selected = None;
+        self.delete_all(&doomed);
+    }
+
+    /// Remove a set of nodes as one gesture, healing the chains they sat in.
+    ///
+    /// The splices are all worked out first, against the graph as it stands.
+    /// Healing node by node reads a graph the previous removal already
+    /// changed: deleting `b` and `c` from `a -> b -> c -> d` would look up
+    /// `c`'s input after `b` had gone, find nothing, and leave `d` empty —
+    /// which is a black texture and looks like the delete broke the patch.
+    fn delete_all(&mut self, doomed: &[NodeId]) {
+        let live: Vec<NodeId> = doomed
+            .iter()
+            .copied()
+            .filter(|id| self.graph.contains(*id))
+            .collect();
+        let splices = otd_ai::patch::splices_for(&self.graph, &live);
+        for id in &live {
+            self.engines.top.forget(*id);
+            self.thumbs.remove(id);
+            self.cook.forget(*id);
+            let _ = self.graph.remove(*id);
+            if self.viewer == Some(*id) {
+                self.viewer = None;
             }
         }
-        self.engines.top.forget(id);
-        self.thumbs.remove(&id);
-        self.cook.forget(id);
-        let _ = self.graph.remove(id);
-        if self.viewer == Some(id) {
-            self.viewer = None;
+        for (src, consumer, slot) in splices {
+            let _ = self.graph.connect(src, consumer, slot);
         }
+    }
+
+    /// Empty the network on screen — the `/clear` command and the File menu.
+    ///
+    /// One undo, like everything else the assistant does, because the whole
+    /// point of it is to be the fast way back from a patch that went wrong.
+    pub fn clear_network(&mut self) -> usize {
+        let doomed: Vec<NodeId> = self.graph.node(self.current).children.clone();
+        if doomed.is_empty() {
+            return 0;
+        }
+        self.edit("clear");
+        self.history.end_gesture();
+        self.clear_selection();
+        self.delete_all(&doomed);
+        self.viewer = None;
+        doomed.len()
     }
 
     pub fn create_node(&mut self, type_name: &str, world_pos: egui::Vec2) -> Option<NodeId> {
@@ -573,7 +682,7 @@ impl OtdApp {
         let parent = self.current;
         let id = self.graph.create(parent, &def, None).ok()?;
         self.graph.node_mut_quiet(id).pos = [world_pos.x, world_pos.y];
-        self.selected = Some(id);
+        self.select_only(id);
         Some(id)
     }
 
@@ -619,7 +728,7 @@ impl OtdApp {
                 // Undoing across an Open would restore the previous project's
                 // graph into this project's file. History starts here.
                 self.history.clear();
-                self.selected = None;
+                self.clear_selection();
                 // Show the last Null TOP, which is the usual output anchor.
                 self.viewer = self
                     .graph
@@ -646,6 +755,7 @@ impl eframe::App for OtdApp {
 
         self.history_keys(ui.ctx());
         self.file_keys(ui.ctx());
+        self.selection_keys(ui.ctx());
 
         // F1 anywhere, including out of perform mode — a performer who cannot
         // find the way back out of a black screen has a real problem.
@@ -668,6 +778,11 @@ impl eframe::App for OtdApp {
         crate::assistant::bar(self, ui.ctx());
         crate::assistant::window(self, ui.ctx());
         self.output_viewport(ui.ctx());
+
+        // Files can be dropped in either mode: a performer swapping a clip
+        // mid-show should not have to leave the output to do it.
+        crate::media::hover_overlay(self, ui.ctx());
+        crate::media::handle_drops(self, ui.ctx());
 
         // A realtime tool repaints continuously; there is always time moving.
         ui.ctx().request_repaint();
@@ -769,13 +884,14 @@ impl OtdApp {
                             if ui.button(item.name).on_hover_text(item.summary).clicked() {
                                 self.edit("palette");
                                 let id = item.build(&mut self.graph, &self.registry, self.current);
-                                self.selected = Some(id);
+                                self.select_only(id);
                                 self.status = format!("added {} from the palette", item.name);
                                 ui.close();
                             }
                         }
                     });
                 });
+                self.media_menu(ui);
 
                 // Undo is on the bar, not only in the menu and the shortcut.
                 // It is the one thing reached for in a hurry and while looking
@@ -841,7 +957,7 @@ impl OtdApp {
                     };
                     if ui.selectable_label(false, text).clicked() {
                         self.current = *id;
-                        self.selected = None;
+                        self.clear_selection();
                     }
                 }
 
@@ -884,6 +1000,52 @@ impl OtdApp {
                     }
                 });
             });
+        });
+    }
+
+    /// Your own material, and the things to do to it.
+    ///
+    /// Everything here is reachable another way — Tab finds any operator, and
+    /// a file parameter has a Browse button. It is a menu because the other
+    /// ways all require knowing the name of an operator first.
+    fn media_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Media", |ui| {
+            if ui
+                .button("Import Media…")
+                .on_hover_text("Movies, images and audio — or just drop the files on the network")
+                .clicked()
+            {
+                crate::media::import_dialog(self);
+                ui.close();
+            }
+            if ui
+                .button("Use Webcam")
+                .on_hover_text("A Video Device In, viewing straight away")
+                .clicked()
+            {
+                crate::media::add_webcam(self);
+                ui.close();
+            }
+            ui.separator();
+
+            let selected = self
+                .selected
+                .filter(|s| self.graph.contains(*s))
+                .map(|s| self.graph.node(s).name.clone());
+            let label = match &selected {
+                Some(name) => format!("Add Effect after {name}"),
+                None => "Add Effect".to_string(),
+            };
+            ui.add_enabled_ui(selected.is_some(), |ui| {
+                ui.menu_button(label, |ui| crate::media::effects_menu(self, ui));
+            });
+            if selected.is_none() {
+                ui.label(
+                    egui::RichText::new("select an operator to put an effect after it")
+                        .weak()
+                        .small(),
+                );
+            }
         });
     }
 
@@ -1008,7 +1170,7 @@ impl OtdApp {
                 // Clicking a row selects the node, so the monitor is a way in
                 // rather than a wall of numbers to go hunting from.
                 if let Some(id) = jump {
-                    self.selected = Some(id);
+                    self.select_only(id);
                 }
             });
         self.show_monitor = open;

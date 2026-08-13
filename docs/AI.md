@@ -175,7 +175,52 @@ Anything still broken after that is reported as a warning rather than left as
 a red node and a silently black output. So is a chain the model built and
 forgot to wire in — which is what they do when asked to *add* to a patch.
 
-The network is only ever added to. Nothing is deleted or rewired behind you.
+## Changing and removing, not just adding
+
+For a long time the network was only ever added to, and that was the wrong
+promise. "Make it simpler" is one of the most common things anybody types, and
+a model that can only add answers it by adding — which is the opposite. So a
+plan now carries three verbs:
+
+- `nodes` creates, as it always did.
+- `set` retunes an operator that already exists. It exists because naming one
+  under `nodes` gets you a *renamed duplicate* beside the original with the
+  original untouched, which is a confusing way to fail at "slow the zoom down".
+- `delete` removes operators, by name.
+
+Deleting out of the middle of a chain splices the node's input into whatever
+it fed, so the chain stays joined. That is not a nicety: without it, "make
+this simpler" leaves the survivors with an empty input 0, which is a black
+texture and looks like the delete broke the patch.
+
+Deletion is fenced in three ways, none of which cost anything when the model
+has read the request correctly:
+
+- **Direct children of the network on screen only.** A name can resolve to a
+  path inside a component you are not looking at. A delete you cannot watch
+  happen is not one you can catch.
+- **Never a node the same plan just created.** That is a model talking to
+  itself, and honouring it makes the reported node count a lie.
+- **Never the whole network.** Clearing the canvas is `/clear` — one word,
+  undoable, obviously deliberate. Arriving there through "make it simpler" is
+  not what anybody meant.
+
+It is still one undo. The checkpoint is taken before the first change of any
+kind, so `Cmd/Ctrl+Z` puts back everything a plan created, retuned *and*
+removed, in one go.
+
+## Commands the box answers itself
+
+The prompt box is the only place in the editor you type a sentence, so it is
+where a slash command gets typed whether or not one exists. Two do, and
+neither costs a round trip:
+
+- `/clear` empties the network you are looking at. One undo.
+- `/help` lists them.
+
+Anything else starting with `/` is reported as an unknown command rather than
+sent to a model, which would otherwise answer "/clear" with a patch about
+clearing — slowly, and for money.
 
 ## Shaders: GLSL, not WGSL
 
@@ -190,6 +235,27 @@ Asked for WGSL, `gpt-5-mini` produced a shader that would not compile, and
 compiled first time. GLSL is the dialect with a million worked examples in
 every model's training data; WGSL is not, yet. Meeting the model where it is
 beats insisting on the house style, and the GLSL TOP accepts both anyway.
+
+Meeting the model where it is has a cost, though, and it took a black screen
+to find it. Every model that knows what a node-based visual tool is knows
+TouchDesigner, so asked for "crazy effects on top of my video" it wrote
+`texture(sTD2DInputs[0], uv)` — the right idea in the wrong dialect. That name
+does not exist here, the shader did not compile, the GLSL TOP output black, and
+eleven operators downstream of it dutifully passed the black along. The patch
+was wired correctly end to end and the viewer was dark.
+
+So the brief now names the input sampler — `iChannel0` and `iChannel1`, as
+Shadertoy has them — says which TouchDesigner spellings are *not* names here,
+and the repair round trip repeats it, because "Unknown variable: sTD2DInputs"
+is not an error a model can act on without being told what the variable should
+have been. `crates/otd-ai/tests/shader_brief.rs` compiles every name the brief
+promises and every name it warns off, so the prose and the compiler cannot
+drift apart quietly a second time.
+
+A shader that still will not compile is now said out loud in the assistant bar
+rather than folded into the collapsed "things skipped" list. It is the one
+failure that looks like a success: the node count is right, the notes read
+well, and the picture is black.
 
 ## Prompts that work
 

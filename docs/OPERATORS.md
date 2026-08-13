@@ -1486,7 +1486,7 @@ Mirror the image about an axis, or transpose it.
 
 Your own shader, compiled live. WGSL or Shadertoy-style GLSL.
 
-Write a fragment body; the boilerplate is supplied. In WGSL, `in.uv`, `U.time.x`, `U.res` and `sample0(uv)`/`sample1(uv)` are in scope, along with `U.p0..U.p3` from the four Uniform parameters. In GLSL a Shadertoy `mainImage` with `iTime` and `iResolution` runs unmodified.
+Write a fragment body; the boilerplate is supplied. In WGSL, `in.uv`, `U.time.x`, `U.res` and `sample0(uv)`/`sample1(uv)` are in scope, along with `U.p0..U.p3` from the four Uniform parameters. In GLSL a Shadertoy `mainImage` with `iTime` and `iResolution` runs unmodified, and the two inputs are `iChannel0`/`iChannel1` — sampled with `texture()`, and already declared, so declaring them yourself is an error. TouchDesigner's `sTD2DInputs` is not a name here.
 
 Sources are validated before the GPU sees them, so a typo gives a line number and the last shader that compiled keeps running — the patch never goes black mid-edit. *Import ISF…* loads a published ISF shader and turns its inputs into parameters on this node.
 

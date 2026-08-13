@@ -39,7 +39,7 @@ impl CanvasView {
     fn to_screen(self, origin: Pos2, world: Vec2) -> Pos2 {
         origin + (world + self.pan) * self.zoom
     }
-    fn to_world(self, origin: Pos2, screen: Pos2) -> Vec2 {
+    pub fn to_world(self, origin: Pos2, screen: Pos2) -> Vec2 {
         (screen - origin) / self.zoom - self.pan
     }
 }
@@ -57,6 +57,9 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             let rect = ui.available_rect_before_wrap();
             let response = ui.allocate_rect(rect, Sense::click_and_drag());
             let origin = rect.min;
+            // Dropped files are placed where the pointer is, which means the
+            // drop handler needs to know where the network was drawn.
+            app.canvas_rect = rect;
 
             handle_view_input(app, ui, &response, origin, rect);
             app.input_state = sample_input(ui, rect);
@@ -83,9 +86,71 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
                 draw_node(app, ui, *id, *node_rect, origin);
             }
             draw_pending_wire(app, ui, origin, &node_rects);
+            if nodes.is_empty() {
+                empty_hint(app, ui, rect);
+            }
             handle_keys(app, ui, origin, rect);
             create_dialog(app, ui, origin);
         });
+}
+
+/// Which node is under a screen position, if any. Used by the drop handler,
+/// which runs outside the canvas and so has no node rectangles of its own.
+pub fn node_at(app: &OtdApp, pos: Pos2) -> Option<NodeId> {
+    if !app.canvas_rect.contains(pos) {
+        return None;
+    }
+    let origin = app.canvas_rect.min;
+    let size = Vec2::new(NODE_W, NODE_H) * app.view.zoom;
+    // Reverse order, so the node drawn last — the one on top — wins.
+    app.graph
+        .children(app.current)
+        .iter()
+        .rev()
+        .copied()
+        .find(|id| {
+            let p = app.graph.node(*id).pos;
+            let min = app.view.to_screen(origin, Vec2::new(p[0], p[1]));
+            Rect::from_min_size(min, size).contains(pos)
+        })
+}
+
+/// An empty network is the one screen where the program tells you nothing at
+/// all about what to do next. This is that screen doing its job.
+fn empty_hint(app: &mut OtdApp, ui: &mut egui::Ui, rect: Rect) {
+    let painter = ui.painter_at(rect);
+    let centre = rect.center();
+    painter.text(
+        centre - Vec2::new(0.0, 74.0),
+        Align2::CENTER_CENTER,
+        "Drop a video, image or audio file here",
+        FontId::proportional(20.0),
+        Color32::from_rgb(190, 196, 210),
+    );
+    painter.text(
+        centre - Vec2::new(0.0, 46.0),
+        Align2::CENTER_CENTER,
+        "it starts playing, and everything downstream is yours to build",
+        FontId::proportional(13.0),
+        Color32::from_gray(125),
+    );
+
+    let button = Rect::from_center_size(centre, Vec2::new(190.0, 30.0));
+    if ui.put(button, egui::Button::new("Import media…")).clicked() {
+        crate::media::import_dialog(app);
+    }
+    let webcam = Rect::from_center_size(centre + Vec2::new(0.0, 38.0), Vec2::new(190.0, 30.0));
+    if ui.put(webcam, egui::Button::new("Use webcam")).clicked() {
+        crate::media::add_webcam(app);
+    }
+
+    painter.text(
+        centre + Vec2::new(0.0, 84.0),
+        Align2::CENTER_CENTER,
+        "or press Tab for any of the 126 operators",
+        FontId::proportional(13.0),
+        Color32::from_gray(110),
+    );
 }
 
 fn handle_view_input(
@@ -112,7 +177,7 @@ fn handle_view_input(
         app.view.pan += response.drag_delta() / app.view.zoom;
     }
     if response.clicked() {
-        app.selected = None;
+        app.clear_selection();
     }
 }
 
@@ -384,7 +449,8 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     let painter = ui.painter();
     let node = app.graph.node(id);
     let family = node.family;
-    let selected = app.selected == Some(id);
+    let selected = app.is_selected(id);
+    let primary = app.selected == Some(id);
     let is_viewer = app.viewer == Some(id);
     let animated = app.cook.is_time_dependent(id);
     let bypassed = node.flags.bypass;
@@ -407,13 +473,18 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
     let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), HEADER_H * zoom));
     painter.rect_filled(header, radius, family_color(family).gamma_multiply(0.45));
     if zoom > 0.4 {
-        painter.text(
-            header.left_center() + Vec2::new(6.0 * zoom, 0.0),
-            Align2::LEFT_CENTER,
-            &name,
-            FontId::proportional(11.0 * zoom),
-            Color32::from_rgb(235, 236, 240),
-        );
+        // Clipped to the header: a long name — and a name taken from a
+        // filename is often long — otherwise runs out over the wires and the
+        // node beside it, and reads as a rendering bug.
+        painter
+            .with_clip_rect(header.shrink2(Vec2::new(4.0 * zoom, 0.0)))
+            .text(
+                header.left_center() + Vec2::new(6.0 * zoom, 0.0),
+                Align2::LEFT_CENTER,
+                &name,
+                FontId::proportional(11.0 * zoom),
+                Color32::from_rgb(235, 236, 240),
+            );
     }
 
     // Body: the operator's live output.
@@ -523,10 +594,19 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
         );
     }
     if selected {
+        // The primary is drawn brighter than the rest of the selection: it is
+        // the one the parameter panel is showing and the one "it" means in an
+        // assistant request, and with six nodes selected that is worth being
+        // able to see.
+        let (width, tone) = if primary {
+            (2.0, Color32::from_rgb(240, 240, 250))
+        } else {
+            (1.5, Color32::from_rgb(150, 152, 170))
+        };
         painter.rect_stroke(
             rect.expand(1.0),
             radius,
-            Stroke::new(2.0, Color32::from_rgb(240, 240, 250)),
+            Stroke::new(width, tone),
             StrokeKind::Outside,
         );
     }
@@ -589,7 +669,13 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
 
     let body_resp = ui.interact(rect, egui::Id::new(("node", id)), Sense::click_and_drag());
     if body_resp.clicked() {
-        app.selected = Some(id);
+        // Shift or Cmd extends; a plain click replaces. Both are what every
+        // other canvas does, and guessing wrong costs the whole selection.
+        if ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+            app.select_toggle(id);
+        } else {
+            app.select_only(id);
+        }
     }
     if body_resp.double_clicked() {
         if family == Family::Comp {
@@ -606,9 +692,15 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
                 id,
                 grab: world - Vec2::new(p[0], p[1]),
             });
-            app.selected = Some(id);
+            // Dragging a node that is already part of a selection moves the
+            // whole selection; dragging an unselected one grabs just it.
+            if !app.is_selected(id) {
+                app.select_only(id);
+            }
         }
     }
+    node_menu(app, &body_resp, id);
+
     if body_resp.hovered() {
         let summary = app
             .registry
@@ -627,10 +719,72 @@ fn draw_node(app: &mut OtdApp, ui: &mut egui::Ui, id: NodeId, rect: Rect, origin
                 // every frame of it coalesces.
                 app.edit(&format!("move:{id:?}"));
                 let world = app.view.to_world(origin, pointer) - grab;
+                // The rest of the selection travels with it, keeping the
+                // shape of the layout you already arranged.
+                let delta = world - Vec2::new(
+                    app.graph.node(id).pos[0],
+                    app.graph.node(id).pos[1],
+                );
+                let others: Vec<NodeId> =
+                    app.selection.iter().copied().filter(|o| *o != id).collect();
+                for other in others {
+                    let p = app.graph.node(other).pos;
+                    app.graph.node_mut_quiet(other).pos =
+                        [p[0] + delta.x, p[1] + delta.y];
+                }
                 app.graph.node_mut_quiet(id).pos = [world.x, world.y];
             }
         }
     }
+}
+
+/// Right-click on a node.
+///
+/// Nothing here is new capability — all of it is a key, a double-click or a
+/// row in the parameter panel. It exists because none of those announce
+/// themselves, and a right-click is where people look first.
+fn node_menu(app: &mut OtdApp, resp: &egui::Response, id: NodeId) {
+    resp.context_menu(|ui| {
+        // Acting on a node you did not select would be a surprise; select it.
+        // An already-selected node keeps the rest of the selection, so
+        // right-click Delete on one of six selected nodes removes all six.
+        if !app.is_selected(id) {
+            app.select_only(id);
+        }
+
+        if ui.button("View").clicked() {
+            app.viewer = Some(id);
+            ui.close();
+        }
+        if app.graph.node(id).family == Family::Comp && ui.button("Enter").clicked() {
+            app.enter(id);
+            ui.close();
+        }
+        if app.graph.node(id).param("file").is_some() && ui.button("Replace File…").clicked() {
+            crate::media::replace_file(app, id);
+            ui.close();
+        }
+
+        ui.separator();
+        ui.menu_button("Add Effect", |ui| crate::media::effects_menu(app, ui));
+
+        ui.separator();
+        let bypassed = app.graph.node(id).flags.bypass;
+        if ui
+            .selectable_label(bypassed, "Bypass")
+            .on_hover_text("Pass the input straight through — B")
+            .clicked()
+        {
+            app.edit("bypass");
+            app.history.end_gesture();
+            app.graph.node_mut(id).flags.bypass = !bypassed;
+            ui.close();
+        }
+        if ui.button("Delete").clicked() {
+            app.delete_selected();
+            ui.close();
+        }
+    });
 }
 
 fn handle_keys(app: &mut OtdApp, ui: &egui::Ui, origin: Pos2, rect: Rect) {
