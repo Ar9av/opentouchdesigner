@@ -204,7 +204,7 @@ fn an_imported_shader_survives_a_save_and_load() {
             .unwrap()
             .value
             .as_str()
-            .contains("#define red U.p0.x"),
+            .contains("red = U.p0.x;"),
         "the shader body travels with the node"
     );
 }
