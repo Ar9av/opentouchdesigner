@@ -209,6 +209,36 @@ It is still one undo. The checkpoint is taken before the first change of any
 kind, so `Cmd/Ctrl+Z` puts back everything a plan created, retuned *and*
 removed, in one go.
 
+## Reacting to something
+
+`expressions` animates on a clock, and a clock is not a reaction — the patch
+does the same thing whether anybody is in the room or not. Reacting is
+**Export**: a parameter reads a live channel off a CHOP, the same edit as
+dragging a channel onto a parameter row in the editor.
+
+The plan format had no way to say that, which meant the assistant could not
+build a reactive patch at all. Asked to make a camera patch respond to
+somebody moving, it built a feedback loop tuned by `absTime` — busy, and
+completely indifferent to the room. So a node now carries `exports`
+alongside `params` and `expressions`:
+
+```json
+{"name": "zoom1", "op": "transformTOP", "exports": {"scale": "lag1:r"}}
+```
+
+The value is `node:channel`, the node resolved like any other name, so a plan
+can create the whole CHOP chain and export off it in one answer. Exporting
+from a TOP is refused rather than accepted: a parameter pointed at something
+with no channels does not error at cook time, it just never moves, which
+looks exactly like a patch that does not react and gives nobody anywhere to
+look.
+
+The brief also teaches the chain, because it is not guessable — measuring
+*movement* means measuring change, not brightness:
+
+    camera -> compositeTOP "difference" <- feedbackTOP targeting it
+           -> toptochopCHOP "average" -> analyzeCHOP -> lagCHOP -> exports
+
 ## Commands the box answers itself
 
 The prompt box is the only place in the editor you type a sentence, so it is

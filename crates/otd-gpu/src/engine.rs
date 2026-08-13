@@ -1038,6 +1038,14 @@ impl TopEngine {
             return self.clear_to_black(id, ctx, label);
         };
 
+        // A frame arrived, so whatever was last complained about is over.
+        // Status was only ever written on the no-frame path, which meant it
+        // latched: a camera that took longer than the grace period to start —
+        // which is exactly what happens while the permission prompt is on
+        // screen — kept saying it had produced no frames while visibly
+        // producing them.
+        self.nodes.entry(id).unwrap().or_default().status = self.videos[id].problem();
+
         // `once` past the end shows black rather than freezing, so a clip
         // that has finished looks finished.
         if ended_message {
