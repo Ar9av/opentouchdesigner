@@ -342,6 +342,42 @@ fn stats(rt: &mut Runtime, frames: u64, node: Option<&str>, dt: f64) -> Result<(
         "budget  {budget:.2} ms   {over} frame(s) over{}",
         if over == 0 { " — holds the rate" } else { "" }
     );
+
+    // Which nodes, not just how long. Ranked by cost per *frame*: a node that
+    // takes 4 ms but only cooks when a parameter changes is not why a patch
+    // drops frames, and ranking by cook time alone would put it first.
+    let mut rows: Vec<(String, f64, f64, f64)> = rt
+        .graph
+        .walk()
+        .into_iter()
+        .filter(|id| *id != rt.graph.root())
+        .map(|id| {
+            (
+                rt.graph.path(id),
+                rt.cook.frame_cost_ms(id),
+                rt.cook.avg_cook_ms(id),
+                rt.cook.cook_rate(id),
+            )
+        })
+        .filter(|(_, _, avg, _)| *avg > 0.0)
+        .collect();
+    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    if !rows.is_empty() {
+        println!();
+        println!(
+            "{:<32} {:>10} {:>10} {:>7}",
+            "node", "ms/frame", "per cook", "cooks"
+        );
+        let shown = rows.len().min(15);
+        for (path, cost, avg, rate) in rows.iter().take(shown) {
+            println!("{path:<32} {cost:>10.3} {avg:>10.3} {:>6.0}%", rate * 100.0);
+        }
+        // Never let a cap read as "that was everything".
+        if rows.len() > shown {
+            println!("... and {} more", rows.len() - shown);
+        }
+    }
     Ok(())
 }
 

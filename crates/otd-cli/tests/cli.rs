@@ -144,6 +144,13 @@ fn stats_reports_the_timings_and_whether_the_rate_holds() {
     for wanted in ["frames", "first frame", "cook", "median", "budget"] {
         assert!(text.contains(wanted), "missing `{wanted}` in:\n{text}");
     }
+
+    // "how long" is not actionable on its own — the report has to say which
+    // nodes, and it has to name the per-frame cost separately from the cost
+    // per cook, because in a demand-driven engine those are different numbers.
+    for wanted in ["ms/frame", "per cook", "/level1", "/noise1"] {
+        assert!(text.contains(wanted), "missing `{wanted}` in:\n{text}");
+    }
 }
 
 #[test]

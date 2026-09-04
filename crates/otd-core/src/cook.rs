@@ -140,6 +140,17 @@ struct NodeCookState {
     time_dependent: bool,
     cook_count: u64,
     last_cook_us: u64,
+    /// Exponential moving average of the cook time, in microseconds.
+    ///
+    /// A single frame's measurement is noise — a GC pause, a scheduler hiccup,
+    /// the first compile. A performance monitor built on the raw number is a
+    /// flicker of digits nobody can read, let alone rank by.
+    avg_cook_us: f64,
+    /// Frames this node was reached at all, cooked or cached. With
+    /// `cook_count` this gives how *often* it actually runs, which is the
+    /// other half of what a node costs: something expensive that cooks once a
+    /// second is cheaper than something modest that cooks every frame.
+    resolve_count: u64,
     has_cooked: bool,
     /// Set while this node is on the pull stack. Wired cycles are impossible
     /// (rejected at connect time) but a parameter-named reference can form
@@ -204,6 +215,7 @@ impl CookEngine {
         {
             let st = self.state.entry(id).unwrap().or_default();
             st.resolved_frame = ctx.frame;
+            st.resolve_count += 1;
             st.visiting = true;
         }
 
@@ -321,6 +333,13 @@ impl CookEngine {
         st.output_version += 1;
         st.cook_count += 1;
         st.last_cook_us = elapsed;
+        // Weighted toward history: the point is to be readable and rankable,
+        // not to chase the last frame.
+        st.avg_cook_us = if st.cook_count <= 1 {
+            elapsed as f64
+        } else {
+            st.avg_cook_us * 0.9 + elapsed as f64 * 0.1
+        };
         st.has_cooked = true;
         self.stats.cooked += 1;
         self.stats.total_cook_us += elapsed;
@@ -346,6 +365,30 @@ impl CookEngine {
     /// performance monitor shows (PLAN.md §5, Phase 6).
     pub fn last_cook_us(&self, id: NodeId) -> u64 {
         self.state.get(id).map(|s| s.last_cook_us).unwrap_or(0)
+    }
+
+    /// Smoothed cook time in milliseconds — what this node costs when it runs.
+    pub fn avg_cook_ms(&self, id: NodeId) -> f64 {
+        self.state.get(id).map(|s| s.avg_cook_us).unwrap_or(0.0) / 1000.0
+    }
+
+    /// Fraction of the frames this node was reached on which it actually
+    /// cooked, 0..1.
+    ///
+    /// The other half of what something costs. A node that takes 4 ms but only
+    /// cooks when a parameter changes is not the reason a patch is dropping
+    /// frames; one that takes 0.6 ms every single frame might be.
+    pub fn cook_rate(&self, id: NodeId) -> f64 {
+        match self.state.get(id) {
+            Some(s) if s.resolve_count > 0 => s.cook_count as f64 / s.resolve_count as f64,
+            _ => 0.0,
+        }
+    }
+
+    /// Smoothed cost *per frame*: what this node adds to a typical frame,
+    /// which is what a performance list should rank by.
+    pub fn frame_cost_ms(&self, id: NodeId) -> f64 {
+        self.avg_cook_ms(id) * self.cook_rate(id)
     }
 
     pub fn is_time_dependent(&self, id: NodeId) -> bool {
@@ -566,5 +609,106 @@ mod tests {
         }
         assert_eq!(e.cook_count(mov), 3);
         assert_eq!(e.cook_count(out), 3);
+    }
+}
+
+#[cfg(test)]
+mod perf_tests {
+    use super::*;
+    use crate::graph::{Connector, Family, Graph, OpDef, OpRegistry};
+    use crate::param::Param;
+    use indexmap::IndexMap;
+
+    fn params() -> IndexMap<String, Param> {
+        let mut m = IndexMap::new();
+        m.insert("gain".into(), Param::float(1.0));
+        m
+    }
+
+    /// One operator that is time dependent and one that is not, so the two
+    /// halves of "what does this cost" can be told apart.
+    fn registry() -> OpRegistry {
+        let mut r = OpRegistry::new();
+        for (type_name, time_dependent) in [("static", false), ("animated", true)] {
+            r.register(OpDef {
+                type_name,
+                label: type_name,
+                family: Family::Top,
+                inputs: &[],
+                summary: "",
+                time_dependent,
+                params,
+                connector: Connector::None,
+            });
+        }
+        r
+    }
+
+    struct Nothing;
+    impl Cooker for Nothing {
+        fn cook(&mut self, _: &Graph, _: NodeId, _: &CookContext) -> Result<(), CookError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cook_rate_separates_what_runs_every_frame_from_what_does_not() {
+        let reg = registry();
+        let mut g = Graph::new();
+        let root = g.root();
+        let still = g.create(root, reg.get("static").unwrap(), None).unwrap();
+        let moving = g.create(root, reg.get("animated").unwrap(), None).unwrap();
+
+        let mut engine = CookEngine::new();
+        let mut ctx = CookContext::default();
+        for _ in 0..20 {
+            engine
+                .cook_frame(&g, &[still, moving], &ctx, &mut Nothing)
+                .unwrap();
+            ctx.advance(1.0 / 60.0);
+        }
+
+        // The whole point of the demand-driven engine, as a number: a static
+        // branch cooks once and then costs nothing, however expensive it is.
+        assert!(
+            engine.cook_rate(still) < 0.1,
+            "static node cooked at {}",
+            engine.cook_rate(still)
+        );
+        assert_eq!(engine.cook_rate(moving), 1.0);
+        assert_eq!(engine.cook_count(still), 1);
+    }
+
+    #[test]
+    fn frame_cost_ranks_by_what_a_frame_actually_pays() {
+        let reg = registry();
+        let mut g = Graph::new();
+        let root = g.root();
+        let still = g.create(root, reg.get("static").unwrap(), None).unwrap();
+        let moving = g.create(root, reg.get("animated").unwrap(), None).unwrap();
+
+        let mut engine = CookEngine::new();
+        let mut ctx = CookContext::default();
+        for _ in 0..20 {
+            engine
+                .cook_frame(&g, &[still, moving], &ctx, &mut Nothing)
+                .unwrap();
+            ctx.advance(1.0 / 60.0);
+        }
+
+        // A node that cooks once contributes almost nothing per frame even if
+        // that one cook was slow. Ranking by raw cook time would put it at the
+        // top of the list and send someone off optimising the wrong thing.
+        assert!(engine.frame_cost_ms(still) <= engine.avg_cook_ms(still) * 0.1);
+        assert!((engine.frame_cost_ms(moving) - engine.avg_cook_ms(moving)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_node_that_never_cooked_reports_zero_rather_than_dividing_by_zero() {
+        let engine = CookEngine::new();
+        let id = NodeId::default();
+        assert_eq!(engine.cook_rate(id), 0.0);
+        assert_eq!(engine.avg_cook_ms(id), 0.0);
+        assert_eq!(engine.frame_cost_ms(id), 0.0);
     }
 }
