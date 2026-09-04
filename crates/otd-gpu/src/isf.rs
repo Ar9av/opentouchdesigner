@@ -14,7 +14,7 @@
 //! it needs several render targets, which is a Phase 6 concern.
 
 use otd_core::indexmap::IndexMap;
-use otd_core::Param;
+use otd_core::{Graph, NodeId, Param, Value};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IsfError {
@@ -24,6 +24,8 @@ pub enum IsfError {
     BadJson(String),
     #[error("multi-pass ISF shaders are not supported yet")]
     MultiPass,
+    #[error("this shader needs more uniform space than a GLSL TOP has (4 vec4s)")]
+    TooManyInputs,
 }
 
 /// An imported shader: the parameters it wants, and the GLSL to run.
@@ -56,6 +58,19 @@ pub enum IsfKind {
     Point2d,
     /// An image input, wired rather than dialled.
     Image,
+}
+
+impl IsfKind {
+    /// Uniform components this kind occupies. Images occupy none — they are
+    /// textures.
+    pub fn width(self) -> usize {
+        match self {
+            IsfKind::Float | IsfKind::Bool | IsfKind::Long => 1,
+            IsfKind::Point2d => 2,
+            IsfKind::Color => 4,
+            IsfKind::Image => 0,
+        }
+    }
 }
 
 /// Split an ISF file into its JSON header and its GLSL body.
@@ -195,10 +210,116 @@ pub fn import(source: &str) -> Result<Isf, IsfError> {
                     .collect()
             })
             .unwrap_or_default(),
-        source: preamble(&inputs, image_count) + body,
+        source: preamble(&inputs, image_count)? + body,
         params,
         inputs,
     })
+}
+
+/// Load an imported shader onto an existing GLSL TOP.
+///
+/// The node keeps being an ordinary `glslTOP` afterwards: the shader is in its
+/// `source` parameter and the ISF inputs are custom parameters like any other.
+/// Nothing downstream knows the difference, which is the whole point — an
+/// imported effect can be parameter-bound, exported to, animated and saved
+/// exactly like a hand-written one.
+pub fn apply(graph: &mut Graph, id: NodeId, isf: &Isf) {
+    // Drop any parameters a previous import left behind, so re-importing a
+    // different shader onto the same node does not accumulate dead dials.
+    let stale: Vec<String> = graph
+        .node(id)
+        .params
+        .iter()
+        .filter(|(k, p)| p.custom && !isf.params.contains_key(k.as_str()))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for key in stale {
+        graph.remove_custom_param(id, &key);
+    }
+
+    let _ = graph.set_param(id, "language", Value::Str("glsl".into()));
+    let _ = graph.set_param(id, "source", Value::Str(isf.source.clone()));
+    for (key, param) in &isf.params {
+        graph.add_custom_param(id, key, param.clone());
+    }
+}
+
+/// Where one parameter lands in the `U.p0..p3` uniform block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Slot {
+    /// Which `U.p*` — 0..3.
+    pub vec: usize,
+    /// First component within it — 0..3, i.e. `.x`..`.w`.
+    pub component: usize,
+    /// How many components it occupies: 1, 2 or 4.
+    pub width: usize,
+}
+
+impl Slot {
+    /// The GLSL swizzle that selects this slot, e.g. `.zw` or nothing at all
+    /// for a full vector.
+    pub fn swizzle(&self) -> &'static str {
+        const NAMES: [&str; 4] = ["x", "y", "z", "w"];
+        match (self.width, self.component) {
+            (4, _) => "",
+            (2, 0) => ".xy",
+            (2, 2) => ".zw",
+            (_, c) => match NAMES[c] {
+                "x" => ".x",
+                "y" => ".y",
+                "z" => ".z",
+                _ => ".w",
+            },
+        }
+    }
+}
+
+/// How many uniform components a value of this type occupies.
+///
+/// Packing floats into components rather than giving each its own vector is
+/// what makes the sixteen components enough: a shader with eight dials is
+/// entirely ordinary, and eight `vec4`s would not fit.
+pub fn width(value: &otd_core::Value) -> usize {
+    use otd_core::Value::*;
+    match value {
+        Float(_) | Int(_) | Bool(_) => 1,
+        Vec2(_) => 2,
+        Vec3(_) | Vec4(_) => 4,
+        // Strings are not uniforms — an ISF `image` keeps its wire here.
+        Str(_) => 0,
+    }
+}
+
+/// Assign uniform slots to a list of parameter widths, in declaration order.
+///
+/// Nothing straddles a vector boundary: a `vec4` starts a vector and a `vec2`
+/// starts on an even component. That wastes a component here and there and is
+/// worth it — a value split across two uniforms would need the shader to
+/// reassemble it, which is exactly the kind of invisible contract that breaks
+/// silently later.
+///
+/// `None` when the parameters do not fit in the four vectors available.
+pub fn layout(widths: impl IntoIterator<Item = usize>) -> Option<Vec<Slot>> {
+    let mut out = Vec::new();
+    let mut cursor = 0usize; // in components, 0..16
+    for w in widths {
+        if w == 0 {
+            continue;
+        }
+        // Align: a vec4 to a vector, a vec2 to an even component.
+        let align = if w == 4 { 4 } else { w.min(2) };
+        cursor = cursor.next_multiple_of(align);
+        if cursor + w > 16 {
+            return None;
+        }
+        out.push(Slot {
+            vec: cursor / 4,
+            component: cursor % 4,
+            width: w,
+        });
+        cursor += w;
+    }
+    Some(out)
 }
 
 fn number_array(value: Option<&serde_json::Value>, n: usize, fallback: [f64; 4]) -> [f64; 4] {
@@ -218,7 +339,7 @@ fn number_array(value: Option<&serde_json::Value>, n: usize, fallback: [f64; 4])
 /// ISF shaders are written against a small set of globals and macros. Rather
 /// than rewriting the body — which would mean parsing GLSL — this declares
 /// them in terms of what the GLSL TOP already provides.
-fn preamble(inputs: &[IsfInput], image_count: usize) -> String {
+fn preamble(inputs: &[IsfInput], image_count: usize) -> Result<String, IsfError> {
     let mut out = String::from(
         "// --- ISF compatibility ---\n\
          #define isf_FragNormCoord vec2(otd_uv.x, 1.0 - otd_uv.y)\n\
@@ -244,47 +365,33 @@ fn preamble(inputs: &[IsfInput], image_count: usize) -> String {
         );
     }
 
-    // Each declared input becomes a uniform the engine fills.
+    // Each declared input becomes a uniform the engine fills. The slots come
+    // from the same `layout` the engine packs with, so the two cannot drift.
+    let slots = layout(inputs.iter().map(|i| i.kind.width())).ok_or(IsfError::TooManyInputs)?;
+
     let mut image_index = 0;
-    let mut slot = 0usize;
+    let mut slot_index = 0;
     for input in inputs {
-        match input.kind {
-            IsfKind::Image => {
-                // Images are the GLSL TOP's own texture inputs.
-                out.push_str(&format!(
-                    "#define {} otd_image{}\n",
-                    input.name, image_index
-                ));
-                image_index += 1;
-            }
-            IsfKind::Color => {
-                out.push_str(&format!("#define {} U.p{}\n", input.name, slot.min(3)));
-                slot += 1;
-            }
-            IsfKind::Point2d => {
-                out.push_str(&format!("#define {} U.p{}.xy\n", input.name, slot.min(3)));
-                slot += 1;
-            }
-            IsfKind::Bool => {
-                out.push_str(&format!(
-                    "#define {} (U.p{}.x > 0.5)\n",
-                    input.name,
-                    slot.min(3)
-                ));
-                slot += 1;
-            }
-            IsfKind::Long => {
-                out.push_str(&format!("#define {} int(U.p{}.x)\n", input.name, slot.min(3)));
-                slot += 1;
-            }
-            IsfKind::Float => {
-                out.push_str(&format!("#define {} U.p{}.x\n", input.name, slot.min(3)));
-                slot += 1;
-            }
+        if input.kind == IsfKind::Image {
+            // Images are the GLSL TOP's own texture inputs, not uniforms.
+            out.push_str(&format!(
+                "#define {} otd_image{}\n",
+                input.name, image_index
+            ));
+            image_index += 1;
+            continue;
         }
+        let slot = slots[slot_index];
+        slot_index += 1;
+        let u = format!("U.p{}{}", slot.vec, slot.swizzle());
+        out.push_str(&match input.kind {
+            IsfKind::Bool => format!("#define {} ({u} > 0.5)\n", input.name),
+            IsfKind::Long => format!("#define {} int({u})\n", input.name),
+            _ => format!("#define {} {u}\n", input.name),
+        });
     }
     out.push_str("// --- end ISF compatibility ---\n");
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -330,10 +437,73 @@ void main() {
         assert!(isf.source.contains("void main()"), "the body survived");
         assert!(isf.source.contains("#define isf_FragNormCoord"));
         assert!(isf.source.contains("#define TIME iTime"));
-        // Inputs map to uniform slots in declaration order.
-        assert!(isf.source.contains("#define level U.p0.x"));
-        assert!(isf.source.contains("#define tint U.p1"));
-        assert!(isf.source.contains("#define flip (U.p2.x > 0.5)"));
+        // Inputs map to uniform slots in declaration order. `level` takes one
+        // component; `tint` is a vec4 so it starts a fresh vector; `flip`
+        // follows it.
+        assert!(isf.source.contains("#define level U.p0.x"), "{}", isf.source);
+        assert!(isf.source.contains("#define tint U.p1\n"), "{}", isf.source);
+        assert!(
+            isf.source.contains("#define flip (U.p2.x > 0.5)"),
+            "{}",
+            isf.source
+        );
+    }
+
+    #[test]
+    fn scalars_share_a_vector_instead_of_each_taking_one() {
+        let src = r#"/*{ "INPUTS": [
+            { "NAME": "a", "TYPE": "float" },
+            { "NAME": "b", "TYPE": "float" },
+            { "NAME": "c", "TYPE": "float" },
+            { "NAME": "d", "TYPE": "float" },
+            { "NAME": "e", "TYPE": "float" }
+        ] }*/
+void main() {}"#;
+        let isf = import(src).unwrap();
+        // Four dials fit one vec4; the fifth starts the next. A shader with
+        // eight knobs is entirely ordinary, and would not fit at all if each
+        // one took a whole vector.
+        for (name, u) in [
+            ("a", "U.p0.x"),
+            ("b", "U.p0.y"),
+            ("c", "U.p0.z"),
+            ("d", "U.p0.w"),
+            ("e", "U.p1.x"),
+        ] {
+            assert!(
+                isf.source.contains(&format!("#define {name} {u}\n")),
+                "{name} -> {u}\n{}",
+                isf.source
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_straddles_a_vector_boundary() {
+        // x, then a point2D: the point cannot start at component 1, so it
+        // aligns to 2 and leaves a hole.
+        let slots = layout([1, 2, 4, 1]).unwrap();
+        assert_eq!(slots[0], Slot { vec: 0, component: 0, width: 1 });
+        assert_eq!(slots[1], Slot { vec: 0, component: 2, width: 2 });
+        assert_eq!(slots[2], Slot { vec: 1, component: 0, width: 4 });
+        assert_eq!(slots[3], Slot { vec: 2, component: 0, width: 1 });
+        assert_eq!(slots[1].swizzle(), ".zw");
+        assert_eq!(slots[2].swizzle(), "");
+    }
+
+    #[test]
+    fn a_shader_that_does_not_fit_is_refused_rather_than_aliased() {
+        // Seventeen dials do not fit in sixteen components. Silently folding
+        // the extras onto slot 3 would look like it worked.
+        assert_eq!(layout(std::iter::repeat_n(1, 17)), None);
+        assert!(layout(std::iter::repeat_n(1, 16)).is_some());
+
+        let inputs: String = (0..5)
+            .map(|i| format!(r#"{{ "NAME": "c{i}", "TYPE": "color" }}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let src = format!("/*{{ \"INPUTS\": [{inputs}] }}*/\nvoid main() {{}}");
+        assert_eq!(import(&src).unwrap_err(), IsfError::TooManyInputs);
     }
 
     #[test]

@@ -283,6 +283,36 @@ impl OtdApp {
         }
     }
 
+    /// Load an `.fs` ISF shader onto a GLSL TOP.
+    ///
+    /// The point of ISF is that thousands of effects already exist in it. This
+    /// turns one of them into an ordinary node with ordinary parameters, so it
+    /// can be bound, exported to and saved like anything else.
+    pub fn import_isf(&mut self, id: NodeId) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("ISF shader", &["fs", "isf", "frag"])
+            .pick_file()
+        else {
+            return;
+        };
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = format!("Import failed: {e}");
+                return;
+            }
+        };
+        match otd_gpu::isf::import(&source) {
+            Ok(isf) => {
+                let count = isf.params.len();
+                otd_gpu::isf::apply(&mut self.graph, id, &isf);
+                let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                self.status = format!("Imported {name} — {count} parameter(s)");
+            }
+            Err(e) => self.status = format!("Import failed: {e}"),
+        }
+    }
+
     // -------------------------------------------------------- navigation
 
     /// Step inside a component. Anything else is ignored, so a stray
