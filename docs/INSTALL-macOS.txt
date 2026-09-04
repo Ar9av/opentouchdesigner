@@ -25,7 +25,9 @@ OpenTouchDesigner
 3. Microphone and camera prompts appear the first time a patch uses an Audio
    Device In CHOP or a Video Device In TOP. Both are optional.
 
-4. Movies need ffmpeg on the PATH:  brew install ffmpeg
+4. Movies need ffmpeg:  brew install ffmpeg
+   It is found on the PATH or in the usual install directories, so it works
+   whether you launch from Finder or a shell.
    Still images (PNG, JPEG, WebP) work without it.
 
 Docs, source and issues: https://github.com/Ar9av/opentouchdesigner
