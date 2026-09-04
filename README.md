@@ -15,6 +15,12 @@
 *This is the patch it opens on. Nine nodes, no shader —*
 *the motion is the **feedback loop**, not any one operator.*
 
+<img src="docs/img/editor.png" width="900" alt="The OpenTouchDesigner editor: the tunnel patch on the node canvas, its output in the viewer, the Noise TOP's parameters on the right, and the assistant bar along the bottom">
+
+*And this is the editor around it — the network on the canvas with a live*
+*viewer on every node, the output on the right with the selected operator's*
+*parameters under it, and the assistant bar along the bottom.*
+
 </div>
 
 ---
