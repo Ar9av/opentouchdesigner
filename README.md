@@ -307,6 +307,24 @@ criterion is asserted rather than claimed:
 The OSC test is a real UDP loopback and the spectrum test is a real FFT, so
 those paths are exercised rather than mocked.
 
+## Docs
+
+[`docs/OPERATORS.md`](docs/OPERATORS.md) is the operator reference — all 71,
+with their inputs, parameters, defaults and ranges. It is *generated* from the
+same registry the editor builds its menus and parameter pages from, so it
+cannot drift from what the operators actually do:
+
+```bash
+cargo run -p otd-cli -- docs --out docs/OPERATORS.md
+```
+
+Three tests hold the line PLAN.md wanted from PR review. One fails the build if
+an operator or a parameter arrives without prose; one fails if the committed
+reference is stale; one checks every index link points at a heading that
+exists. The longer hand-written notes live beside the generator and the editor
+shows the same text under *How this works*, so there is one source rather than
+two that can disagree.
+
 ## Adding an operator
 
 One `.wgsl` file in `crates/otd-gpu/src/shaders/`, one parameter function, one
