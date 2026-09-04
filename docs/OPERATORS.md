@@ -1582,7 +1582,7 @@ Fold the image onto itself, including a radial kaleidoscope.
 
 Plays an image or a movie file.
 
-Still images — PNG, JPEG, WebP, BMP, TGA, TIFF — are decoded in-process, with no external tool involved. Everything that moves goes through an `ffmpeg` subprocess, so mp4, mov, mkv, webm, avi and animated GIF all play if ffmpeg is on the PATH, and the node says so plainly if it is not.
+Still images — PNG, JPEG, WebP, BMP, TGA, TIFF — are decoded in-process, with no external tool involved. Everything that moves goes through an `ffmpeg` subprocess, so mp4, mov, mkv, webm, avi and animated GIF all play if ffmpeg is installed. It is looked for on the PATH and in the usual install directories, so a double-clicked app finds it too, and the node says so plainly when it cannot.
 
 Playback is a function of the timeline, not a private play head: the frame shown at time `t` is always the file at `t × speed`. Scrubbing the timeline scrubs the movie, the loop range loops it, and a headless `otd render` writes exactly the frames the editor showed. Seeking backwards restarts the decode at the new time, which is why a scrub is a real scrub rather than a rewind.
 
