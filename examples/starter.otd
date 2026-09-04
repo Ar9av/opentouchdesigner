@@ -1,0 +1,39 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/level1",
+      op: "levelTOP",
+      inputs: [
+        "/noise1",
+      ],
+      params: {
+        "contrast": (
+          value: Float(1.0),
+          mode: Expression,
+          expression: "1.5 + sin(absTime) * 0.5",
+        ),
+      },
+    ),
+    (
+      path: "/noise1",
+      op: "noiseTOP",
+      params: {
+        "translate": (
+          value: Vec3((0.0, 0.0, 0.0)),
+          mode: Expression,
+          expression: "absTime * 0.15",
+        ),
+      },
+    ),
+    (
+      path: "/null1",
+      op: "nullTOP",
+      inputs: [
+        "/level1",
+      ],
+    ),
+  ],
+)

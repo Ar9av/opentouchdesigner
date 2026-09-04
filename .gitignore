@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Rendered output from the headless example
+*.png
+!docs/**/*.png
