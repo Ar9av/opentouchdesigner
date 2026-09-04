@@ -240,7 +240,7 @@ pub enum GraphError {
     BadPath(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Graph {
     nodes: SlotMap<NodeId, Node>,
     root: NodeId,

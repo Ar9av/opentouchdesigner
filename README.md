@@ -72,6 +72,7 @@ budget  16.67 ms   1 frame(s) over
 | `Delete` | delete the selection (reconnecting the chain around it) |
 | `I` / double-click a COMP | step inside a component |
 | `U` | step back out (or click the breadcrumb) |
+| `Cmd/Ctrl+Z` · `Cmd/Ctrl+Shift+Z` | undo · redo |
 | `F1` | perform mode — the editor disappears and the window is the output. `F1` or `Escape` to come back |
 | drag background | pan · scroll to zoom |
 | drag output port → input port | wire · click an input port to unwire |
@@ -197,6 +198,14 @@ Afterwards it is an ordinary GLSL TOP: the imported dials can be exported to,
 bound and animated like any others. Scalars share a `vec4` rather than each
 taking one, and a shader that wants more uniform space than exists is refused
 with a message instead of quietly aliasing onto the last slot.
+
+**Undo/redo** — everywhere, because it works by snapshotting the graph rather
+than by writing an inverse for each of create, delete, wire, unwire, four
+parameter modes, custom parameters, renames, flags and clones. Node ids survive
+a snapshot, so the selection, the viewer and the engine's texture caches all
+still point at the same nodes afterwards. Each checkpoint is tagged with what
+is being edited, so dragging a slider across sixty frames undoes as the one
+gesture it was.
 
 **Project format** — text, path-sorted, defaults omitted. Adding a node
 appends one block; rewiring changes one line. Multi-line shader sources

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use egui::TextureId;
-use otd_core::{CookContext, CookEngine, Graph, NodeId, OpRegistry, Project};
+use otd_core::{CookContext, CookEngine, Graph, History, NodeId, OpRegistry, Project};
 use otd_engine::Engines;
 use otd_gpu::GpuContext;
 
@@ -60,6 +60,8 @@ pub struct OtdApp {
     thumbs: HashMap<NodeId, (TextureId, u64)>,
     /// Nodes that were on screen last frame — the visible cook roots.
     pub visible: Vec<NodeId>,
+
+    pub history: History,
 
     pub project_path: Option<PathBuf>,
     pub status: String,
@@ -115,6 +117,7 @@ impl OtdApp {
             new_param_type: "float".to_string(),
             thumbs: HashMap::new(),
             visible: Vec::new(),
+            history: History::default(),
             project_path: None,
             status: String::new(),
             cook_error: None,
@@ -134,6 +137,7 @@ impl OtdApp {
         self.engines.reset();
         self.cook.reset();
         self.thumbs.clear();
+        self.history.clear();
         self.project_path = None;
         self.time = CookContext::default();
         self.current = self.graph.root();
@@ -255,6 +259,8 @@ impl OtdApp {
             return;
         };
         let parent = self.current;
+        self.edit("import component");
+        self.history.end_gesture();
         let Ok(id) = self.graph.create(parent, &def, Some(&name)) else {
             return;
         };
@@ -342,6 +348,8 @@ impl OtdApp {
         };
         match otd_gpu::isf::import(&source) {
             Ok(isf) => {
+                self.edit("import ISF");
+                self.history.end_gesture();
                 let count = isf.params.len();
                 otd_gpu::isf::apply(&mut self.graph, id, &isf);
                 let name = path.file_stem().unwrap_or_default().to_string_lossy();
@@ -373,9 +381,84 @@ impl OtdApp {
         }
     }
 
+    // -------------------------------------------------------------- history
+
+    /// Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Cmd+Y).
+    ///
+    /// Handled here rather than on the canvas so undo works with the parameter
+    /// panel focused and in perform mode too. While a text field has focus,
+    /// egui's own character-level undo is the right behaviour and wins.
+    fn history_keys(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (undo, redo) = ctx.input(|i| {
+            let cmd = i.modifiers.command;
+            (
+                cmd && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
+                cmd && ((i.modifiers.shift && i.key_pressed(egui::Key::Z))
+                    || i.key_pressed(egui::Key::Y)),
+            )
+        });
+        if redo {
+            self.redo();
+        } else if undo {
+            self.undo();
+        }
+    }
+
+    /// Record the graph before a change, so it can be undone.
+    ///
+    /// `tag` names what is being edited. While it stays the same the edits are
+    /// one entry, which is what makes dragging a slider undo as the gesture it
+    /// was rather than as the sixty frames it took.
+    pub fn edit(&mut self, tag: &str) {
+        self.history.checkpoint(&self.graph, tag);
+    }
+
+    pub fn undo(&mut self) {
+        match self.history.undo(&self.graph) {
+            Some(graph) => {
+                self.restore(graph);
+                self.status = "Undo".into();
+            }
+            None => self.status = "nothing to undo".into(),
+        }
+    }
+
+    pub fn redo(&mut self) {
+        match self.history.redo(&self.graph) {
+            Some(graph) => {
+                self.restore(graph);
+                self.status = "Redo".into();
+            }
+            None => self.status = "nothing to redo".into(),
+        }
+    }
+
+    /// Swap in a restored graph and repair everything that pointed into the
+    /// old one.
+    ///
+    /// Node ids survive a snapshot, so the selection and the viewer usually
+    /// still resolve — but not if the step being undone was a delete, or the
+    /// step being redone was a create. Those are exactly the cases that would
+    /// otherwise leave a dangling id in the cook roots.
+    fn restore(&mut self, graph: Graph) {
+        self.graph = graph;
+        self.selected = self.selected.filter(|id| self.graph.contains(*id));
+        self.viewer = self.viewer.filter(|id| self.graph.contains(*id));
+        if !self.graph.contains(self.current) {
+            self.current = self.graph.root();
+        }
+        self.visible.retain(|id| self.graph.contains(*id));
+        self.drag = None;
+    }
+
     // ---------------------------------------------------------- graph edits
 
     pub fn delete_selected(&mut self) {
+        self.edit("delete");
+        self.history.end_gesture();
         let Some(id) = self.selected.take() else {
             return;
         };
@@ -411,6 +494,8 @@ impl OtdApp {
 
     pub fn create_node(&mut self, type_name: &str, world_pos: egui::Vec2) -> Option<NodeId> {
         let def = self.registry.get(type_name)?.clone();
+        self.edit("create");
+        self.history.end_gesture();
         // New operators land in the network you are looking at.
         let parent = self.current;
         let id = self.graph.create(parent, &def, None).ok()?;
@@ -458,6 +543,9 @@ impl OtdApp {
                 self.engines.top.reset();
                 self.cook.reset();
                 self.thumbs.clear();
+                // Undoing across an Open would restore the previous project's
+                // graph into this project's file. History starts here.
+                self.history.clear();
                 self.selected = None;
                 // Show the last Null TOP, which is the usual output anchor.
                 self.viewer = self
@@ -482,6 +570,8 @@ impl eframe::App for OtdApp {
         // Cook before drawing: the thumbnails egui is about to sample are the
         // textures we just rendered into.
         self.cook_frame();
+
+        self.history_keys(ui.ctx());
 
         // F1 anywhere, including out of perform mode — a performer who cannot
         // find the way back out of a black screen has a real problem.
@@ -510,6 +600,26 @@ impl OtdApp {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("topbar").show(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.menu_button("Edit", |ui| {
+                    let (back, ahead) = self.history.depth();
+                    if ui
+                        .add_enabled(back > 0, egui::Button::new("Undo").shortcut_text("Cmd+Z"))
+                        .clicked()
+                    {
+                        self.undo();
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            ahead > 0,
+                            egui::Button::new("Redo").shortcut_text("Cmd+Shift+Z"),
+                        )
+                        .clicked()
+                    {
+                        self.redo();
+                        ui.close();
+                    }
+                });
                 ui.menu_button("File", |ui| {
                     if ui.button("New").clicked() {
                         self.new_project();

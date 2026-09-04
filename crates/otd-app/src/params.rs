@@ -43,6 +43,8 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let mut bypass = app.graph.node(id).flags.bypass;
         if ui.checkbox(&mut bypass, "Bypass").changed() {
+            app.edit("bypass");
+            app.history.end_gesture();
             app.graph.node_mut(id).flags.bypass = bypass;
         }
         let mut display = app.graph.node(id).flags.display;
@@ -51,6 +53,8 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             .on_hover_text("Cook this node even when nothing downstream needs it")
             .changed()
         {
+            app.edit("display flag");
+            app.history.end_gesture();
             app.graph.node_mut(id).flags.display = display;
         }
         if ui.button("Set as output").clicked() {
@@ -65,6 +69,7 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             let parent = app.graph.node(id).parent.unwrap_or(app.graph.root());
             let trimmed = name.trim().to_string();
             if !trimmed.is_empty() && !app.graph.name_taken(parent, &trimmed) {
+                app.edit(&format!("rename:{id:?}"));
                 app.graph.node_mut_quiet(id).name = trimmed;
             }
         }
@@ -192,6 +197,8 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
         });
 
         if let Some(drag) = dropped {
+            app.edit("export");
+            app.history.end_gesture();
             let p = app.graph.node_mut(id).params.get_mut(&key).unwrap();
             p.set_export(&drag.op_path, &drag.channel);
             app.status = format!("{label} ← {}:{}", drag.op_path, drag.channel);
@@ -230,6 +237,10 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
         }
 
         if changed {
+            // The tag is the parameter itself, so a slider dragged across a
+            // hundred frames is one undo entry and the next parameter touched
+            // starts a new one.
+            app.edit(&format!("param:{}:{key}", app.graph.path(id)));
             let node = app.graph.node_mut(id);
             let p = node.params.get_mut(&key).unwrap();
             if clear_source {
@@ -283,6 +294,7 @@ fn component_links(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
             .changed()
         {
             let trimmed = clone_of.trim().to_string();
+            app.edit(&format!("clone:{id:?}"));
             app.graph.set_clone(
                 id,
                 if trimmed.is_empty() {
@@ -330,6 +342,8 @@ fn custom_param_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId
                 });
             }
             if let Some(key) = remove {
+                app.edit("remove parameter");
+                app.history.end_gesture();
                 app.graph.remove_custom_param(id, &key);
             }
 
@@ -365,6 +379,8 @@ fn custom_param_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId
                             "rgba" => otd_core::Param::rgba([1.0, 1.0, 1.0, 1.0]),
                             _ => otd_core::Param::float(0.0).with_range(0.0, 1.0),
                         };
+                        app.edit("add parameter");
+                        app.history.end_gesture();
                         app.graph.add_custom_param(id, &name, param);
                         app.status = format!("added parent.{name}");
                         app.new_param_name.clear();
@@ -395,6 +411,9 @@ fn text_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
             .desired_width(f32::INFINITY),
     );
     if response.changed() {
+        // Typing coalesces into one entry per editing session; clicking away
+        // and coming back starts another.
+        app.edit(&format!("text:{id:?}"));
         let _ = app.graph.set_param(id, "text", Value::Str(text));
     }
     ui.add_space(4.0);
@@ -511,6 +530,7 @@ fn shader_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
             .desired_width(f32::INFINITY),
     );
     if response.changed() {
+        app.edit(&format!("shader:{id:?}"));
         let _ = app.graph.set_param(id, "source", Value::Str(source));
     }
 
