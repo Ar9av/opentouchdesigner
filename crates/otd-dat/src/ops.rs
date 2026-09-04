@@ -17,6 +17,8 @@ pub struct DatCtx<'a> {
     pub foreign: Crossings,
     pub scripts: Option<&'a dyn ScriptHost>,
     pub net: &'a mut crate::net::Net,
+    /// What this node saw last frame — an Execute DAT's whole memory.
+    pub watched: &'a mut Watched,
     pub path: &'a str,
     /// Set by an operator that could not do its job — a bad script, malformed
     /// JSON — and shown on the node.
@@ -52,6 +54,18 @@ impl DatCtx<'_> {
     fn input(&self, i: usize) -> DatData {
         self.inputs.get(i).cloned().unwrap_or_default()
     }
+}
+
+/// The previous frame's values, per watched name.
+///
+/// A callback fires on a *change*, so something has to remember what the
+/// value was. Kept as plain data on the engine rather than inside the script,
+/// because a script that reloads must not silently re-fire everything.
+#[derive(Clone, Debug, Default)]
+pub struct Watched {
+    pub values: IndexMap<String, f64>,
+    /// Set once `onStart` has run, so it runs once per node and not per frame.
+    pub started: bool,
 }
 
 pub struct DatSpec {
@@ -404,6 +418,10 @@ fn cook_null(c: &mut DatCtx) -> DatData {
 // ------------------------------------------------------------- the table
 
 pub const NULL: &str = "nullDAT";
+/// Fires Python callbacks every frame. Always a cook root — see
+/// `otd_engine::execute`.
+pub const EXECUTE: &str = "executeDAT";
+
 pub const TABLE: &str = "tableDAT";
 pub const TEXT: &str = "textDAT";
 pub const SCRIPT: &str = "scriptDAT";
@@ -432,6 +450,244 @@ fn spec(
         },
         cook,
     }
+}
+
+// -------------------------------------------------------------- execute
+
+/// The default body of an Execute DAT: the events, with their signatures, so
+/// the operator documents itself the moment it is dropped.
+const EXECUTE_SOURCE: &str = "\
+# Runs once, the first time this node cooks.
+def onStart():
+    pass
+
+# Runs every frame, before the rest of the network cooks.
+def onFrameStart(frame):
+    pass
+
+# Runs every frame, after it has.
+def onFrameEnd(frame):
+    pass
+";
+
+const CHOP_EXECUTE_SOURCE: &str = "\
+# A watched channel changed value.
+def onValueChange(channel, value, prev):
+    pass
+
+# It crossed the threshold upwards, or downwards.
+def onOffToOn(channel, value):
+    pass
+
+def onOnToOff(channel, value):
+    pass
+";
+
+const PAR_EXECUTE_SOURCE: &str = "\
+# A watched parameter changed. `value` and `prev` are numbers.
+def onValueChange(par, value, prev):
+    pass
+";
+
+fn params_execute() -> IndexMap<String, Param> {
+    params! {
+        "active" => Param::bool(true).with_label("Active"),
+        "source" => Param::str(EXECUTE_SOURCE).with_label("Callbacks").into_script(),
+    }
+}
+
+fn params_chop_execute() -> IndexMap<String, Param> {
+    params! {
+        "active" => Param::bool(true).with_label("Active"),
+        "chop" => Param::str("").with_label("Watch CHOP").as_path_ref(),
+        "channels" => Param::str("*").with_label("Channels"),
+        "threshold" => Param::float(0.5).with_label("On Threshold").with_range(-10.0, 10.0),
+        "source" => Param::str(CHOP_EXECUTE_SOURCE).with_label("Callbacks").into_script(),
+    }
+}
+
+fn params_par_execute() -> IndexMap<String, Param> {
+    params! {
+        "active" => Param::bool(true).with_label("Active"),
+        "op" => Param::str("").with_label("Watch Operator").as_path_ref(),
+        "parameters" => Param::str("*").with_label("Parameters"),
+        "source" => Param::str(PAR_EXECUTE_SOURCE).with_label("Callbacks").into_script(),
+    }
+}
+
+/// Fire one callback, reporting a script error on the node.
+///
+/// A failing callback disables nothing and stops nothing: the same rule the
+/// rest of the engine follows for a bad expression or a missing device, and
+/// for the same reason — a typo during a show must not take the render with
+/// it.
+fn fire(c: &mut DatCtx, source: &str, func: &str, args: &[Value]) {
+    let Some(scripts) = c.scripts else { return };
+    if let Err(e) = scripts.call(source, func, args, c.eval, c.path) {
+        // Keep the first error of the frame: the later ones are usually the
+        // same mistake seen again.
+        if c.error.is_none() {
+            c.error = Some(e);
+        }
+    }
+}
+
+/// An Execute DAT presents its own source, like a Text DAT. The output is not
+/// the point — the callbacks are — but having *something* means it can be
+/// viewed, wired into a Text DAT, and diffed like everything else.
+fn cook_execute(c: &mut DatCtx) -> DatData {
+    let source = c.s("source");
+    if !c.b("active") {
+        return DatData::text(source);
+    }
+    if !c.watched.started {
+        c.watched.started = true;
+        fire(c, &source, "onStart", &[]);
+    }
+    let frame = Value::Int(c.eval.frame);
+    fire(c, &source, "onFrameStart", std::slice::from_ref(&frame));
+    // Both edges of the frame fire here, one cook apart in the same cook.
+    // A genuine end-of-frame hook would have to run after every other node,
+    // and the cook is demand-driven — there is no such moment to hang it on
+    // that is not simply "later", so saying so beats pretending.
+    fire(c, &source, "onFrameEnd", std::slice::from_ref(&frame));
+    DatData::text(source)
+}
+
+/// Which of `names` a whitespace-separated pattern selects.
+fn selected<'a>(pattern: &str, names: &'a [String]) -> Vec<&'a String> {
+    let pattern = pattern.trim();
+    if pattern.is_empty() || pattern == "*" {
+        return names.iter().collect();
+    }
+    let wanted: Vec<&str> = pattern.split_whitespace().collect();
+    names
+        .iter()
+        .filter(|n| {
+            wanted.iter().any(|w| {
+                w.strip_suffix('*')
+                    .map(|prefix| n.starts_with(prefix))
+                    .unwrap_or(*w == n.as_str())
+            })
+        })
+        .collect()
+}
+
+fn cook_chop_execute(c: &mut DatCtx) -> DatData {
+    let source = c.s("source");
+    if !c.b("active") {
+        return DatData::text(source);
+    }
+    let path = c.s("chop");
+    let Some(net) = c.eval.channels else {
+        return DatData::text(source);
+    };
+    let names = net.channel_names(path.trim());
+    let threshold = c
+        .node
+        .param("threshold")
+        .map(|p| p.eval(c.eval).as_f32())
+        .unwrap_or(0.5);
+    let pattern = c.s("channels");
+
+    // Collected first, because firing a callback borrows `c` mutably and the
+    // network borrow has to be finished by then.
+    let mut events: Vec<(String, f64, Option<f64>)> = Vec::new();
+    for name in selected(&pattern, &names) {
+        let Some(value) = net.channel(path.trim(), name) else {
+            continue;
+        };
+        let value = value as f64;
+        let prev = c.watched.values.get(name).copied();
+        if prev != Some(value) {
+            events.push((name.clone(), value, prev));
+        }
+    }
+    for (name, value, _) in &events {
+        c.watched.values.insert(name.clone(), *value);
+    }
+
+    for (name, value, prev) in events {
+        let args = [
+            Value::Str(name.clone()),
+            Value::Float(value),
+            Value::Float(prev.unwrap_or(value)),
+        ];
+        fire(c, &source, "onValueChange", &args);
+        // The edge callbacks are the ones worth having: "the beat landed" is
+        // a different question from "the number moved".
+        let Some(prev) = prev else { continue };
+        let t = threshold as f64;
+        if prev < t && value >= t {
+            fire(
+                c,
+                &source,
+                "onOffToOn",
+                &[Value::Str(name.clone()), Value::Float(value)],
+            );
+        } else if prev >= t && value < t {
+            fire(
+                c,
+                &source,
+                "onOnToOff",
+                &[Value::Str(name), Value::Float(value)],
+            );
+        }
+    }
+    DatData::text(source)
+}
+
+fn cook_par_execute(c: &mut DatCtx) -> DatData {
+    let source = c.s("source");
+    if !c.b("active") {
+        return DatData::text(source);
+    }
+    let path = c.s("op");
+    let Some(net) = c.eval.channels else {
+        return DatData::text(source);
+    };
+    let pattern = c.s("parameters");
+    // Only the parameters named explicitly can be watched: there is no way to
+    // enumerate another operator's parameters through the narrow view a script
+    // gets, and widening that view to serve one operator would hand every
+    // expression the whole graph.
+    let names: Vec<String> = pattern
+        .split_whitespace()
+        .filter(|n| *n != "*")
+        .map(|s| s.to_string())
+        .collect();
+    if names.is_empty() {
+        c.error = Some("name the parameters to watch — `*` cannot be enumerated".into());
+        return DatData::text(source);
+    }
+
+    let mut events = Vec::new();
+    for name in &names {
+        let Some(value) = net.param_value(path.trim(), name) else {
+            continue;
+        };
+        let value = value.as_f64();
+        let prev = c.watched.values.get(name).copied();
+        if prev != Some(value) {
+            events.push((name.clone(), value, prev));
+        }
+    }
+    for (name, value, _) in &events {
+        c.watched.values.insert(name.clone(), *value);
+    }
+    for (name, value, prev) in events {
+        fire(
+            c,
+            &source,
+            "onValueChange",
+            &[
+                Value::Str(name),
+                Value::Float(value),
+                Value::Float(prev.unwrap_or(value)),
+            ],
+        );
+    }
+    DatData::text(source)
 }
 
 // ------------------------------------------------------------------ sort
@@ -751,6 +1007,37 @@ fn specs() -> &'static Vec<DatSpec> {
         );
         script.def.time_dependent = true;
         v.push(script);
+
+        for (type_name, label, summary, params, cook) in [
+            (
+                EXECUTE,
+                "Execute",
+                "Python callbacks at the start and end of a frame.",
+                params_execute as fn() -> IndexMap<String, Param>,
+                cook_execute as fn(&mut DatCtx) -> DatData,
+            ),
+            (
+                "chopexecuteDAT",
+                "CHOP Execute",
+                "Python callbacks when a watched channel changes or crosses a threshold.",
+                params_chop_execute,
+                cook_chop_execute,
+            ),
+            (
+                "parameterexecuteDAT",
+                "Parameter Execute",
+                "Python callbacks when a watched parameter changes.",
+                params_par_execute,
+                cook_par_execute,
+            ),
+        ] {
+            let mut ex = spec(type_name, label, &[], summary, params, cook);
+            // A callback that only ran when something downstream wanted it
+            // would not be a callback. These cook every frame, and the hosts
+            // treat them as roots.
+            ex.def.time_dependent = true;
+            v.push(ex);
+        }
 
         v.push(spec(
             "sortDAT",

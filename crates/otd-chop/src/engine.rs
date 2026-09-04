@@ -53,6 +53,15 @@ pub struct Network<'a> {
 }
 
 impl ChannelSource for Network<'_> {
+    fn channel_names(&self, op_path: &str) -> Vec<String> {
+        self.graph
+            .find(op_path)
+            .and_then(|id| self.graph.resolve_output(id))
+            .and_then(|id| self.chops.get(id))
+            .map(|data| data.names())
+            .unwrap_or_default()
+    }
+
     fn channel(&self, op_path: &str, channel: &str) -> Option<f32> {
         // Resolving means a path can name a component and get the channels
         // its Out operator produces.

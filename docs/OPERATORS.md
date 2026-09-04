@@ -2,9 +2,9 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-118 operators.
+126 operators.
 
-**CHOP** (45)
+**CHOP** (46)
 
 - [analyzeCHOP](#analyze--analyzechop) — Reduce each channel to one number.
 - [animationCHOP](#animation--animationchop) — Keyframed curves over time.
@@ -39,6 +39,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [oscinCHOP](#osc-in--oscinchop) — Incoming OSC messages, one channel per address argument.
 - [oscoutCHOP](#osc-out--oscoutchop) — Sends its channels as one OSC message per frame.
 - [outCHOP](#out--outchop) — This component's channel output.
+- [panelCHOP](#panel--panelchop) — Panel widget values as channels.
 - [patternCHOP](#pattern--patternchop) — A fixed-length waveform buffer.
 - [renameCHOP](#rename--renamechop) — Rename channels by pattern.
 - [resampleCHOP](#resample--resamplechop) — Change how many samples a buffer has, keeping its shape.
@@ -52,23 +53,29 @@ Generated from the operator registry — the same table the editor builds its me
 - [toptochopCHOP](#top-to-chop--toptochopchop) — Pixels as channels. Reads last frame; costs a GPU sync.
 - [triggerCHOP](#trigger--triggerchop) — An attack/decay/sustain/release envelope per channel.
 
-**COMP** (5)
+**COMP** (8)
 
+- [buttonCOMP](#button--buttoncomp) — A button on the output. Its state is the Value parameter.
 - [cameraCOMP](#camera--cameracomp) — A viewpoint for a Render TOP.
 - [containerCOMP](#container--containercomp) — A component that holds a sub-network.
+- [fieldCOMP](#field--fieldcomp) — An editable text field on the output.
 - [geometryCOMP](#geometry--geometrycomp) — Places a SOP in the scene, optionally instanced.
 - [lightCOMP](#light--lightcomp) — A directional light, aimed from its position at the origin.
 - [replicatorCOMP](#replicator--replicatorcomp) — Keeps one clone of a master component per row of a table.
+- [sliderCOMP](#slider--slidercomp) — A fader on the output. Its position is the Value parameter.
 
-**DAT** (16)
+**DAT** (19)
 
+- [chopexecuteDAT](#chop-execute--chopexecutedat) — Python callbacks when a watched channel changes or crosses a threshold.
 - [choptodatDAT](#chop-to-dat--choptodatdat) — Channels as a table of numbers.
 - [convertDAT](#convert--convertdat) — Between a table and a block of text.
+- [executeDAT](#execute--executedat) — Python callbacks at the start and end of a frame.
 - [inDAT](#in--indat) — A data input on this component's node.
 - [jsonDAT](#json--jsondat) — Parse JSON text into a path/value table.
 - [mergeDAT](#merge--mergedat) — Join two DATs by rows or by columns.
 - [nullDAT](#null--nulldat) — Pass-through. A stable name to reference.
 - [outDAT](#out--outdat) — This component's data output.
+- [parameterexecuteDAT](#parameter-execute--parameterexecutedat) — Python callbacks when a watched parameter changes.
 - [scriptDAT](#script--scriptdat) — Rows produced by a Python script.
 - [selectDAT](#select--selectdat) — Pick rows and columns, by name or index.
 - [sortDAT](#sort--sortdat) — Sort rows by a column, numerically or as text.
@@ -79,11 +86,12 @@ Generated from the operator registry — the same table the editor builds its me
 - [udpinDAT](#udp-in--udpindat) — Datagrams received on a port, one message per row.
 - [udpoutDAT](#udp-out--udpoutdat) — Sends its input's text as a datagram when it changes.
 
-**MAT** (4)
+**MAT** (5)
 
 - [constantMAT](#constant--constantmat) — Flat colour, unaffected by lights.
 - [pbrMAT](#pbr--pbrmat) — Base colour, metallic, roughness and emission, with an optional map.
 - [phongMAT](#phong--phongmat) — Diffuse and a Blinn highlight, dialled by shininess.
+- [pointspriteMAT](#point-sprite--pointspritemat) — Draws every point as a camera-facing quad.
 - [wireframeMAT](#wireframe--wireframemat) — Draws the edges rather than the faces.
 
 **SOP** (15)
@@ -581,6 +589,18 @@ This component's channel output.
 
 **Inputs:** in
 
+### Panel — `panelCHOP`
+
+Panel widget values as channels.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Panel COMPs (paths) | `ops` | *(empty)* |  |
+
 ### Pattern — `patternCHOP`
 
 A fixed-length waveform buffer.
@@ -738,6 +758,22 @@ An attack/decay/sustain/release envelope per channel.
 
 ## COMP
 
+### Button — `buttonCOMP`
+
+A button on the output. Its state is the Value parameter.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Value | `value` | `0` | 0 … 1 |
+| Mode | `mode` | `toggle` | `toggle` · `momentary` |
+| X | `x` | `0.05` | 0 … 1 |
+| Y | `y` | `0.05` | 0 … 1 |
+| Width | `w` | `0.2` | 0 … 1 |
+| Height | `h` | `0.08` | 0 … 1 |
+| Label | `label` | *(empty)* |  |
+
 ### Camera — `cameraCOMP`
 
 A viewpoint for a Render TOP.
@@ -760,6 +796,21 @@ A viewpoint for a Render TOP.
 A component that holds a sub-network.
 
 *No inputs — this is a generator.*
+
+### Field — `fieldCOMP`
+
+An editable text field on the output.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Text | `text` | *(empty)* |  |
+| X | `x` | `0.05` | 0 … 1 |
+| Y | `y` | `0.05` | 0 … 1 |
+| Width | `w` | `0.2` | 0 … 1 |
+| Height | `h` | `0.08` | 0 … 1 |
+| Label | `label` | *(empty)* |  |
 
 ### Geometry — `geometryCOMP`
 
@@ -821,9 +872,43 @@ Replicants are ordinary clones: they follow the master's network as it is edited
 | Template DAT (one replicant per row) | `template` | *(empty)* |  |
 | First Row/Column Are Names | `byname` | `true` |  |
 
+### Slider — `sliderCOMP`
+
+A fader on the output. Its position is the Value parameter.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Value | `value` | `0` |  |
+| Minimum | `min` | `0` |  |
+| Maximum | `max` | `1` |  |
+| Orientation | `orientation` | `horizontal` | `horizontal` · `vertical` |
+| X | `x` | `0.05` | 0 … 1 |
+| Y | `y` | `0.05` | 0 … 1 |
+| Width | `w` | `0.2` | 0 … 1 |
+| Height | `h` | `0.08` | 0 … 1 |
+| Label | `label` | *(empty)* |  |
+
 ---
 
 ## DAT
+
+### CHOP Execute — `chopexecuteDAT`
+
+Python callbacks when a watched channel changes or crosses a threshold.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Active | `active` | `true` |  |
+| Watch CHOP | `chop` | *(empty)* |  |
+| Channels | `channels` | `*` |  |
+| On Threshold | `threshold` | `0.5` | -10 … 10 |
+| Callbacks | `source` | *(multi-line)* |  |
 
 ### CHOP to DAT — `choptodatDAT`
 
@@ -847,6 +932,19 @@ Between a table and a block of text.
 |---|---|---|---|
 | Convert To | `to` | `table` | `table` · `text` |
 | Delimiter | `delimiter` | `tab` | `tab` · `comma` |
+
+### Execute — `executeDAT`
+
+Python callbacks at the start and end of a frame.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Active | `active` | `true` |  |
+| Callbacks | `source` | *(multi-line)* |  |
 
 ### In — `inDAT`
 
@@ -885,6 +983,21 @@ Pass-through. A stable name to reference.
 This component's data output.
 
 **Inputs:** in
+
+### Parameter Execute — `parameterexecuteDAT`
+
+Python callbacks when a watched parameter changes.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Active | `active` | `true` |  |
+| Watch Operator | `op` | *(empty)* |  |
+| Parameters | `parameters` | `*` |  |
+| Callbacks | `source` | *(multi-line)* |  |
 
 ### Script — `scriptDAT`
 
@@ -1026,6 +1139,19 @@ Diffuse and a Blinn highlight, dialled by shininess.
 | Specular | `specular` | `0.5` | 0 … 4 |
 | Shininess | `shininess` | `32` | 1 … 256 |
 | Emit | `emit` | `0` | 0 … 4 |
+
+### Point Sprite — `pointspriteMAT`
+
+Draws every point as a camera-facing quad.
+
+**Inputs:** color
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Color | `basecolor` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Size (world units) | `size` | `0.1` | 0.001 … 4 |
+| Brightness | `emit` | `1` | 0 … 4 |
+| Round | `round` | `true` |  |
 
 ### Wireframe — `wireframeMAT`
 

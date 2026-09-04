@@ -73,6 +73,15 @@ pub trait ChannelSource {
     /// The current value of `param` on the operator at `op_path` — Bind mode.
     fn param_value(&self, op_path: &str, param: &str) -> Option<crate::value::Value>;
 
+    /// Every channel name a CHOP is presenting.
+    ///
+    /// Reading one value needs only a name; *watching* a CHOP needs to know
+    /// what the names are, which is what a CHOP Execute DAT does. Defaulted to
+    /// empty so a build with no CHOPs is unaffected.
+    fn channel_names(&self, _op_path: &str) -> Vec<String> {
+        Vec::new()
+    }
+
     /// A custom parameter on the component containing `node_path` — how the
     /// operators inside a component read its API (`parent.speed`).
     fn parent_param(&self, _node_path: &str, _param: &str) -> Option<crate::value::Value> {

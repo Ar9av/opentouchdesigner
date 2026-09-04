@@ -213,6 +213,18 @@ impl OtdApp {
         self.engines.end_frame();
 
         self.cook_error = result.err().map(|e| e.to_string());
+
+        // Between frames, where the graph is held mutably, is the only place a
+        // callback's parameter change can land. See `otd_core::edit`.
+        let edits = self.engines.take_edits();
+        if !edits.is_empty() {
+            let (applied, problems) = otd_core::edit::apply(&mut self.graph, &edits);
+            if let Some(first) = problems.first() {
+                self.status = format!("callback: {first}");
+            } else if applied > 0 {
+                self.status = format!("callback set {applied} parameter(s)");
+            }
+        }
         let ms = self.cook.stats.total_cook_us as f64 / 1000.0;
         self.smoothed_cook_ms = self.smoothed_cook_ms * 0.9 + ms * 0.1;
     }
@@ -1068,6 +1080,8 @@ impl OtdApp {
     /// cooking, because `cook_roots` asks what is on screen and the answer is
     /// now nothing but the viewer.
     fn perform_view(&mut self, ui: &mut egui::Ui) {
+        let widgets = otd_engine::panel::widgets(&self.graph);
+        let mut panels: Vec<(NodeId, f64)> = Vec::new();
         // Nothing is on the canvas in perform mode, so nothing is a visible
         // cook root. Clearing this is what makes the mode cheaper rather than
         // merely darker.
@@ -1079,17 +1093,34 @@ impl OtdApp {
             .and_then(|v| self.thumbnail(v));
         egui::CentralPanel::no_frame()
             .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
-            .show(ui, |ui| match tex {
-                Some((tid, size)) => letterbox(ui, tid, size),
-                None => {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(
-                            egui::RichText::new("no viewer — F1 to go back")
-                                .color(egui::Color32::from_gray(90)),
-                        );
-                    });
-                }
+            .show(ui, |ui| {
+                let area = match tex {
+                    Some((tid, size)) => letterbox(ui, tid, size),
+                    None => {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(
+                                egui::RichText::new("no viewer — F1 to go back")
+                                    .color(egui::Color32::from_gray(90)),
+                            );
+                        });
+                        // With no output to lay them against, the widgets get
+                        // the whole pane rather than disappearing: a panel you
+                        // cannot see is indistinguishable from one that is
+                        // broken.
+                        ui.max_rect()
+                    }
+                };
+                panels.extend(draw_panel(ui, &widgets, area));
             });
+
+        // Applied after the panel is drawn, because the write needs the graph
+        // mutably and drawing borrowed it.
+        for (id, value) in panels {
+            self.edit("panel");
+            let _ = self
+                .graph
+                .set_param(id, "value", otd_core::Value::Float(value));
+        }
     }
 
     /// The output window: a second OS window showing only the viewer TOP,
@@ -1106,6 +1137,7 @@ impl OtdApp {
             .filter(|v| self.graph.contains(*v))
             .and_then(|v| self.thumbnail(v));
         let closed = self.output_closed.clone();
+        let widgets = otd_engine::panel::widgets(&self.graph);
         let builder = egui::ViewportBuilder::default()
             .with_title("OpenTouchDesigner — Output")
             .with_inner_size([1280.0, 720.0])
@@ -1119,7 +1151,12 @@ impl OtdApp {
                     .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                     .show(ui, |ui| {
                         if let Some((tid, size)) = tex {
-                            letterbox(ui, tid, size);
+                            let area = letterbox(ui, tid, size);
+                            // Drawn, not driven: the output window is often on
+                            // a projector where nobody is holding a mouse, and
+                            // two surfaces both writing the same parameter in
+                            // one frame is a fight rather than a feature.
+                            let _ = draw_panel(ui, &widgets, area);
                         }
                     });
                 if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -1183,7 +1220,10 @@ fn cook_roots(graph: &Graph, viewer: Option<NodeId>, visible: &[NodeId]) -> Vec<
             continue;
         }
         let node = graph.node(id);
-        let wanted = node.flags.render || (node.flags.display && visible.contains(&id));
+        // An Execute DAT is a root by its nature — see `otd_engine::execute`.
+        let wanted = node.flags.render
+            || otd_engine::execute::is_execute(&node.op_type)
+            || (node.flags.display && visible.contains(&id));
         if wanted && !roots.contains(&id) {
             roots.push(id);
         }
@@ -1206,7 +1246,10 @@ fn bytes(n: u64) -> String {
 /// Letterbox rather than stretch, in both the output window and perform mode:
 /// a show output at the wrong aspect ratio is worse than black bars, and worse
 /// still because it looks deliberate.
-fn letterbox(ui: &egui::Ui, tid: TextureId, size: [u32; 2]) {
+/// Returns the rect it painted into, which is the box a panel lays out
+/// against — the picture, not the window, so a widget stays where it was put
+/// relative to the image whatever shape the window is.
+fn letterbox(ui: &egui::Ui, tid: TextureId, size: [u32; 2]) -> egui::Rect {
     let avail = ui.available_size();
     let aspect = size[0] as f32 / size[1].max(1) as f32;
     let (mut w, mut h) = (avail.x, avail.x / aspect);
@@ -1221,6 +1264,82 @@ fn letterbox(ui: &egui::Ui, tid: TextureId, size: [u32; 2]) {
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+    rect
+}
+
+/// Draw the panel widgets over `area`, returning the values a person changed.
+///
+/// The edits come back rather than being applied here: writing needs the graph
+/// mutably, and the caller is already holding it to have drawn at all. Keeping
+/// that split also means this function is only about pixels.
+fn draw_panel(
+    ui: &mut egui::Ui,
+    widgets: &[otd_engine::panel::Widget],
+    area: egui::Rect,
+) -> Vec<(NodeId, f64)> {
+    use otd_engine::panel::Kind;
+    let mut changed = Vec::new();
+    for w in widgets {
+        let rect = egui::Rect::from_min_size(
+            area.min + egui::vec2(w.rect[0] * area.width(), w.rect[1] * area.height()),
+            egui::vec2(w.rect[2] * area.width(), w.rect[3] * area.height()),
+        );
+        if !ui.max_rect().intersects(rect) {
+            continue;
+        }
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        match w.kind {
+            Kind::Button => {
+                let on = w.value >= 0.5;
+                let text =
+                    egui::RichText::new(&w.label).size((rect.height() * 0.4).clamp(9.0, 28.0));
+                let response = child.put(rect, egui::Button::new(text).selected(on));
+                if w.momentary {
+                    // Held, not latched: down while the pointer is down, and
+                    // released when it lets go, wherever it lets go.
+                    let down = response.is_pointer_button_down_on();
+                    if down != on {
+                        changed.push((w.id, if down { 1.0 } else { 0.0 }));
+                    }
+                } else if response.clicked() {
+                    changed.push((w.id, if on { 0.0 } else { 1.0 }));
+                }
+            }
+            Kind::Slider => {
+                let (lo, hi) = w.range;
+                let mut value = w.value;
+                let response = if w.vertical {
+                    child.put(
+                        rect,
+                        egui::Slider::new(&mut value, lo..=hi)
+                            .vertical()
+                            .show_value(false),
+                    )
+                } else {
+                    child.put(
+                        rect,
+                        egui::Slider::new(&mut value, lo..=hi).show_value(false),
+                    )
+                };
+                if response.changed() {
+                    changed.push((w.id, value));
+                }
+            }
+            Kind::Field => {
+                // Read-only here: a text field's value is its Text parameter,
+                // and editing text on the *output* is a different feature from
+                // showing it. Typing into it belongs to the parameter panel
+                // until there is a reason it does not.
+                child.put(
+                    rect,
+                    egui::Label::new(
+                        egui::RichText::new(&w.text).size((rect.height() * 0.4).clamp(9.0, 28.0)),
+                    ),
+                );
+            }
+        }
+    }
+    changed
 }
 
 #[cfg(test)]

@@ -12,6 +12,9 @@ struct Scene {
   model: mat4x4<f32>,
   // xyz = camera position, w = unused
   camera: vec4<f32>,
+  // The camera's axes in world space, for billboarding a point sprite.
+  camera_right: vec4<f32>,
+  camera_up: vec4<f32>,
   // xyz = direction *towards* the light, w = intensity
   light_dir: vec4<f32>,
   light_color: vec4<f32>,
@@ -20,6 +23,7 @@ struct Scene {
   //   PBR      x = metallic,  y = roughness,  z = emit, w = use texture
   //   Constant                                z = emit, w = use texture
   //   Phong    x = specular,  y = shininess,  z = emit, w = use texture
+  //   Sprite   x = size,      y = round,      z = emit, w = use texture
   material: vec4<f32>,
   // x = ambient, y = point scale, z = shading model, w unused
   render: vec4<f32>,
@@ -65,7 +69,18 @@ fn vs_main(in: VIn) -> VOut {
   let scaled = in.position * in.i_scale;
   let rotated = rotate_xyz(scaled, in.i_rotate);
   let local = rotated + in.i_translate;
-  let world = S.model * vec4<f32>(local, 1.0);
+  var world = S.model * vec4<f32>(local, 1.0);
+
+  // A point sprite's four corners share a position and differ only in uv, so
+  // the quad is built here, facing the camera, from the uv corner.
+  if (i32(S.render.z + 0.5) == 3) {
+    let corner = in.uv * 2.0 - vec2<f32>(1.0);
+    let half = S.material.x * 0.5;
+    world = vec4<f32>(
+      world.xyz + S.camera_right.xyz * corner.x * half
+                + S.camera_up.xyz * corner.y * half,
+      1.0);
+  }
 
   let n = normalize(rotate_xyz(in.normal, in.i_rotate));
   let world_n = normalize((S.model * vec4<f32>(n, 0.0)).xyz);
@@ -87,6 +102,21 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   }
 
   let model = i32(S.render.z + 0.5);
+
+  // Point sprite: unlit, and optionally cut to a disc. Rounding in the
+  // fragment stage rather than with more geometry is what keeps a sprite one
+  // quad however smooth its edge looks.
+  if (model == 3) {
+    var alpha = albedo.a;
+    if (S.material.y > 0.5) {
+      let d = length(in.uv * 2.0 - vec2<f32>(1.0));
+      // One pixel of feather, in uv units, so the edge is antialiased at any
+      // sprite size on screen.
+      alpha = alpha * (1.0 - smoothstep(1.0 - fwidth(d) * 2.0, 1.0, d));
+      if (alpha <= 0.0) { discard; }
+    }
+    return vec4<f32>(albedo.rgb * max(S.material.z, 0.0), alpha);
+  }
 
   // Constant: the colour is the colour. Not "PBR with the light turned off" —
   // that would still fold in ambient and the emit term twice. This is what a

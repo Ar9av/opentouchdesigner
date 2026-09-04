@@ -422,3 +422,79 @@ fn a_wireframe_material_draws_edges_and_leaves_holes() {
     );
     assert!(wire > 0, "but it should still draw its edges");
 }
+
+#[test]
+fn point_sprites_face_the_camera_and_scale_with_size() {
+    // The whole claim of the operator: a point becomes a quad that is the same
+    // size and shape whatever angle you look from. Orbiting the camera must
+    // not change how much of the screen one sprite covers.
+    let gpu = gpu_or_skip!();
+    let mut rig = Rig::new(gpu);
+    let render = basic_scene(&mut rig);
+    let geo = rig.graph.find("/geo1").unwrap();
+    let cam = rig.graph.find("/cam1").unwrap();
+
+    // One point at the origin, rather than a sphere.
+    let line = rig.add("lineSOP", "dot");
+    rig.set(line, "points", Value::Int(1));
+    rig.set(geo, "sop", Value::Str("/dot".into()));
+
+    let mat = rig.add("pointspriteMAT", "sprite1");
+    rig.set(geo, "material", Value::Str("/sprite1".into()));
+    rig.set(mat, "size", Value::Float(0.5));
+    rig.set(mat, "round", Value::Bool(false));
+
+    rig.run(render);
+    let front = rig.lit(render);
+    assert!(front > 20, "a sprite should cover something: {front}");
+
+    // Same distance, different direction. A flat quad in the XY plane would
+    // vanish edge-on; a billboard does not.
+    rig.set(cam, "translate", Value::Vec3([4.0, 0.0, 0.0]));
+    rig.set(cam, "lookat", Value::Str("/geo1".into()));
+    rig.run(render);
+    let side = rig.lit(render);
+    assert!(
+        side > front / 2 && side < front * 2,
+        "a billboard must look the same from the side: {front} then {side}"
+    );
+
+    // And Size does what it says.
+    rig.set(cam, "translate", Value::Vec3([0.0, 0.0, 4.0]));
+    rig.set(mat, "size", Value::Float(1.0));
+    rig.run(render);
+    let bigger = rig.lit(render);
+    assert!(
+        bigger > side * 2,
+        "doubling Size should roughly quadruple the area: {side} then {bigger}"
+    );
+}
+
+#[test]
+fn a_round_point_sprite_cuts_the_corners_off_its_quad() {
+    let gpu = gpu_or_skip!();
+    let mut rig = Rig::new(gpu);
+    let render = basic_scene(&mut rig);
+    let geo = rig.graph.find("/geo1").unwrap();
+    let line = rig.add("lineSOP", "dot");
+    rig.set(line, "points", Value::Int(1));
+    rig.set(geo, "sop", Value::Str("/dot".into()));
+    let mat = rig.add("pointspriteMAT", "sprite1");
+    rig.set(geo, "material", Value::Str("/sprite1".into()));
+    rig.set(mat, "size", Value::Float(2.0));
+
+    rig.set(mat, "round", Value::Bool(false));
+    rig.run(render);
+    let square = rig.lit(render);
+
+    rig.set(mat, "round", Value::Bool(true));
+    rig.run(render);
+    let disc = rig.lit(render);
+
+    // A disc is pi/4 of its bounding square — about 79%.
+    let ratio = disc as f32 / square as f32;
+    assert!(
+        (0.7..0.85).contains(&ratio),
+        "a disc should be ~79% of the quad, got {ratio}"
+    );
+}

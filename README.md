@@ -8,7 +8,7 @@
 [![CI](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml/badge.svg)](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml)
 [![Download](https://img.shields.io/github/v/release/Ar9av/opentouchdesigner?label=download%20macOS&color=blue)](https://github.com/Ar9av/opentouchdesigner/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-![Operators](https://img.shields.io/badge/operators-118-informational)
+![Operators](https://img.shields.io/badge/operators-126-informational)
 
 <img src="docs/img/tunnel.gif" width="640" alt="A cyan and magenta warp tunnel, built from nine nodes and no shader">
 
@@ -285,7 +285,8 @@ path quoted inside an expression or a script becomes a cook dependency, so
 A failing expression keeps its constant and reports one line.
 
 **DATs** (`otd-dat`) — Table, Text, Select, Merge, Sort, Transpose, Convert,
-Substitute, JSON, Script, UDP In, UDP Out and Null. A table's contents live in the project file, so a cue list is
+Substitute, JSON, Script, Execute, CHOP Execute, Parameter Execute, UDP In,
+UDP Out and Null. A table's contents live in the project file, so a cue list is
 versioned with the patch that uses it. Script DATs run Python and return
 rows. UDP In presents received datagrams as a table, one message per row;
 UDP Out sends its input's text as one datagram when it *changes* — a DAT
@@ -295,8 +296,8 @@ loopbacks, like OSC and DMX.
 
 **3D** (`otd-sop`, `otd-gpu`) — Box, Sphere, Tube, Torus, Circle, Grid, Line,
 Transform, Noise, Color, Merge, Copy and Null SOPs; Geometry, Camera and Light
-components; PBR, Phong, Constant and Wireframe materials, each with an optional
-colour map; and a Render TOP with a depth buffer whose output is an ordinary
+components; PBR, Phong, Constant, Wireframe and Point Sprite materials, each
+with an optional colour map; and a Render TOP with a depth buffer whose output is an ordinary
 texture, so a TOP chain after it neither knows nor cares that a camera was
 involved.
 
@@ -313,7 +314,7 @@ of them, which is how one audio band makes the whole grid breathe.
 **CHOPs** (`otd-chop`) — Constant, LFO, Noise, Pattern, Math, Lag, Filter,
 Logic, Trigger, Timer, Speed, Count, Slope, Delay, Limit, Hold, Shuffle,
 Rename, Analyze, Resample, Cross, Clock, Beat, Select, Merge, Switch,
-Animation, Expression, Null, plus Audio Device In, Audio Device Out, Audio File In, Audio
+Animation, Expression, Panel, Null, plus Audio Device In, Audio Device Out, Audio File In, Audio
 Spectrum, MIDI In, MIDI Out, OSC In, OSC Out, DMX Out, Mouse In and Keyboard
 In.
 
@@ -457,6 +458,32 @@ the cook, because a recording one frame behind what the artist watched is a
 file that is wrong. And a full encoder queue **blocks** instead of dropping: a
 dropped frame is not a stutter you can forgive, it is timing that stays wrong
 forever, so the honest cost of recording is a slower editor while it runs.
+
+**Panels** — Button, Slider and Field COMPs are widgets on the output,
+clickable in perform mode and laid out in fractions of it, so a panel built
+against a 1280×720 viewer lands in the same place on a 4K projector.
+
+A widget is a node and its state is an ordinary parameter, which is the whole
+design and everything else falls out of it: the fader positions are **in the
+project file**, undo works on them because parameter edits are what undo is
+made of, and a widget can be driven by the network as readily as it drives the
+network — export a CHOP to a slider's Value and the slider moves. A Panel CHOP
+gathers several of them into channels when eight faders would otherwise be
+eight separate binds.
+
+**Callbacks** — an Execute DAT runs Python on `onStart`, `onFrameStart` and
+`onFrameEnd`; a CHOP Execute DAT on `onValueChange`, `onOffToOn` and
+`onOnToOff`; a Parameter Execute DAT when a named parameter moves. Undefined
+callbacks are simply not called, so a script implements the events it cares
+about.
+
+A callback can change the network — `setpar('/blur1', 'size', 12)` — but the
+write is **queued, not applied where it is written**. The cook has to see one
+unchanging graph, so the requests land between frames, in the same phase that
+already syncs clones and replicators. The cost is worth stating plainly: an
+edit made in a callback takes effect on the *next* frame. A failing callback
+reports itself on the node and the frame keeps going, like everything else
+here.
 
 ## What doesn't exist yet
 

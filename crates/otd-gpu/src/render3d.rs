@@ -20,6 +20,11 @@ struct SceneUniforms {
     view_proj: Mat4,
     model: Mat4,
     camera: [f32; 4],
+    /// The camera's right and up axes in world space. A billboard cannot be
+    /// built without them, and deriving them in the shader would mean
+    /// inverting the view matrix per vertex.
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
     light_dir: [f32; 4],
     light_color: [f32; 4],
     base_color: [f32; 4],
@@ -48,6 +53,8 @@ pub struct SceneDescription {
     pub items: Vec<DrawItem>,
     pub view_proj: Mat4,
     pub camera_pos: [f32; 3],
+    pub camera_right: [f32; 3],
+    pub camera_up: [f32; 3],
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
     pub background: [f32; 4],
@@ -79,6 +86,10 @@ pub fn describe(
         items,
         view_proj: math::mul(projection, view),
         camera_pos,
+        // The view matrix's basis rows are the camera's axes in world space;
+        // it is column-major, so they read down the columns.
+        camera_right: [view[0][0], view[1][0], view[2][0]],
+        camera_up: [view[0][1], view[1][1], view[2][1]],
         light_dir,
         light_color,
         background: scene::v4(render_node, ctx, "background"),
@@ -128,6 +139,11 @@ fn collect_items(graph: &Graph, root: &str, ctx: &EvalContext, scene: &dyn Scene
                 return None;
             }
             let surface = material_of(graph, &scene::s(node, ctx, "material"), ctx);
+            let geometry = if surface.shading == scene::Shading::PointSprite {
+                billboards(&geometry)
+            } else {
+                geometry
+            };
             Some(DrawItem {
                 geometry,
                 model: math::trs(
@@ -144,6 +160,29 @@ fn collect_items(graph: &Graph, root: &str, ctx: &EvalContext, scene: &dyn Scene
             })
         })
         .collect()
+}
+
+/// One quad per point, ready for the vertex shader to face at the camera.
+///
+/// Expanded on the CPU rather than in a geometry shader, which WebGPU does not
+/// have, and rather than by instancing, which is already spoken for by the
+/// Geometry COMP. The corner is carried in `uv` as 0..1 — which is also
+/// exactly what a sprite texture wants, so it costs no extra attribute.
+fn billboards(geometry: &otd_sop::Geometry) -> otd_sop::Geometry {
+    let mut points = Vec::with_capacity(geometry.points.len() * 4);
+    let mut indices = Vec::with_capacity(geometry.points.len() * 6);
+    for p in &geometry.points {
+        let base = points.len() as u32;
+        for uv in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] {
+            points.push(otd_sop::Point { uv, ..*p });
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    otd_sop::Geometry {
+        points,
+        indices,
+        topology: otd_sop::Topology::Triangles,
+    }
 }
 
 /// The three edges of every triangle, as index pairs for a line list.
@@ -228,6 +267,23 @@ fn material_of(graph: &Graph, path: &str, ctx: &EvalContext) -> Surface {
             color_map: None,
             shading: scene::Shading::Constant,
             wireframe: true,
+        },
+        scene::POINT_SPRITE => Surface {
+            base_color,
+            // x is the sprite's world size, y whether to round it off.
+            material: [
+                scene::f(node, ctx, "size"),
+                if scene::b(node, ctx, "round") {
+                    1.0
+                } else {
+                    0.0
+                },
+                emit,
+                has_map,
+            ],
+            color_map: map,
+            shading: scene::Shading::PointSprite,
+            wireframe: false,
         },
         scene::PHONG => Surface {
             base_color,
@@ -503,6 +559,7 @@ impl Renderer {
             instance_count: u32,
             bind: wgpu::BindGroup,
             lines: bool,
+            cull: Option<wgpu::Face>,
         }
 
         let mut prepared = Vec::with_capacity(description.items.len());
@@ -526,9 +583,14 @@ impl Renderer {
             // Per item as well as per render: a Wireframe MAT on one object
             // in a lit scene is the useful case, and the Render TOP's own
             // flag is the "show me everything as edges" override.
-            let lines = description.wireframe
-                || item.wireframe
-                || item.geometry.topology != otd_sop::Topology::Triangles;
+            // A sprite is a picture; drawing its quad's edges is never what
+            // was meant, and a billboard has no back to cull.
+            let sprite = item.shading == scene::Shading::PointSprite;
+            let lines = !sprite
+                && (description.wireframe
+                    || item.wireframe
+                    || item.geometry.topology != otd_sop::Topology::Triangles);
+            let cull = if sprite { None } else { description.cull };
             let edges = (lines && item.geometry.topology == otd_sop::Topology::Triangles)
                 .then(|| triangle_edges(&item.geometry));
 
@@ -560,6 +622,18 @@ impl Renderer {
                     description.camera_pos[0],
                     description.camera_pos[1],
                     description.camera_pos[2],
+                    0.0,
+                ],
+                camera_right: [
+                    description.camera_right[0],
+                    description.camera_right[1],
+                    description.camera_right[2],
+                    0.0,
+                ],
+                camera_up: [
+                    description.camera_up[0],
+                    description.camera_up[1],
+                    description.camera_up[2],
                     0.0,
                 ],
                 light_dir: description.light_dir,
@@ -604,13 +678,14 @@ impl Renderer {
                 instance_count: item.instances.len() as u32,
                 bind,
                 lines,
+                cull,
             });
         }
 
         // Pipelines are created up front for the same borrow reason.
         let pipelines: Vec<wgpu::RenderPipeline> = prepared
             .iter()
-            .map(|p| self.pipeline(device, p.lines, description.cull).clone())
+            .map(|p| self.pipeline(device, p.lines, p.cull).clone())
             .collect();
 
         let bg = description.background;
