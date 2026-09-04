@@ -2817,6 +2817,7 @@ dependencies = [
  "otd-core",
  "otd-sop",
  "pollster 1.0.1",
+ "serde_json",
  "slotmap",
  "thiserror 2.0.19",
  "wgpu",

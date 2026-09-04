@@ -6,6 +6,7 @@
 pub mod context;
 pub mod demo;
 pub mod engine;
+pub mod isf;
 pub mod math;
 pub mod ops;
 pub mod render3d;

@@ -414,6 +414,63 @@ fn a_missing_audio_device_is_reported_not_fatal() {
 }
 
 #[test]
+fn dmx_goes_out_over_the_wire() {
+    use std::net::UdpSocket;
+
+    // Receive on the Art-Net port ourselves. If something else on this
+    // machine already has it, there is nothing to prove here.
+    let Ok(listener) = UdpSocket::bind(("127.0.0.1", otd_chop::dmx::ARTNET_PORT)) else {
+        eprintln!("skipping: Art-Net port already in use");
+        return;
+    };
+    listener
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+
+    let mut p = Patch::new();
+    let levels = p.add("constantCHOP", "levels");
+    let dmx = p.add("dmxoutCHOP", "dmxout1");
+    p.graph.connect(levels, dmx, 0).unwrap();
+    p.set(levels, "channels", Value::Int(3));
+    p.set(levels, "value0", Value::Float(1.0));
+    p.set(levels, "value1", Value::Float(0.5));
+    p.set(levels, "value2", Value::Float(0.0));
+    p.set(dmx, "address", Value::Str("127.0.0.1".into()));
+    p.set(dmx, "universe", Value::Int(2));
+    p.run(dmx, 1);
+
+    assert!(
+        p.host.engine.status("/dmxout1").is_none(),
+        "{:?}",
+        p.host.engine.status("/dmxout1")
+    );
+
+    let mut buf = [0u8; 1024];
+    let (len, _) = listener.recv_from(&mut buf).expect("a packet should arrive");
+    assert!(len > 20);
+    assert_eq!(&buf[0..8], b"Art-Net\0");
+    assert_eq!(&buf[14..16], &[2, 0], "universe 2");
+    // Levels are 0..1 in the network and 0..255 on the wire.
+    assert_eq!(buf[18], 255);
+    assert_eq!(buf[19], 128);
+    assert_eq!(buf[20], 0);
+
+    // A DMX Out passes its input through, so it can sit mid-chain.
+    assert_eq!(p.data(dmx).num_channels(), 3);
+}
+
+#[test]
+fn a_bad_dmx_address_is_reported_not_fatal() {
+    let mut p = Patch::new();
+    let levels = p.add("constantCHOP", "levels");
+    let dmx = p.add("dmxoutCHOP", "dmxout1");
+    p.graph.connect(levels, dmx, 0).unwrap();
+    p.set(dmx, "address", Value::Str("not a host".into()));
+    p.run(dmx, 1);
+    assert!(p.host.engine.status("/dmxout1").is_some());
+}
+
+#[test]
 fn every_chop_cooks_without_panicking() {
     let mut p = Patch::new();
     for spec in ops::all() {
@@ -422,6 +479,8 @@ fn every_chop_cooks_without_panicking() {
         if spec.def.type_name.contains("audiodevice")
             || spec.def.type_name.contains("osc")
             || spec.def.type_name.contains("midi")
+            // A DMX Out broadcasts by default; leave the network alone.
+            || spec.def.type_name.contains("dmx")
         {
             continue;
         }

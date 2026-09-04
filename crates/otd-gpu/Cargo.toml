@@ -12,6 +12,7 @@ log = "0.4.33"
 otd-core = { version = "0.1.0", path = "../otd-core" }
 otd-sop = { version = "0.1.0", path = "../otd-sop" }
 pollster = "1.0.1"
+serde_json = "1.0.151"
 slotmap = "1.1.1"
 thiserror = "2.0.19"
 wgpu = { version = "29", features = ["glsl"] }

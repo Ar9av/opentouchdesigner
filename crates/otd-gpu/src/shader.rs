@@ -65,6 +65,20 @@ layout(set = 0, binding = 0) uniform Uniforms {
 #define iDate vec4(0.0)
 "#;
 
+/// Texture inputs, declared only when a shader actually samples them.
+///
+/// naga's GLSL front-end maps a combined `sampler2D` onto our separate
+/// texture and sampler bindings, which is what lets an imported ISF shader
+/// call `texture(img, uv)` unchanged.
+const GLSL_SAMPLERS: &str = r#"layout(set = 0, binding = 1) uniform sampler otd_samp;
+layout(set = 0, binding = 2) uniform texture2D otd_tex0;
+layout(set = 0, binding = 3) uniform texture2D otd_tex1;
+#define otd_image0 sampler2D(otd_tex0, otd_samp)
+#define otd_image1 sampler2D(otd_tex1, otd_samp)
+#define iChannel0 otd_image0
+#define iChannel1 otd_image1
+"#;
+
 /// Shadertoy's fragCoord has its origin bottom-left; ours is top-left.
 const GLSL_MAIN: &str = r#"
 void main() {
@@ -77,6 +91,11 @@ void main() {
 /// assembled without the shim.
 pub fn wrap_glsl(source: &str) -> String {
     let mut out = String::from(GLSL_PREAMBLE);
+    // Declaring samplers a shader never uses would still bind them, so only
+    // pay for them when the source mentions one.
+    if source.contains("otd_image") || source.contains("iChannel") {
+        out.push_str(GLSL_SAMPLERS);
+    }
     out.push_str(source);
     if !source.contains("void main(") {
         out.push_str(GLSL_MAIN);
