@@ -264,3 +264,96 @@ fn a_table_round_trips_through_the_project_format() {
         contents
     );
 }
+
+#[test]
+fn udp_datagrams_arrive_as_rows() {
+    use std::net::UdpSocket;
+
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let udp = add(&mut rig.graph, &reg, root, "udpinDAT", "udpin1");
+    // A high port, to avoid colliding with anything a developer is running.
+    const PORT: i64 = 38481;
+    rig.graph.set_param(udp, "port", Value::Int(PORT)).unwrap();
+    rig.run(udp);
+
+    if rig.engines.dat.status_of("/udpin1").is_some() {
+        eprintln!("skipping: could not bind UDP port {PORT}");
+        return;
+    }
+
+    let sender = UdpSocket::bind("127.0.0.1:0").expect("bind sender");
+    sender
+        .send_to(b"GO cue-12\n", format!("127.0.0.1:{PORT}"))
+        .expect("send");
+
+    // The listener is on its own thread; give it a moment, then cook. The
+    // node is time dependent, so cooking again with nothing changed in the
+    // graph is exactly the path being tested.
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        rig.run(udp);
+        if rig.data(udp).num_rows() > 1 {
+            break;
+        }
+    }
+    assert_eq!(rig.data(udp).cell(0, 0), "message");
+    assert_eq!(
+        rig.data(udp).cell(1, 0),
+        "GO cue-12",
+        "trailing newline trimmed, text intact"
+    );
+}
+
+#[test]
+fn udp_out_sends_changes_and_only_changes() {
+    use std::net::UdpSocket;
+
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+
+    let listener = UdpSocket::bind("127.0.0.1:0").expect("bind listener");
+    listener
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+    let port = listener.local_addr().unwrap().port() as i64;
+
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let text = add(&mut rig.graph, &reg, root, "textDAT", "text1");
+    let out = add(&mut rig.graph, &reg, root, "udpoutDAT", "udpout1");
+    rig.graph.connect(text, out, 0).unwrap();
+    rig.graph
+        .set_param(text, "text", Value::Str("hello".into()))
+        .unwrap();
+    rig.graph.set_param(out, "port", Value::Int(port)).unwrap();
+
+    let mut buf = [0u8; 1024];
+    rig.run(out);
+    let (len, _) = listener.recv_from(&mut buf).expect("first datagram");
+    assert_eq!(&buf[..len], b"hello");
+
+    // Cooked again with the same payload: nothing should arrive — UDP Out
+    // sends changes, not frames.
+    rig.run(out);
+    rig.run(out);
+    listener
+        .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+        .unwrap();
+    assert!(
+        listener.recv_from(&mut buf).is_err(),
+        "an unchanged payload was re-sent"
+    );
+
+    rig.graph
+        .set_param(text, "text", Value::Str("cue 2".into()))
+        .unwrap();
+    listener
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+    rig.run(out);
+    let (len, _) = listener.recv_from(&mut buf).expect("changed datagram");
+    assert_eq!(&buf[..len], b"cue 2");
+}

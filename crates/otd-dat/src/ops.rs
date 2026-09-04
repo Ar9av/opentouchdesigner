@@ -12,6 +12,7 @@ pub struct DatCtx<'a> {
     pub eval: &'a EvalContext<'a>,
     pub inputs: Vec<DatData>,
     pub scripts: Option<&'a dyn ScriptHost>,
+    pub net: &'a mut crate::net::Net,
     pub path: &'a str,
     /// Set by an operator that could not do its job — a bad script, malformed
     /// JSON — and shown on the node.
@@ -284,6 +285,109 @@ fn cook_script(c: &mut DatCtx) -> DatData {
     }
 }
 
+// ------------------------------------------------------------------- UDP
+
+fn params_udp_in() -> IndexMap<String, Param> {
+    params! {
+        "port" => Param::int(7000).with_label("Port").with_range(1.0, 65535.0),
+        "keep" => Param::int(20).with_label("Rows Kept").with_range(1.0, 1000.0),
+    }
+}
+
+/// Received datagrams as a table, one message per row, newest last —
+/// the shape a Select DAT or a script naturally reads a log in.
+fn cook_udp_in(c: &mut DatCtx) -> DatData {
+    let port = c.val("port").as_i64().clamp(1, 65535) as u16;
+    let keep = c.val("keep").as_i64().clamp(1, crate::net::KEEP_CAP as i64) as usize;
+    let path = c.path.to_string();
+
+    let needs_open = c
+        .net
+        .udp_in
+        .get(&path)
+        .map(|u| u.port != port)
+        .unwrap_or(true);
+    if needs_open {
+        // Drop the old listener before binding the new port.
+        c.net.udp_in.remove(&path);
+        match crate::net::UdpIn::open(port) {
+            Ok(u) => {
+                c.net.udp_in.insert(path.clone(), u);
+            }
+            Err(e) => {
+                c.error = Some(e);
+                return DatData::table(vec![vec!["message".into()]]);
+            }
+        }
+    }
+
+    let mut rows = vec![vec!["message".to_string()]];
+    if let Some(listener) = c.net.udp_in.get(&path) {
+        if let Ok(messages) = listener.messages.lock() {
+            let start = messages.len().saturating_sub(keep);
+            rows.extend(messages[start..].iter().map(|m| vec![m.clone()]));
+        }
+    }
+    DatData::table(rows)
+}
+
+fn params_udp_out() -> IndexMap<String, Param> {
+    params! {
+        "address" => Param::str("127.0.0.1").with_label("Address"),
+        "port" => Param::int(7001).with_label("Port").with_range(1.0, 65535.0),
+        "active" => Param::bool(true).with_label("Active"),
+    }
+}
+
+/// Sends its input's text as one datagram — when it *changes*. A DAT cooks
+/// whenever anything upstream does; resending an unchanged payload every
+/// cook would turn a cook into a broadcast.
+fn cook_udp_out(c: &mut DatCtx) -> DatData {
+    let input = c.input(0);
+    let host = c.s("address");
+    let port = c.val("port").as_i64().clamp(1, 65535) as u16;
+    let active = c.b("active");
+    let path = c.path.to_string();
+
+    if !active {
+        return input;
+    }
+    let Ok(target) = format!("{}:{}", host.trim(), port).parse::<std::net::SocketAddr>() else {
+        c.error = Some(format!("bad UDP address `{host}:{port}`"));
+        return input;
+    };
+
+    let needs_open = c
+        .net
+        .udp_out
+        .get(&path)
+        .map(|u| u.target != target)
+        .unwrap_or(true);
+    if needs_open {
+        match crate::net::UdpOut::open(target) {
+            Ok(u) => {
+                c.net.udp_out.insert(path.clone(), u);
+            }
+            Err(e) => {
+                c.error = Some(e);
+                return input;
+            }
+        }
+    }
+
+    if let Some(out) = c.net.udp_out.get_mut(&path) {
+        let text = input.as_text();
+        if out.sent.as_deref() != Some(text.as_str()) && !text.is_empty() {
+            if let Err(e) = out.socket.send_to(text.as_bytes(), out.target) {
+                c.error = Some(format!("UDP send: {e}"));
+            } else {
+                out.sent = Some(text);
+            }
+        }
+    }
+    input
+}
+
 // ------------------------------------------------------------ pass-through
 
 fn cook_null(c: &mut DatCtx) -> DatData {
@@ -375,6 +479,27 @@ fn specs() -> &'static Vec<DatSpec> {
                 cook_null,
             ),
         ];
+        // UDP In re-cooks every frame: messages arrive whether or not
+        // anything in the graph changed.
+        let mut udp_in = spec(
+            "udpinDAT",
+            "UDP In",
+            &[],
+            "Datagrams received on a port, one message per row.",
+            params_udp_in,
+            cook_udp_in,
+        );
+        udp_in.def.time_dependent = true;
+        v.push(udp_in);
+        v.push(spec(
+            "udpoutDAT",
+            "UDP Out",
+            &["in"],
+            "Sends its input's text as a datagram when it changes.",
+            params_udp_out,
+            cook_udp_out,
+        ));
+
         // A Script DAT re-runs every frame: its source may read time, and
         // there is no way to know it doesn't.
         let mut script = spec(
