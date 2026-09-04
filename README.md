@@ -19,15 +19,23 @@ component palette, a node editor with projector output, and a headless CLI.
 cargo run -p otd-app
 ```
 
-It opens on the starter patch: `noise1 → level1 → null1`, animated, running
-live. Every node shows its own output at frame rate — a TOP shows its texture,
-a CHOP shows its waveform.
+It opens on `tunnel`: nine nodes, no shader, a cyan-and-magenta warp tunnel
+built out of a feedback loop. Every node shows its own output at frame rate —
+a TOP shows its texture, a CHOP shows its waveform — so the network is also
+the explanation of how the picture was made.
 
-**File → Examples** has the demos each phase was built to reach:
+**New here?** [`docs/GUIDE.md`](docs/GUIDE.md) is the short version of how
+realtime visuals are actually made: why the motion comes from a *loop* rather
+than from any one operator, the five recipes most good-looking patches are
+built from, and a list of the reasons a patch ends up looking like grey mud.
+
+**File → Examples**:
 
 | | |
 |---|---|
-| `starter` | `noise → level → viewer`, animated by expressions |
+| `tunnel` | the opening patch — a feedback warp tunnel, no shader |
+| `plasma` | domain-warped noise in one GLSL TOP, with helper functions |
+| `starter` | `noise → level → viewer` — the smallest thing that proves the engine works |
 | `feedback` | a Shadertoy shader driving a feedback loop at 1920×1080 |
 | `audioreactive` | audio spectrum and MIDI notes driving a visual through Exports |
 | `lfo` | the smallest thing that shows a channel driving a parameter |
@@ -392,7 +400,12 @@ FFT, so those paths are exercised rather than mocked.
 
 ## Docs
 
-[`docs/OPERATORS.md`](docs/OPERATORS.md) is the operator reference — all 77,
+[`docs/GUIDE.md`](docs/GUIDE.md) — how to make something that looks good:
+feedback loops, contrast before the loop, colourising through a ramp,
+exporting audio onto parameters, stealing Shadertoy and ISF shaders,
+instancing, and why a patch turns to mud.
+
+[`docs/OPERATORS.md`](docs/OPERATORS.md) is the operator reference — all 79,
 with their inputs, parameters, defaults and ranges. It is *generated* from the
 same registry the editor builds its menus and parameter pages from, so it
 cannot drift from what the operators actually do:

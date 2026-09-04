@@ -1,0 +1,137 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/decay1",
+      op: "levelTOP",
+      pos: (-210.0, 160.0),
+      inputs: [
+        "/fb1",
+      ],
+      params: {
+        "brightness": (
+          value: Float(0.965),
+        ),
+      },
+    ),
+    (
+      path: "/fb1",
+      op: "feedbackTOP",
+      pos: (-420.0, 160.0),
+      params: {
+        "target": (
+          value: Str("/out1"),
+        ),
+      },
+    ),
+    (
+      path: "/mix1",
+      op: "compositeTOP",
+      pos: (210.0, 20.0),
+      inputs: [
+        "/tint1",
+        "/zoom1",
+      ],
+      params: {
+        "operation": (
+          value: Str("maximum"),
+        ),
+      },
+    ),
+    (
+      path: "/noise1",
+      op: "noiseTOP",
+      pos: (-620.0, -170.0),
+      params: {
+        "period": (
+          value: Float(0.22),
+        ),
+        "harmonics": (
+          value: Int(6),
+        ),
+        "translate": (
+          value: Vec3((0.0, 0.0, 0.0)),
+          mode: Expression,
+          expression: "absTime * 0.06",
+        ),
+      },
+    ),
+    (
+      path: "/out1",
+      op: "nullTOP",
+      pos: (420.0, 20.0),
+      inputs: [
+        "/mix1",
+      ],
+    ),
+    (
+      path: "/palette1",
+      op: "rampTOP",
+      pos: (-620.0, -20.0),
+      params: {
+        "phase": (
+          value: Float(0.0),
+          mode: Expression,
+          expression: "absTime * 0.05",
+        ),
+        "color1": (
+          value: Vec4((0.15, 0.95, 0.9, 1.0)),
+        ),
+        "color2": (
+          value: Vec4((0.95, 0.25, 0.7, 1.0)),
+        ),
+      },
+    ),
+    (
+      path: "/tint1",
+      op: "compositeTOP",
+      pos: (-210.0, -110.0),
+      inputs: [
+        "/wisps1",
+        "/palette1",
+      ],
+      params: {
+        "operation": (
+          value: Str("multiply"),
+        ),
+      },
+    ),
+    (
+      path: "/wisps1",
+      op: "levelTOP",
+      pos: (-420.0, -170.0),
+      inputs: [
+        "/noise1",
+      ],
+      params: {
+        "brightness": (
+          value: Float(1.9),
+        ),
+        "contrast": (
+          value: Float(2.4),
+        ),
+        "blacklevel": (
+          value: Float(0.42),
+        ),
+      },
+    ),
+    (
+      path: "/zoom1",
+      op: "transformTOP",
+      pos: (0.0, 160.0),
+      inputs: [
+        "/decay1",
+      ],
+      params: {
+        "rotate": (
+          value: Float(0.8),
+        ),
+        "scale": (
+          value: Vec2((1.035, 1.035)),
+        ),
+      },
+    ),
+  ],
+)

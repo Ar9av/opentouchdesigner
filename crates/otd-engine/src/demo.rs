@@ -162,6 +162,177 @@ pub fn lfo_driven(registry: &OpRegistry) -> (Graph, NodeId) {
     (graph, out)
 }
 
+/// The patch the editor opens on.
+///
+/// It exists because the first thing a new user sees is an argument about
+/// what the tool is for, and "an animated grey noise field" is a bad
+/// argument. This is nine nodes and no shader, and every one of them is a
+/// lesson:
+///
+/// ```text
+///   noise1 ──► wisps1 ──┐                    (contrast the noise into sparse
+///   palette1 ───────────┴─► tint1 ──┐         bright wisps, tint through a ramp)
+///                                   ├─► mix1 ──► out1
+///   fb1 ──► decay1 ──► zoom1 ───────┘         (last frame, dimmed and scaled up)
+/// ```
+///
+/// The motion is not in any operator. It is in the *loop*: `fb1` reads the
+/// previous frame, `zoom1` pushes it outward, `decay1` fades it, and `mix1`
+/// lays this frame's wisps on top. Every frame is the last one, slightly
+/// larger and slightly darker — which is what a warp tunnel is.
+pub fn tunnel(registry: &OpRegistry) -> (Graph, NodeId) {
+    let mut graph = Graph::new();
+    let root = graph.root();
+    let add = |graph: &mut Graph, op: &str, name: &str, pos: [f32; 2]| {
+        let def = registry.get(op).unwrap().clone();
+        let id = graph.create(root, &def, Some(name)).unwrap();
+        graph.node_mut_quiet(id).pos = pos;
+        id
+    };
+
+    let noise = add(&mut graph, "noiseTOP", "noise1", [-620.0, -170.0]);
+    let wisps = add(&mut graph, "levelTOP", "wisps1", [-420.0, -170.0]);
+    let palette = add(&mut graph, "rampTOP", "palette1", [-620.0, -20.0]);
+    let tint = add(&mut graph, "compositeTOP", "tint1", [-210.0, -110.0]);
+    let fb = add(&mut graph, otd_gpu::ops::FEEDBACK, "fb1", [-420.0, 160.0]);
+    let decay = add(&mut graph, "levelTOP", "decay1", [-210.0, 160.0]);
+    let zoom = add(&mut graph, "transformTOP", "zoom1", [0.0, 160.0]);
+    let mix = add(&mut graph, "compositeTOP", "mix1", [210.0, 20.0]);
+    let out = add(&mut graph, otd_gpu::ops::NULL, "out1", [420.0, 20.0]);
+
+    graph.connect(noise, wisps, 0).unwrap();
+    graph.connect(wisps, tint, 0).unwrap();
+    graph.connect(palette, tint, 1).unwrap();
+    graph.connect(fb, decay, 0).unwrap();
+    graph.connect(decay, zoom, 0).unwrap();
+    // The source is input 0, so the chain takes its resolution from the
+    // generator rather than from the loop, which has nothing on frame one.
+    graph.connect(tint, mix, 0).unwrap();
+    graph.connect(zoom, mix, 1).unwrap();
+    graph.connect(mix, out, 0).unwrap();
+
+    let mut set = |id, key: &str, v: Value| graph.set_param(id, key, v).unwrap();
+    for id in [noise, palette] {
+        set(id, "resw", Value::Int(1280));
+        set(id, "resh", Value::Int(720));
+    }
+    // Fine, monochrome noise: the colour comes from the ramp, so the palette
+    // is one parameter to change rather than three.
+    set(noise, "period", Value::Float(0.22));
+    set(noise, "harmonics", Value::Int(6));
+    set(noise, "monochrome", Value::Bool(true));
+
+    // A black level this high is the whole trick. It throws away the middle
+    // of the noise and leaves only the brightest wisps, so the loop is fed
+    // sparse highlights instead of a grey wash — which is the difference
+    // between a tunnel and fog.
+    set(wisps, "blacklevel", Value::Float(0.42));
+    set(wisps, "contrast", Value::Float(2.4));
+    set(wisps, "brightness", Value::Float(1.9));
+
+    set(palette, "color1", Value::Vec4([0.15, 0.95, 0.90, 1.0]));
+    set(palette, "color2", Value::Vec4([0.95, 0.25, 0.70, 1.0]));
+    set(tint, "operation", Value::Str("multiply".into()));
+
+    // Slightly less than 1 and slightly more than 1: the two numbers that
+    // decide how long the trails are and how fast they fly.
+    set(decay, "brightness", Value::Float(0.965));
+    set(zoom, "scale", Value::Vec2([1.035, 1.035]));
+    set(zoom, "rotate", Value::Float(0.8));
+    set(mix, "operation", Value::Str("maximum".into()));
+    set(fb, "target", Value::Str("/out1".into()));
+
+    graph
+        .set_expression(noise, "translate", "absTime * 0.06")
+        .unwrap();
+    graph
+        .set_expression(palette, "phase", "absTime * 0.05")
+        .unwrap();
+    (graph, out)
+}
+
+/// Domain-warped noise, in one GLSL TOP.
+///
+/// The counterweight to `tunnel`: everything there is nodes and no shader,
+/// and everything here is one shader and no nodes. Both are first-class —
+/// the point of the GLSL TOP is that the ceiling of a patch is not the
+/// operator list.
+///
+/// The source is also the worked example for the escape hatch: because it
+/// declares its own `@fragment` entry point it is compiled as written rather
+/// than wrapped as a fragment body, which is what makes helper functions
+/// possible.
+pub const NEBULA_WGSL: &str = r#"// Value noise and fbm, then iq's domain warping: fbm of fbm of fbm.
+// Declaring @fragment means this is used as written, so helpers are allowed.
+fn hash(p: vec2f) -> f32 {
+  return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2f(1.0, 0.0)), u.x),
+             mix(hash(i + vec2f(0.0, 1.0)), hash(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0;
+  var a = 0.5;
+  var v = 0.0;
+  for (var i = 0; i < 5; i = i + 1) {
+    v = v + a * vnoise(p);
+    p = p * 2.02;
+    a = a * 0.5;
+  }
+  return v;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+  let t = U.time.x * 0.15;
+  let aspect = U.res.x / U.res.y;
+  let uv = (in.uv - vec2f(0.5)) * vec2f(aspect, 1.0) * 2.5;
+
+  // Each layer warps the coordinates the next one is sampled at.
+  let q = vec2f(fbm(uv + vec2f(0.0, t)), fbm(uv + vec2f(5.2, 1.3 - t)));
+  let r = vec2f(fbm(uv + 4.0 * q + vec2f(1.7, 9.2) + t),
+                fbm(uv + 4.0 * q + vec2f(8.3, 2.8) - t));
+  let f = fbm(uv + 4.0 * r);
+
+  // Dark base, two accents, and a hot highlight only where the warp piles
+  // up — contrast is what stops a noise field looking like mud.
+  let shade = clamp(f * f * 3.0, 0.0, 1.0);
+  var col = mix(vec3f(0.02, 0.02, 0.09), vec3f(0.05, 0.55, 0.85), shade);
+  col = mix(col, vec3f(0.85, 0.15, 0.55), clamp(length(q) * 0.9 - 0.15, 0.0, 1.0));
+  col = col + vec3f(1.0, 0.75, 0.35) * pow(clamp(r.x * 1.5, 0.0, 1.0), 4.0) * 1.2;
+  col = col * (0.35 + 1.1 * f);
+  return vec4f(col, 1.0);
+}
+"#;
+
+pub fn plasma(registry: &OpRegistry) -> (Graph, NodeId) {
+    let mut graph = Graph::new();
+    let root = graph.root();
+    let add = |graph: &mut Graph, op: &str, name: &str, pos: [f32; 2]| {
+        let def = registry.get(op).unwrap().clone();
+        let id = graph.create(root, &def, Some(name)).unwrap();
+        graph.node_mut_quiet(id).pos = pos;
+        id
+    };
+
+    let glsl = add(&mut graph, otd_gpu::ops::GLSL, "nebula1", [-200.0, 0.0]);
+    let out = add(&mut graph, otd_gpu::ops::NULL, "out1", [40.0, 0.0]);
+    graph.connect(glsl, out, 0).unwrap();
+
+    graph.set_param(glsl, "resw", Value::Int(1280)).unwrap();
+    graph.set_param(glsl, "resh", Value::Int(720)).unwrap();
+    graph
+        .set_param(glsl, "source", Value::Str(NEBULA_WGSL.into()))
+        .unwrap();
+    (graph, out)
+}
+
 /// Video in, through a trail, out.
 ///
 /// The point of the patch is that once a movie is a texture, it is a texture:
@@ -630,6 +801,8 @@ pub fn by_name(name: &str, registry: &OpRegistry) -> Option<(Graph, NodeId)> {
     match name {
         "keyframes" => Some(keyframes(registry)),
         "video" => Some(video(registry)),
+        "tunnel" => Some(tunnel(registry)),
+        "plasma" => Some(plasma(registry)),
         "starter" => Some(starter(registry)),
         "feedback" => Some(feedback(registry, 1920, 1080)),
         "audioreactive" => Some(audio_reactive(registry)),
@@ -641,6 +814,8 @@ pub fn by_name(name: &str, registry: &OpRegistry) -> Option<(Graph, NodeId)> {
 }
 
 pub const NAMES: &[&str] = &[
+    "tunnel",
+    "plasma",
     "starter",
     "feedback",
     "audioreactive",
