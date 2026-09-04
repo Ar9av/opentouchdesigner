@@ -1,0 +1,249 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/audioin1",
+      op: "audiodeviceinCHOP",
+      pos: (-760.0, 200.0),
+    ),
+    (
+      path: "/bass_vis",
+      op: "containerCOMP",
+      pos: (-320.0, -120.0),
+      inputs: [
+        "/spectrum1",
+      ],
+      params: {
+        "band": (
+          label: "Band",
+          value: Int(1),
+          range: Some((1.0, 4.0)),
+          custom: true,
+        ),
+        "hue": (
+          label: "Hue",
+          value: Float(0.02),
+          range: Some((0.0, 1.0)),
+          custom: true,
+        ),
+        "gain": (
+          label: "Gain",
+          value: Float(1.4),
+          range: Some((0.0, 4.0)),
+          custom: true,
+        ),
+      },
+    ),
+    (
+      path: "/bass_vis/in1",
+      op: "inCHOP",
+      pos: (-420.0, 40.0),
+    ),
+    (
+      path: "/bass_vis/out1",
+      op: "outTOP",
+      pos: (40.0, -160.0),
+      inputs: [
+        "/bass_vis/ring",
+      ],
+    ),
+    (
+      path: "/bass_vis/pick",
+      op: "selectCHOP",
+      pos: (-240.0, 40.0),
+      inputs: [
+        "/bass_vis/in1",
+      ],
+      params: {
+        "channels": (
+          value: Str("*"),
+          mode: Expression,
+          expression: "\'band\' + str(parent(\'band\'))",
+        ),
+        "rename": (
+          value: Str("level"),
+        ),
+      },
+    ),
+    (
+      path: "/bass_vis/ring",
+      op: "glslTOP",
+      pos: (-240.0, -160.0),
+      params: {
+        "source": (
+          value: Str("let p = (in.uv - 0.5) * 2.0;\nlet r = length(p);\nlet level = U.p0.x * U.p0.z;\nlet ring = smoothstep(0.5, 0.0, abs(r - 0.25 - level * 0.45));\nlet hue = U.p0.y;\nlet tint = vec3<f32>(\n  0.5 + 0.5 * cos(6.2831 * (hue + 0.00)),\n  0.5 + 0.5 * cos(6.2831 * (hue + 0.33)),\n  0.5 + 0.5 * cos(6.2831 * (hue + 0.66)),\n);\nreturn vec4<f32>(tint * ring * (0.2 + level), 1.0);\n"),
+        ),
+        "uniform1": (
+          value: Vec4((1.0, 0.6, 0.2, 1.0)),
+          mode: Expression,
+          expression: "[ch(me.rsplit(\'/\', 1)[0] + \'/smooth\', \'level\'), parent(\'hue\'), parent(\'gain\'), 1.0]",
+        ),
+        "resw": (
+          value: Int(640),
+        ),
+        "resh": (
+          value: Int(640),
+        ),
+      },
+    ),
+    (
+      path: "/bass_vis/smooth",
+      op: "lagCHOP",
+      pos: (-60.0, 40.0),
+      inputs: [
+        "/bass_vis/pick",
+      ],
+      params: {
+        "lagup": (
+          value: Float(0.02),
+        ),
+        "lagdown": (
+          value: Float(0.3),
+        ),
+      },
+    ),
+    (
+      path: "/comp1",
+      op: "compositeTOP",
+      pos: (-40.0, 0.0),
+      inputs: [
+        "/bass_vis",
+        "/treble_vis",
+      ],
+      params: {
+        "operation": (
+          value: Str("maximum"),
+        ),
+      },
+    ),
+    (
+      path: "/cues",
+      op: "tableDAT",
+      pos: (-760.0, 400.0),
+      params: {
+        "text": (
+          value: Str("cue\tband\thue\nintro\t1\t0.02\nbuild\t2\t0.30\ndrop\t4\t0.55"),
+        ),
+      },
+    ),
+    (
+      path: "/out1",
+      op: "nullTOP",
+      pos: (180.0, 0.0),
+      inputs: [
+        "/comp1",
+      ],
+    ),
+    (
+      path: "/spectrum1",
+      op: "audiospectrumCHOP",
+      pos: (-560.0, 200.0),
+      inputs: [
+        "/audioin1",
+      ],
+      params: {
+        "gain": (
+          value: Float(24.0),
+        ),
+      },
+    ),
+    (
+      path: "/treble_vis",
+      op: "containerCOMP",
+      pos: (-320.0, 120.0),
+      inputs: [
+        "/spectrum1",
+      ],
+      params: {
+        "band": (
+          label: "Band",
+          value: Int(4),
+          range: Some((1.0, 4.0)),
+          custom: true,
+        ),
+        "hue": (
+          label: "Hue",
+          value: Float(0.55),
+          range: Some((0.0, 1.0)),
+          custom: true,
+        ),
+        "gain": (
+          label: "Gain",
+          value: Float(2.2),
+          range: Some((0.0, 4.0)),
+          custom: true,
+        ),
+      },
+    ),
+    (
+      path: "/treble_vis/in1",
+      op: "inCHOP",
+      pos: (-420.0, 40.0),
+    ),
+    (
+      path: "/treble_vis/out1",
+      op: "outTOP",
+      pos: (40.0, -160.0),
+      inputs: [
+        "/treble_vis/ring",
+      ],
+    ),
+    (
+      path: "/treble_vis/pick",
+      op: "selectCHOP",
+      pos: (-240.0, 40.0),
+      inputs: [
+        "/treble_vis/in1",
+      ],
+      params: {
+        "channels": (
+          value: Str("*"),
+          mode: Expression,
+          expression: "\'band\' + str(parent(\'band\'))",
+        ),
+        "rename": (
+          value: Str("level"),
+        ),
+      },
+    ),
+    (
+      path: "/treble_vis/ring",
+      op: "glslTOP",
+      pos: (-240.0, -160.0),
+      params: {
+        "source": (
+          value: Str("let p = (in.uv - 0.5) * 2.0;\nlet r = length(p);\nlet level = U.p0.x * U.p0.z;\nlet ring = smoothstep(0.5, 0.0, abs(r - 0.25 - level * 0.45));\nlet hue = U.p0.y;\nlet tint = vec3<f32>(\n  0.5 + 0.5 * cos(6.2831 * (hue + 0.00)),\n  0.5 + 0.5 * cos(6.2831 * (hue + 0.33)),\n  0.5 + 0.5 * cos(6.2831 * (hue + 0.66)),\n);\nreturn vec4<f32>(tint * ring * (0.2 + level), 1.0);\n"),
+        ),
+        "uniform1": (
+          value: Vec4((1.0, 0.6, 0.2, 1.0)),
+          mode: Expression,
+          expression: "[ch(me.rsplit(\'/\', 1)[0] + \'/smooth\', \'level\'), parent(\'hue\'), parent(\'gain\'), 1.0]",
+        ),
+        "resw": (
+          value: Int(640),
+        ),
+        "resh": (
+          value: Int(640),
+        ),
+      },
+    ),
+    (
+      path: "/treble_vis/smooth",
+      op: "lagCHOP",
+      pos: (-60.0, 40.0),
+      inputs: [
+        "/treble_vis/pick",
+      ],
+      params: {
+        "lagup": (
+          value: Float(0.02),
+        ),
+        "lagdown": (
+          value: Float(0.3),
+        ),
+      },
+    ),
+  ],
+)
