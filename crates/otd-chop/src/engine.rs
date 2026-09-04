@@ -53,7 +53,9 @@ pub struct Network<'a> {
 
 impl ChannelSource for Network<'_> {
     fn channel(&self, op_path: &str, channel: &str) -> Option<f32> {
-        let id = self.graph.find(op_path)?;
+        // Resolving means a path can name a component and get the channels
+        // its Out operator produces.
+        let id = self.graph.resolve_output(self.graph.find(op_path)?)?;
         let data = self.chops.get(id)?;
         // By name first, then by index, so `chan1`/`0` both work and an
         // export survives a channel being renamed upstream if it keeps
@@ -100,6 +102,17 @@ impl ChopEngine {
     ) -> Result<ChopData, CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
+
+        // An In operator presents whatever is wired to its component from
+        // outside; there is no operator to run.
+        if node.connector == otd_core::Connector::In {
+            return Ok(graph
+                .connector_source(id)
+                .and_then(|src| chops.get(src))
+                .cloned()
+                .unwrap_or_else(ChopData::empty));
+        }
+
         let spec = ops::spec_for(&node.op_type)
             .ok_or_else(|| CookError::op(&path, format!("unknown CHOP `{}`", node.op_type)))?;
 

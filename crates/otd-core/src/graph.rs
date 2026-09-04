@@ -73,6 +73,19 @@ impl Family {
     }
 }
 
+/// Whether an operator surfaces as a connector on its parent component.
+///
+/// PLAN.md §2.4: "In/Out ops inside a component surface as typed connectors
+/// on the node." That is the whole encapsulation mechanism — a component's
+/// shape is defined by what is inside it, not declared separately.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Connector {
+    #[default]
+    None,
+    In,
+    Out,
+}
+
 /// Per-node toggles that live on the node body in the editor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NodeFlags {
@@ -103,6 +116,11 @@ pub struct Node {
     /// One slot per declared input; `None` means unconnected.
     pub inputs: Vec<Option<NodeId>>,
     pub input_labels: Vec<String>,
+    /// The family each input accepts. Usually the node's own family, but a
+    /// component's connectors take theirs from its In operators, which is how
+    /// one component can accept a TOP and a CHOP.
+    pub input_families: Vec<Family>,
+    pub connector: Connector,
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     /// Editor position. Part of the project file — node layout is authored
@@ -151,6 +169,8 @@ pub struct OpDef {
     pub summary: &'static str,
     pub time_dependent: bool,
     pub params: fn() -> IndexMap<String, Param>,
+    /// Set for the In and Out operators that give a component its shape.
+    pub connector: Connector,
 }
 
 #[derive(Default, Clone)]
@@ -219,6 +239,8 @@ impl Graph {
             params: IndexMap::new(),
             inputs: Vec::new(),
             input_labels: Vec::new(),
+            input_families: Vec::new(),
+            connector: Connector::None,
             parent: None,
             children: Vec::new(),
             pos: [0.0, 0.0],
@@ -315,6 +337,8 @@ impl Graph {
             params: (def.params)(),
             inputs: vec![None; def.inputs.len()],
             input_labels: def.inputs.iter().map(|s| s.to_string()).collect(),
+            input_families: vec![def.family; def.inputs.len()],
+            connector: def.connector,
             parent: Some(parent),
             children: Vec::new(),
             pos: [0.0, 0.0],
@@ -324,7 +348,94 @@ impl Graph {
         };
         let id = self.nodes.insert(node);
         self.nodes[parent].children.push(id);
+        // A new In or Out operator changes its component's shape.
+        self.sync_connectors(parent);
         Ok(id)
+    }
+
+    // -------------------------------------------------- component connectors
+
+    /// The In (or Out) operators of a component, in name order, which is the
+    /// order their connectors appear on the node.
+    pub fn connector_ops(&self, comp: NodeId, kind: Connector) -> Vec<NodeId> {
+        let Some(node) = self.nodes.get(comp) else {
+            return Vec::new();
+        };
+        let mut ops: Vec<NodeId> = node
+            .children
+            .iter()
+            .copied()
+            .filter(|c| self.nodes[*c].connector == kind)
+            .collect();
+        ops.sort_by(|a, b| self.nodes[*a].name.cmp(&self.nodes[*b].name));
+        ops
+    }
+
+    /// Recompute a component's input connectors from the In operators inside
+    /// it. Existing connections keep their index, so adding a second input
+    /// does not unwire the first.
+    pub fn sync_connectors(&mut self, comp: NodeId) {
+        if self.nodes.get(comp).map(|n| n.family) != Some(Family::Comp) {
+            return;
+        }
+        let ins = self.connector_ops(comp, Connector::In);
+        let labels: Vec<String> = ins.iter().map(|i| self.nodes[*i].name.clone()).collect();
+        let families: Vec<Family> = ins.iter().map(|i| self.nodes[*i].family).collect();
+
+        let node = &mut self.nodes[comp];
+        if node.input_labels == labels && node.input_families == families {
+            return;
+        }
+        node.inputs.resize(ins.len(), None);
+        node.input_labels = labels;
+        node.input_families = families;
+        node.revision += 1;
+    }
+
+    /// The family a node presents on its output: its own, or — for a
+    /// component — that of the Out operator inside it.
+    pub fn output_family(&self, id: NodeId) -> Option<Family> {
+        let node = self.nodes.get(id)?;
+        if node.family != Family::Comp {
+            return Some(node.family);
+        }
+        self.connector_ops(id, Connector::Out)
+            .first()
+            .map(|o| self.nodes[*o].family)
+    }
+
+    /// The node that actually produces what `id` presents, following bypass
+    /// flags and stepping out of components into their Out operator.
+    pub fn resolve_output(&self, id: NodeId) -> Option<NodeId> {
+        let mut cur = id;
+        for _ in 0..64 {
+            let node = self.nodes.get(cur)?;
+            if node.flags.bypass {
+                cur = (*node.inputs.first()?)?;
+                continue;
+            }
+            if node.family == Family::Comp {
+                cur = *self.connector_ops(cur, Connector::Out).first()?;
+                continue;
+            }
+            return Some(cur);
+        }
+        None
+    }
+
+    /// For an In operator, the node outside the component that feeds it.
+    pub fn connector_source(&self, in_op: NodeId) -> Option<NodeId> {
+        let node = self.nodes.get(in_op)?;
+        if node.connector != Connector::In {
+            return None;
+        }
+        let comp = node.parent?;
+        let index = self
+            .connector_ops(comp, Connector::In)
+            .iter()
+            .position(|i| *i == in_op)?;
+        let outside = (*self.nodes.get(comp)?.inputs.get(index)?)?;
+        self.resolve_output(outside)
     }
 
     pub fn name_taken(&self, parent: NodeId, name: &str) -> bool {
@@ -368,7 +479,8 @@ impl Graph {
         }
         let doomed_set: HashSet<NodeId> = doomed.iter().copied().collect();
 
-        if let Some(parent) = self.nodes[id].parent {
+        let parent = self.nodes[id].parent;
+        if let Some(parent) = parent {
             self.nodes[parent].children.retain(|c| *c != id);
         }
         for d in &doomed {
@@ -387,6 +499,10 @@ impl Graph {
                 node.revision += 1;
             }
         }
+        // Deleting an In operator removes a connector from its component.
+        if let Some(parent) = parent {
+            self.sync_connectors(parent);
+        }
         Ok(())
     }
 
@@ -404,7 +520,13 @@ impl Graph {
         if input_index >= self.nodes[dst].inputs.len() {
             return Err(GraphError::BadInputIndex(input_index));
         }
-        let (sf, df) = (self.nodes[src].family, self.nodes[dst].family);
+        // Compare against what the source *presents* and what this particular
+        // input *accepts*, which for a component are decided by the operators
+        // inside it rather than by the node's own family.
+        let sf = self
+            .output_family(src)
+            .ok_or(GraphError::FamilyMismatch("nothing", "an input"))?;
+        let df = self.nodes[dst].input_families[input_index];
         if sf != df {
             return Err(GraphError::FamilyMismatch(sf.suffix(), df.suffix()));
         }

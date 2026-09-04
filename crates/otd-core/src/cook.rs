@@ -229,10 +229,23 @@ impl CookEngine {
         // Parameters in Export or Bind mode read from another operator. That
         // operator has to cook first, and its animation has to reach this
         // node, so it is a dependency in every sense except the wire.
-        let param_sources: Vec<NodeId> = node
+        let mut param_sources: Vec<NodeId> = node
             .param_sources()
             .filter_map(|path| graph.find(path))
             .collect();
+
+        // Component boundaries are dependencies too, in both directions: an
+        // In operator depends on whatever is wired to the component from
+        // outside, and a component depends on the Out operator inside it.
+        // Expressing them here means encapsulation costs the cook engine
+        // nothing — dirtiness and time dependence cross the boundary by the
+        // same rules as a wire.
+        if node.connector == crate::graph::Connector::In {
+            param_sources.extend(graph.connector_source(id));
+        }
+        if node.family == crate::graph::Family::Comp {
+            param_sources.extend(graph.connector_ops(id, crate::graph::Connector::Out));
+        }
 
         // Non-wire dependencies (a Select TOP's target, a parameter's Export
         // source) are pulled and versioned exactly like wired inputs, so they
@@ -339,18 +352,13 @@ impl CookEngine {
     }
 }
 
-/// Follow bypass flags to the node that actually produced the output that
-/// `id` presents. Returns `None` if a bypassed node has nothing on input 0.
+/// The node that actually produced the output `id` presents, following
+/// bypass flags and stepping out of components.
+///
+/// Kept as a free function for the engines that were written against it; the
+/// logic lives on [`Graph`].
 pub fn resolve_bypass(graph: &Graph, id: NodeId) -> Option<NodeId> {
-    let mut cur = id;
-    for _ in 0..64 {
-        let node = graph.get(cur)?;
-        if !node.flags.bypass {
-            return Some(cur);
-        }
-        cur = (*node.inputs.first()?)?;
-    }
-    None
+    graph.resolve_output(id)
 }
 
 #[cfg(test)]

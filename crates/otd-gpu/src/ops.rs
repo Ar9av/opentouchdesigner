@@ -8,7 +8,7 @@
 use std::sync::OnceLock;
 
 use otd_core::indexmap::IndexMap;
-use otd_core::{EvalContext, Family, Node, OpDef, OpRegistry, Param, Value};
+use otd_core::{Connector, EvalContext, Family, Node, OpDef, OpRegistry, Param, Value};
 
 pub const COMMON_WGSL: &str = include_str!("shaders/common.wgsl");
 
@@ -310,6 +310,10 @@ pub const FEEDBACK: &str = "feedbackTOP";
 pub const NULL: &str = "nullTOP";
 /// Reads another TOP's output *this* frame, unlike Feedback.
 pub const SELECT: &str = "selectTOP";
+/// A component's texture input, surfaced as a connector on its node.
+pub const IN: &str = "inTOP";
+/// A component's texture output.
+pub const OUT: &str = "outTOP";
 /// Freezes its input on demand.
 pub const CACHE: &str = "cacheTOP";
 /// Compiles a shader from a parameter at cook time.
@@ -420,6 +424,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "A flat colour at a chosen resolution.",
                     time_dependent: false,
                     params: params_constant,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/constant.wgsl"),
                 sizing: Sizing::Params,
@@ -436,6 +441,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Fractal value noise. Animate Translate Z to make it move.",
                     time_dependent: false,
                     params: params_noise,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/noise.wgsl"),
                 sizing: Sizing::Params,
@@ -452,6 +458,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Linear or radial gradient between two colours.",
                     time_dependent: false,
                     params: params_ramp,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/ramp.wgsl"),
                 sizing: Sizing::Params,
@@ -468,6 +475,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Brightness, contrast, gamma, black/white levels.",
                     time_dependent: false,
                     params: params_level,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/level.wgsl"),
                 sizing: Sizing::Input0,
@@ -484,6 +492,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Translate, rotate and scale, with an extend mode.",
                     time_dependent: false,
                     params: params_transform,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/transform.wgsl"),
                 sizing: Sizing::Input0,
@@ -500,6 +509,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Separable Gaussian blur.",
                     time_dependent: false,
                     params: params_blur,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/blur.wgsl"),
                 sizing: Sizing::Input0,
@@ -516,6 +526,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Blend two inputs. Input 2 is composited over input 1.",
                     time_dependent: false,
                     params: params_composite,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/composite.wgsl"),
                 sizing: Sizing::Input0,
@@ -532,6 +543,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Select one of two inputs, optionally blending between them.",
                     time_dependent: false,
                     params: params_switch,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/switch.wgsl"),
                 sizing: Sizing::Input0,
@@ -548,6 +560,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Pass-through. A stable name to reference and to view.",
                     time_dependent: false,
                     params: params_none,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/null.wgsl"),
                 sizing: Sizing::Input0,
@@ -567,6 +580,25 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Last frame's output of the Target TOP.",
                     time_dependent: true,
                     params: params_feedback,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Referenced,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: IN,
+                    label: "In",
+                    family: Family::Top,
+                    // Fed from outside the component, not by a wire in here.
+                    inputs: &[],
+                    summary: "A texture input on this component's node.",
+                    time_dependent: false,
+                    params: params_none,
+                    connector: Connector::In,
                 },
                 shader: include_str!("shaders/null.wgsl"),
                 sizing: Sizing::Referenced,
@@ -585,6 +617,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "This frame's output of another TOP, by path.",
                     time_dependent: false,
                     params: params_select,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/null.wgsl"),
                 sizing: Sizing::Referenced,
@@ -594,13 +627,14 @@ fn specs() -> &'static Vec<TopSpec> {
             },
             TopSpec {
                 def: OpDef {
-                    type_name: "outTOP",
+                    type_name: OUT,
                     label: "Out",
                     family: Family::Top,
                     inputs: &["in"],
-                    summary: "Marks a component's output. A pass-through for now.",
+                    summary: "This component's texture output.",
                     time_dependent: false,
                     params: params_none,
+                    connector: Connector::Out,
                 },
                 shader: include_str!("shaders/null.wgsl"),
                 sizing: Sizing::Input0,
@@ -617,6 +651,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Holds the last frame it saw when Active is off.",
                     time_dependent: false,
                     params: params_cache,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/null.wgsl"),
                 sizing: Sizing::Input0,
@@ -633,6 +668,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Resamples its input to an explicit resolution.",
                     time_dependent: false,
                     params: params_resolution,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/null.wgsl"),
                 sizing: Sizing::Params,
@@ -649,6 +685,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     summary: "Offsets input 1's lookup by channels of input 2.",
                     time_dependent: false,
                     params: params_displace,
+                    connector: Connector::None,
                 },
                 shader: include_str!("shaders/displace.wgsl"),
                 sizing: Sizing::Input0,
@@ -668,6 +705,7 @@ fn specs() -> &'static Vec<TopSpec> {
                     // TouchDesigner's GLSL TOP cooks every frame too.
                     time_dependent: true,
                     params: params_glsl,
+                    connector: Connector::None,
                 },
                 // Unused: the source comes from the `source` parameter.
                 shader: "",
@@ -698,6 +736,7 @@ pub const CONTAINER: OpDef = OpDef {
     summary: "A component that holds a sub-network.",
     time_dependent: false,
     params: params_none,
+    connector: Connector::None,
 };
 
 /// Every operator this build knows about.

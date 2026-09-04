@@ -3,7 +3,7 @@
 use indexmap::IndexMap;
 
 use crate::cook::{CookContext, CookError, Cooker};
-use crate::graph::{Family, Graph, NodeId, OpDef, OpRegistry};
+use crate::graph::{Connector, Family, Graph, NodeId, OpDef, OpRegistry};
 use crate::param::Param;
 
 pub const TEST_PASS: &str = "gain";
@@ -28,6 +28,7 @@ pub fn registry() -> OpRegistry {
         summary: "test operator",
         time_dependent: false,
         params: one_float,
+        connector: Connector::None,
     });
     r.register(OpDef {
         type_name: "comp2",
@@ -37,6 +38,7 @@ pub fn registry() -> OpRegistry {
         summary: "two-input test operator",
         time_dependent: false,
         params: one_float,
+        connector: Connector::None,
     });
     r.register(OpDef {
         type_name: "movie",
@@ -46,6 +48,7 @@ pub fn registry() -> OpRegistry {
         summary: "intrinsically animated source",
         time_dependent: true,
         params: no_params,
+        connector: Connector::None,
     });
     r.register(OpDef {
         type_name: "chop_pass",
@@ -55,6 +58,7 @@ pub fn registry() -> OpRegistry {
         summary: "test CHOP",
         time_dependent: false,
         params: one_float,
+        connector: Connector::None,
     });
     r.register(OpDef {
         type_name: "container",
@@ -64,6 +68,7 @@ pub fn registry() -> OpRegistry {
         summary: "test COMP",
         time_dependent: false,
         params: no_params,
+        connector: Connector::None,
     });
     r
 }

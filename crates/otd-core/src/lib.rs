@@ -17,7 +17,7 @@ mod test_ops;
 
 pub use cook::{CookContext, CookEngine, CookError, Cooker, FrameStats};
 pub use expr::{ChannelSource, EvalContext, Expr};
-pub use graph::{Family, Graph, GraphError, Node, NodeFlags, NodeId, OpDef, OpRegistry};
+pub use graph::{Connector, Family, Graph, GraphError, Node, NodeFlags, NodeId, OpDef, OpRegistry};
 pub use param::{Param, ParamMode};
 pub use project::Project;
 pub use value::Value;
