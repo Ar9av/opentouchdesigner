@@ -503,6 +503,22 @@ OPERATOR CATALOGUE
     )
 }
 
+/// Appended to the system prompt when the editor has removal switched off.
+///
+/// The prompt above teaches `delete` unconditionally, because most of the time
+/// it is the right answer — "make it simpler" is a delete list. But a delete
+/// is the one thing a plan does that the user cannot see coming, so the editor
+/// makes it opt-in and this is what it says when it is off. Belt and braces:
+/// the caller drops any `delete` that comes back anyway, since a rule in a
+/// prompt is a request rather than a guarantee.
+pub const NO_DELETE_RULE: &str = "\n\nREMOVAL IS OFF FOR THIS REQUEST\n\
+     Do not use `delete`. Every operator now in the network stays. Add to it, \
+     rewire it, retune it with `set` — but remove nothing, and do not work \
+     around this by emptying an operator out or wiring it to nothing. If what \
+     was asked for can only be done by removing something, do the part that \
+     can be done and say in `notes` what would have to go and that removal is \
+     switched off.";
+
 /// The extra brief for working from a reference image, appended to the user
 /// turn when there is one.
 ///

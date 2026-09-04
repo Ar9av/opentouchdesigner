@@ -47,6 +47,11 @@ pub struct Assistant {
     /// screenshot.
     pub key_input: String,
     pub prompt: String,
+    /// Whether the assistant may remove operators as well as add them. Off by
+    /// default: adding to a patch is recoverable by looking at it, and a node
+    /// that quietly went away is not — you have to notice the absence first.
+    /// With it on, "make this simpler" and "take the blur out" work.
+    pub allow_delete: bool,
     /// A still to work back from. With one attached the prompt is optional:
     /// pointing at a picture is a complete request.
     pub image: Option<otd_ai::Image>,
@@ -108,6 +113,7 @@ impl Default for Assistant {
             model: provider.default_model().to_string(),
             key_input: String::new(),
             prompt: String::new(),
+            allow_delete: false,
             image: None,
             image_tex: None,
             bar_rect: egui::Rect::NOTHING,
@@ -446,6 +452,15 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
                     app.assistant.open = true;
                 }
             });
+
+        // Removal is a mode rather than a phrasing: asking for it in words is
+        // how you find out afterwards which operators the model thought were
+        // redundant.
+        ui.toggle_value(&mut app.assistant.allow_delete, "🗑")
+            .on_hover_text(
+                "Let the assistant remove operators as well as add them — \
+                 needed for \"simplify this\" or \"take the blur out\"",
+            );
 
         if app.assistant.not_configured() {
             let (short, hint) = match app.assistant.provider.needs_key() {
@@ -989,6 +1004,7 @@ fn send(app: &mut OtdApp) {
         parent: app.current,
         selected: app.selected,
         registry: &app.registry,
+        allow_delete: app.assistant.allow_delete,
     });
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -999,6 +1015,18 @@ fn send(app: &mut OtdApp) {
             let _ = tx.send(result.map(|r| (r.text, r.repaired)));
         });
     app.assistant.pending = Some(rx);
+}
+
+/// Drop the plan's removals unless the user turned removal on, and say which
+/// operators were spared. `None` when there was nothing to gate.
+fn gate_deletes(plan: &mut otd_ai::Plan, allow: bool) -> Option<String> {
+    if allow || plan.deletes.is_empty() {
+        return None;
+    }
+    let kept = std::mem::take(&mut plan.deletes).join(", ");
+    Some(format!(
+        "kept {kept} — turn on 🗑 to let the assistant remove operators"
+    ))
 }
 
 /// Take the reply if it has arrived, and build it.
@@ -1024,13 +1052,19 @@ fn poll(app: &mut OtdApp) {
             return;
         }
     };
-    let plan = match otd_ai::plan_from_reply(&text, &app.registry) {
+    let mut plan = match otd_ai::plan_from_reply(&text, &app.registry) {
         Ok(plan) => plan,
         Err(e) => {
             app.assistant.error = Some(e);
             return;
         }
     };
+    // The prompt asked it not to; this is what makes it true. A rule in a
+    // prompt is a request, and the one thing the user cannot undo by looking
+    // at the canvas is an operator that is no longer on it.
+    if let Some(kept) = gate_deletes(&mut plan, app.assistant.allow_delete) {
+        app.assistant.warnings.push(kept);
+    }
 
     // One checkpoint, before anything is created, so the whole patch undoes
     // as the single thing it was.
@@ -1209,6 +1243,24 @@ mod tests {
 #[cfg(test)]
 mod bar_tests {
     use super::*;
+
+    #[test]
+    fn removals_are_dropped_unless_the_user_asked_for_them() {
+        let mut plan = otd_ai::Plan {
+            deletes: vec!["blur1".into(), "over1".into()],
+            ..Default::default()
+        };
+        let warning = gate_deletes(&mut plan, false).expect("a spared delete is worth saying");
+        assert!(warning.contains("blur1") && warning.contains("over1"));
+        assert!(plan.deletes.is_empty(), "removal is off: nothing goes");
+
+        let mut plan = otd_ai::Plan {
+            deletes: vec!["blur1".into()],
+            ..Default::default()
+        };
+        assert_eq!(gate_deletes(&mut plan, true), None);
+        assert_eq!(plan.deletes, vec!["blur1".to_string()]);
+    }
 
     #[test]
     fn a_model_name_is_shortened_to_something_that_fits_a_chip() {

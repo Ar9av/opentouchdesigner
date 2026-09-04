@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use egui::TextureId;
-use otd_core::{CookContext, CookEngine, Graph, History, NodeId, OpRegistry, Project};
+use otd_core::{CookContext, CookEngine, Graph, History, NodeId, OpRegistry, Project, Value};
 use otd_engine::Engines;
 use otd_gpu::GpuContext;
 
@@ -66,6 +66,11 @@ pub struct OtdApp {
     /// Perform mode: the editor is gone and the main window shows only the
     /// output. F1 in, F1 or Escape out.
     pub perform: bool,
+    /// What we last told the OS about the main window, so the fullscreen
+    /// command is sent on the edge rather than every frame.
+    perform_applied: bool,
+    /// The Movie File Out the Record button drives, once it has made one.
+    pub recorder: Option<NodeId>,
     /// A second window showing only the viewer output — the projector feed.
     pub output_window: bool,
     pub output_fullscreen: bool,
@@ -140,6 +145,8 @@ impl OtdApp {
             show_perf: true,
             show_monitor: false,
             perform: false,
+            perform_applied: false,
+            recorder: None,
             output_window: false,
             output_fullscreen: false,
             output_closed: Arc::new(AtomicBool::new(false)),
@@ -686,6 +693,74 @@ impl OtdApp {
         Some(id)
     }
 
+
+    /// Is a recording running right now?
+    pub fn recording(&self) -> bool {
+        self.recorder
+            .filter(|id| self.graph.contains(*id))
+            .map(|id| self.graph.node(id).params["record"].value == Value::Bool(true))
+            .unwrap_or(false)
+    }
+
+    /// Record the viewer to a movie file, or stop the recording that is
+    /// running.
+    ///
+    /// This is the Movie File Out operator, not a second recording path: the
+    /// button makes the node, wires it to the viewer and flips its Record
+    /// parameter. Everything a patch that was built by hand can do — codec,
+    /// frame rate, quality — is still on the node, and the node survives in
+    /// the saved project.
+    pub fn toggle_record(&mut self) {
+        if self.recording() {
+            let id = self.recorder.unwrap();
+            self.edit("record");
+            let _ = self.graph.set_param(id, "record", Value::Bool(false));
+            let file = self.graph.node(id).params["file"].value.as_str();
+            self.status = format!("Recorded {file}");
+            return;
+        }
+        let Some(viewer) = self.viewer.filter(|v| self.graph.contains(*v)) else {
+            self.status = "Nothing to record: no viewer".into();
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Movie", &["mp4", "mov"])
+            .set_file_name("out.mp4")
+            .save_file()
+        else {
+            return;
+        };
+        // Reuse the node across takes so the codec and frame rate you set on
+        // the first recording still apply to the second.
+        let id = match self.recorder.filter(|id| self.graph.contains(*id)) {
+            Some(id) => id,
+            None => {
+                let pos = self.graph.node(viewer).pos;
+                let Some(id) =
+                    self.create_node(otd_gpu::ops::MOVIE_OUT, egui::vec2(pos[0] + 180.0, pos[1]))
+                else {
+                    self.status = "Movie File Out is not registered".into();
+                    return;
+                };
+                if let Err(e) = self.graph.connect(viewer, id, 0) {
+                    self.status = format!("Could not wire the recorder: {e}");
+                    return;
+                }
+                // Recording must not depend on the node being on screen, and
+                // in perform mode nothing is.
+                self.graph.node_mut(id).flags.render = true;
+                self.recorder = Some(id);
+                id
+            }
+        };
+        self.edit("record");
+        let _ = self
+            .graph
+            .set_param(id, "file", Value::Str(path.display().to_string()));
+        let _ = self.graph.set_param(id, "record", Value::Bool(true));
+        self.status = format!("Recording to {}", path.display());
+    }
+
     // -------------------------------------------------------- project files
 
     /// Ask where to put it, always.
@@ -794,6 +869,19 @@ impl eframe::App for OtdApp {
         }
         if self.perform && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.perform = false;
+        }
+        // Perform mode takes the whole screen, not just the whole window: a
+        // menu bar in the corner of a projection is the thing the mode exists
+        // to get rid of.
+        if self.perform != self.perform_applied {
+            self.perform_applied = self.perform;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.perform));
+        }
+        // F2 records, in either mode — the top bar is not there in the one
+        // where you most want to hit record.
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::F2)) {
+            self.toggle_record();
         }
 
         if self.perform {
@@ -998,6 +1086,15 @@ impl OtdApp {
                     .clicked()
                 {
                     self.perform = true;
+                }
+                let recording = self.recording();
+                let label = if recording { "⏹ Stop" } else { "⏺ Record" };
+                if ui
+                    .button(label)
+                    .on_hover_text("Record the viewer to a movie file (F2)")
+                    .clicked()
+                {
+                    self.toggle_record();
                 }
                 ui.toggle_value(&mut self.assistant.bar, "✨ Assistant")
                     .on_hover_text("Describe a patch and have it built here — Cmd/Ctrl+K");

@@ -168,6 +168,7 @@ fn main() {
                 parent: root,
                 selected: Some(source),
                 registry: &reg,
+                allow_delete: true,
             };
             let request = otd_ai::request_for(&ask);
             let reply =

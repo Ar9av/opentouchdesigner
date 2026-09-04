@@ -59,6 +59,7 @@ fn main() {
             parent: root,
             selected: None,
             registry: &registry,
+            allow_delete: true,
         };
         let started = std::time::Instant::now();
         match otd_ai::ask(&ask, &keys) {

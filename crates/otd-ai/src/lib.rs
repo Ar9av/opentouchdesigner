@@ -45,6 +45,9 @@ pub struct Ask<'a> {
     /// "it" in a request, and the node a new chain most likely hangs off.
     pub selected: Option<NodeId>,
     pub registry: &'a OpRegistry,
+    /// Whether the plan may remove operators. Off in the editor unless the
+    /// user turns it on for the request — see [`patch::NO_DELETE_RULE`].
+    pub allow_delete: bool,
 }
 
 /// Build the request for an ask.
@@ -77,7 +80,10 @@ pub fn request_for(ask: &Ask) -> Request {
     };
 
     Request::new(ask.provider, &ask.model)
-        .system(patch::system_prompt(ask.registry))
+        .system(match ask.allow_delete {
+            true => patch::system_prompt(ask.registry),
+            false => patch::system_prompt(ask.registry) + patch::NO_DELETE_RULE,
+        })
         .user(user)
         .image(ask.image.clone())
 }

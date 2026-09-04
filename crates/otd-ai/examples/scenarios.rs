@@ -296,6 +296,7 @@ fn main() {
                 parent: root,
                 selected,
                 registry: &registry,
+                allow_delete: true,
             };
             let request = otd_ai::request_for(&ask);
 
