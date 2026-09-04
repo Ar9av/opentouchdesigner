@@ -39,6 +39,11 @@ pub struct Plan {
     pub deletes: Vec<String>,
     /// Name of the node to set as the viewer, if any.
     pub viewer: Option<String>,
+    /// Trouble noticed while reading the reply, to be reported alongside
+    /// whatever `apply` finds. Parse-time problems used to have nowhere to go
+    /// but an error, so anything not worth refusing the whole plan for was
+    /// simply dropped.
+    pub warnings: Vec<String>,
 }
 
 /// A change to an operator that already exists.
@@ -632,6 +637,56 @@ pub fn extract_json(reply: &str) -> Result<serde_json::Value, String> {
 ///
 /// An unknown operator type fails the whole plan: half a patch is worse than
 /// none, because then the user has to work out which half.
+/// The removal list, under every spelling a model actually produces.
+///
+/// `delete` is what the schema in the system prompt asks for and what most
+/// replies use. The rest are near misses that used to be read as "no
+/// removals": the plan still had nodes in it, so it was accepted, applied,
+/// and the user watched operators appear while the ones they asked to go
+/// stayed exactly where they were — with the dustbin switched on and no
+/// warning anywhere. Reading the synonyms is cheaper than a repair round trip
+/// and far cheaper than the silence.
+const DELETE_KEYS: &[&str] = &["delete", "deletes", "remove", "removals"];
+
+/// The retune list. Same failure, same fix — a dropped `set` is numbers the
+/// user asked for that never moved.
+const SET_KEYS: &[&str] = &["set", "sets"];
+
+/// Everything else the parser reads.
+const OTHER_KEYS: &[&str] = &["notes", "nodes", "connections", "viewer"];
+
+/// The first of `keys` present as an array.
+fn first_array<'a>(
+    value: &'a serde_json::Value,
+    keys: &[&str],
+) -> Option<&'a Vec<serde_json::Value>> {
+    keys.iter().find_map(|k| value.get(*k)?.as_array())
+}
+
+/// Top-level keys carrying data that the parser does not read.
+///
+/// The synonym tables above fix the two near misses seen in the wild. This is
+/// what stops the next one being silent as well: a key nobody reads is
+/// reported rather than ignored, so "it did not delete anything" arrives as a
+/// sentence instead of as nothing happening.
+fn unknown_keys(value: &serde_json::Value) -> Vec<String> {
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    object
+        .iter()
+        .filter(|(_, v)| !v.is_null())
+        .filter(|(_, v)| !matches!(v, serde_json::Value::Array(a) if a.is_empty()))
+        .map(|(k, _)| k)
+        .filter(|k| {
+            !OTHER_KEYS.contains(&k.as_str())
+                && !SET_KEYS.contains(&k.as_str())
+                && !DELETE_KEYS.contains(&k.as_str())
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Plan, String> {
     let mut plan = Plan {
         notes: value
@@ -731,7 +786,7 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
         }
     }
 
-    if let Some(sets) = value.get("set").and_then(|s| s.as_array()) {
+    if let Some(sets) = first_array(value, SET_KEYS) {
         for entry in sets {
             let Some(node) = entry.get("node").and_then(|n| n.as_str()) else {
                 continue;
@@ -750,12 +805,21 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
         }
     }
 
-    if let Some(gone) = value.get("delete").and_then(|d| d.as_array()) {
+    if let Some(gone) = first_array(value, DELETE_KEYS) {
         for entry in gone {
             if let Some(name) = entry.as_str() {
                 plan.deletes.push(name.to_string());
             }
         }
+    }
+
+    let unknown = unknown_keys(value);
+    if !unknown.is_empty() {
+        plan.warnings.push(format!(
+            "ignored {} in the reply — not part of a plan; if that was meant to \
+             change the patch, it did not",
+            unknown.join(", ")
+        ));
     }
 
     // A plan used to have to build something to be a plan. It no longer does:
@@ -842,7 +906,10 @@ pub fn apply(
     registry: &OpRegistry,
     plan: &Plan,
 ) -> Result<(Applied, Option<NodeId>), String> {
-    let mut applied = Applied::default();
+    let mut applied = Applied {
+        warnings: plan.warnings.clone(),
+        ..Default::default()
+    };
     // Plan name -> the node that ended up being created for it. The graph
     // renames on collision, so this cannot be a lookup by name afterwards.
     let mut made: BTreeMap<String, NodeId> = BTreeMap::new();
@@ -1781,6 +1848,92 @@ mod tests {
         let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
         assert!(applied.removed.is_empty(), "{:?}", applied.removed);
         assert_eq!(applied.warnings.len(), 2, "{:?}", applied.warnings);
+    }
+
+    /// The bug behind "the dustbin is on and nothing gets deleted".
+    ///
+    /// The schema asks for `delete`. Replies also say `deletes`, `remove` and
+    /// `removals`, and every one of those used to read as "no removals" —
+    /// silently, because a plan that also creates a node is a valid plan, so
+    /// it was accepted and applied minus the part the user actually asked for.
+    #[test]
+    fn a_removal_under_another_name_is_still_a_removal() {
+        let reg = test_registry();
+        for key in ["delete", "deletes", "remove", "removals"] {
+            let json = serde_json::json!({
+                "notes": "simplified",
+                "nodes": [{ "name": "new1", "op": "pass" }],
+                key: ["old1"],
+            });
+            let plan = parse_plan(&json, &reg).unwrap();
+            assert_eq!(
+                plan.deletes,
+                vec!["old1".to_string()],
+                "`{key}` was read as no removals at all"
+            );
+        }
+    }
+
+    /// And the same for the retune list, which fails identically.
+    #[test]
+    fn a_retune_under_another_name_is_still_a_retune() {
+        let reg = test_registry();
+        for key in ["set", "sets"] {
+            let json = serde_json::json!({
+                "notes": "slower",
+                key: [{ "node": "a", "params": { "gain": 0.5 } }],
+            });
+            let plan = parse_plan(&json, &reg).unwrap();
+            assert_eq!(plan.sets.len(), 1, "`{key}` was read as no changes at all");
+        }
+    }
+
+    /// A key the parser cannot guess has to be audible.
+    ///
+    /// The synonym tables above cover the near misses seen so far. This is
+    /// what stops the next one being silent: the plan still applies, but the
+    /// user is told something in the reply went unread, rather than being left
+    /// to work out why the operator they asked about is still there.
+    #[test]
+    fn a_key_nobody_reads_is_reported_rather_than_ignored() {
+        let reg = test_registry();
+        let json = serde_json::json!({
+            "notes": "simplified",
+            "nodes": [{ "name": "new1", "op": "pass" }],
+            "delete_nodes": ["old1"],
+        });
+        let plan = parse_plan(&json, &reg).unwrap();
+        assert!(plan.deletes.is_empty(), "it cannot be guessed, and is not");
+        assert!(
+            plan.warnings.iter().any(|w| w.contains("delete_nodes")),
+            "an unread key said nothing: {:?}",
+            plan.warnings
+        );
+
+        // And the warning has to survive into what the editor shows.
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("delete_nodes")),
+            "the parse-time warning never reached the user: {:?}",
+            applied.warnings
+        );
+    }
+
+    /// An empty array is not a mistake, and neither is a key we do read.
+    #[test]
+    fn a_well_formed_plan_warns_about_nothing() {
+        let reg = test_registry();
+        let json = serde_json::json!({
+            "notes": "a chain",
+            "nodes": [{ "name": "a", "op": "pass" }],
+            "connections": [],
+            "delete": [],
+            "viewer": "a",
+        });
+        let plan = parse_plan(&json, &reg).unwrap();
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
     }
 
     #[test]
