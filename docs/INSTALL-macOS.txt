@@ -1,0 +1,31 @@
+OpenTouchDesigner
+=================
+
+1. Drag OpenTouchDesigner.app to Applications.
+
+2. The first launch will be refused: "Apple could not verify ... free of
+   malware". This build is not signed or notarised — that needs a paid Apple
+   Developer account. Nothing is wrong with the app; macOS simply has no
+   signature to check.
+
+   To open it anyway, either:
+
+     - Right-click the app > Open, then Open again in the dialog, or
+     - System Settings > Privacy & Security > "Open Anyway", or
+     - In a terminal:
+           xattr -dr com.apple.quarantine /Applications/OpenTouchDesigner.app
+
+   You only have to do this once.
+
+   If you would rather not run an unsigned binary — a reasonable position —
+   build from source instead. It is one command and needs nothing but Rust:
+
+       cargo run -p otd-app
+
+3. Microphone and camera prompts appear the first time a patch uses an Audio
+   Device In CHOP or a Video Device In TOP. Both are optional.
+
+4. Movies need ffmpeg on the PATH:  brew install ffmpeg
+   Still images (PNG, JPEG, WebP) work without it.
+
+Docs, source and issues: https://github.com/Ar9av/opentouchdesigner
