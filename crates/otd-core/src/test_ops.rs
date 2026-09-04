@@ -22,6 +22,7 @@ pub fn registry() -> OpRegistry {
     let mut r = OpRegistry::new();
     r.register(OpDef {
         type_name: "pass",
+        input_families: &[],
         label: "Pass",
         family: Family::Top,
         inputs: &["in"],
@@ -32,6 +33,7 @@ pub fn registry() -> OpRegistry {
     });
     r.register(OpDef {
         type_name: "comp2",
+        input_families: &[],
         label: "Comp2",
         family: Family::Top,
         inputs: &["a", "b"],
@@ -42,6 +44,7 @@ pub fn registry() -> OpRegistry {
     });
     r.register(OpDef {
         type_name: "movie",
+        input_families: &[],
         label: "Movie",
         family: Family::Top,
         inputs: &[],
@@ -52,6 +55,7 @@ pub fn registry() -> OpRegistry {
     });
     r.register(OpDef {
         type_name: "chop_pass",
+        input_families: &[],
         label: "Chop Pass",
         family: Family::Chop,
         inputs: &["in"],
@@ -62,6 +66,7 @@ pub fn registry() -> OpRegistry {
     });
     r.register(OpDef {
         type_name: "container",
+        input_families: &[],
         label: "Container",
         family: Family::Comp,
         inputs: &[],

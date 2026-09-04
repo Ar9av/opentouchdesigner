@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+fontdue = { version = "0.9.4", default-features = false, features = ["std"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "bmp", "tga", "tiff", "ico", "pnm"] }
 log = "0.4.33"
 otd-core = { version = "0.1.0", path = "../otd-core" }

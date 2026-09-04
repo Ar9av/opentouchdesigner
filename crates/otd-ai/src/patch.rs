@@ -513,6 +513,7 @@ mod tests {
         let mut r = OpRegistry::new();
         r.register(OpDef {
             type_name: "pass",
+            input_families: &[],
             label: "Pass",
             family: Family::Top,
             inputs: &["in"],

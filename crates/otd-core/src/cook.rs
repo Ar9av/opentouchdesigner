@@ -62,6 +62,7 @@ impl CookContext {
             fps: self.fps,
             channels: None,
             path: None,
+            locals: &[],
         }
     }
 
@@ -635,6 +636,7 @@ mod perf_tests {
                 label: type_name,
                 family: Family::Top,
                 inputs: &[],
+                input_families: &[],
                 summary: "",
                 time_dependent,
                 params,

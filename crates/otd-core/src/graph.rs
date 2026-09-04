@@ -189,11 +189,32 @@ pub struct OpDef {
     pub label: &'static str,
     pub family: Family,
     pub inputs: &'static [&'static str],
+    /// The family each input accepts, when it is not this operator's own.
+    ///
+    /// Almost every operator wires within one family, which is the rule that
+    /// keeps the graph legible (PLAN.md §2.1) — so the common case is `&[]`,
+    /// meaning "all mine". The exceptions are the **converter operators**,
+    /// which are the sanctioned way to cross a family boundary: a CHOP to TOP
+    /// takes a CHOP input and produces a texture. Declaring the exception per
+    /// input rather than per operator lets a converter also take inputs of its
+    /// own family.
+    pub input_families: &'static [Family],
     pub summary: &'static str,
     pub time_dependent: bool,
     pub params: fn() -> IndexMap<String, Param>,
     /// Set for the In and Out operators that give a component its shape.
     pub connector: Connector,
+}
+
+impl OpDef {
+    /// What each input accepts, one entry per declared input. Falls back to
+    /// this operator's own family for any input the definition did not
+    /// override, so a converter only has to name the inputs that cross.
+    pub fn accepted_families(&self) -> Vec<Family> {
+        (0..self.inputs.len())
+            .map(|i| self.input_families.get(i).copied().unwrap_or(self.family))
+            .collect()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -396,7 +417,7 @@ impl Graph {
             params: (def.params)(),
             inputs: vec![None; def.inputs.len()],
             input_labels: def.inputs.iter().map(|s| s.to_string()).collect(),
-            input_families: vec![def.family; def.inputs.len()],
+            input_families: def.accepted_families(),
             connector: def.connector,
             parent: Some(parent),
             children: Vec::new(),

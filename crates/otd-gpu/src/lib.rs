@@ -9,9 +9,11 @@ pub mod engine;
 pub mod isf;
 pub mod math;
 pub mod ops;
+pub mod record;
 pub mod render3d;
 pub mod scene;
 pub mod shader;
+pub mod text;
 pub mod texture;
 pub mod video;
 
@@ -27,6 +29,25 @@ pub fn read_pixels_rgba8(
     ctx: &GpuContext,
     tex: &TopTexture,
 ) -> Result<(u32, u32, Vec<u8>), String> {
+    let (w, h, floats) = read_pixels_rgba_f32(ctx, tex)?;
+    let out = floats
+        .into_iter()
+        .map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+        .collect();
+    Ok((w, h, out))
+}
+
+/// The same copy, keeping the full 16-bit float range.
+///
+/// TOPs are `Rgba16Float` throughout — that is the headline the README makes —
+/// so anything that reads pixels back in order to *compute* with them, rather
+/// than to write a PNG, has to see the values that are actually there.
+/// A TOP to CHOP that clamped to 0..1 would quietly destroy the HDR range the
+/// rest of the pipeline goes to some trouble to keep.
+pub fn read_pixels_rgba_f32(
+    ctx: &GpuContext,
+    tex: &TopTexture,
+) -> Result<(u32, u32, Vec<f32>), String> {
     let (w, h) = (tex.key.width, tex.key.height);
     // Rgba16Float: 8 bytes per pixel, and rows must be 256-byte aligned.
     let unpadded = w as u64 * 8;
@@ -87,14 +108,54 @@ pub fn read_pixels_rgba8(
             for c in 0..4 {
                 let i = x * 8 + c * 2;
                 let bits = u16::from_le_bytes([row[i], row[i + 1]]);
-                let v = f16_to_f32(bits).clamp(0.0, 1.0);
-                out.push((v * 255.0 + 0.5) as u8);
+                out.push(f16_to_f32(bits));
             }
         }
     }
     drop(data);
     buffer.unmap();
     Ok((w, h, out))
+}
+
+/// IEEE 754 binary32 -> binary16, round-to-nearest-even.
+///
+/// The inverse of [`f16_to_f32`], for the CPU side of an upload into a
+/// `Rgba16Float` texture. Values beyond half's range saturate to infinity
+/// rather than wrapping, which is what a shader reading them would want.
+pub(crate) fn f32_to_f16(v: f32) -> u16 {
+    let bits = v.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7f_ffff;
+
+    if exp == 0xff {
+        // Inf or NaN. A NaN must stay a NaN: zeroing the mantissa would turn
+        // it into an infinity.
+        let m = if mant != 0 { 0x200 } else { 0 };
+        return sign | 0x7c00 | m;
+    }
+    let unbiased = exp - 127 + 15;
+    if unbiased >= 0x1f {
+        return sign | 0x7c00; // Overflow to infinity.
+    }
+    if unbiased <= 0 {
+        if unbiased < -10 {
+            return sign; // Smaller than the smallest subnormal.
+        }
+        let m = mant | 0x80_0000;
+        let shift = (14 - unbiased) as u32;
+        let half = (m >> shift) as u16;
+        // Round to nearest even.
+        let round = (m >> (shift - 1)) & 1;
+        return sign | (half + round as u16);
+    }
+    let half = ((unbiased as u16) << 10) | (mant >> 13) as u16;
+    let round = if (mant & 0x1000) != 0 && ((mant & 0x0fff) != 0 || (half & 1) == 1) {
+        1
+    } else {
+        0
+    };
+    sign | (half + round)
 }
 
 /// IEEE 754 binary16 -> binary32.
@@ -107,15 +168,18 @@ fn f16_to_f32(bits: u16) -> f32 {
             if mant == 0 {
                 sign << 31
             } else {
-                // Subnormal: renormalise.
-                let mut e = -1i32;
+                // Subnormal: renormalise. Its value is `mant * 2^-24`, so
+                // shifting the mantissa left until the implicit bit appears
+                // leaves `(1 + m/1024) * 2^(-14 - shifts)`, and the biased
+                // binary32 exponent is `127 - 14 - shifts`.
+                let mut shifts = 0i32;
                 let mut m = mant;
                 while m & 0x400 == 0 {
                     m <<= 1;
-                    e -= 1;
+                    shifts += 1;
                 }
                 let m = m & 0x3ff;
-                (sign << 31) | (((127 - 15 + e + 1) as u32) << 23) | (m << 13)
+                (sign << 31) | (((113 - shifts) as u32) << 23) | (m << 13)
             }
         }
         0x1f => (sign << 31) | (0xff << 23) | (mant << 13),
@@ -128,6 +192,23 @@ fn f16_to_f32(bits: u16) -> f32 {
 mod tests {
     use super::*;
     use otd_core::{CookContext, CookEngine, Graph, Value};
+
+    /// Both halves of the half-float conversion are hand-rolled, which is
+    /// exactly the sort of code that is silently wrong in one exponent range
+    /// and nowhere else.
+    #[test]
+    fn half_floats_survive_the_round_trip() {
+        for v in [
+            0.0, -0.0, 1.0, -1.0, 0.5, 0.25, 0.1, -0.75, 65504.0, -65504.0, 1e-5, 1234.0,
+        ] {
+            let back = f16_to_f32(f32_to_f16(v));
+            let tolerance = v.abs() * 1e-3 + 1e-7;
+            assert!((back - v).abs() <= tolerance, "{v} came back as {back}",);
+        }
+        // Out of range saturates rather than wrapping to something small.
+        assert!(f16_to_f32(f32_to_f16(1e30)).is_infinite());
+        assert!(f16_to_f32(f32_to_f16(f32::NAN)).is_nan());
+    }
 
     /// CI runners without a GPU (and without lavapipe) skip these rather
     /// than failing the build.

@@ -2,23 +2,32 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-79 operators.
+118 operators.
 
-**CHOP** (30)
+**CHOP** (45)
 
+- [analyzeCHOP](#analyze--analyzechop) — Reduce each channel to one number.
 - [animationCHOP](#animation--animationchop) — Keyframed curves over time.
 - [audiodeviceinCHOP](#audio-device-in--audiodeviceinchop) — Samples from an audio input, downmixed to mono.
 - [audiodeviceoutCHOP](#audio-device-out--audiodeviceoutchop) — Plays its first channel on an audio output.
 - [audiofileinCHOP](#audio-file-in--audiofileinchop) — Plays a WAV file, following the timeline.
 - [audiospectrumCHOP](#audio-spectrum--audiospectrumchop) — Energy per frequency band, log spaced.
+- [beatCHOP](#beat--beatchop) — A tempo clock: ramp, pulse, count and bar.
+- [clockCHOP](#clock--clockchop) — Wall-clock time, which keeps running when the timeline is paused.
 - [constantCHOP](#constant--constantchop) — Fixed values as channels.
 - [countCHOP](#count--countchop) — Count threshold crossings.
+- [crossCHOP](#cross--crosschop) — Blend two inputs, with an equal-power option.
+- [dattochopCHOP](#dat-to-chop--dattochopchop) — Columns or rows of a table, as channels.
+- [delayCHOP](#delay--delaychop) — Play a channel back later, with optional feedback.
 - [dmxoutCHOP](#dmx-out--dmxoutchop) — Sends its channels as DMX over Art-Net or sACN.
+- [expressionCHOP](#expression--expressionchop) — Apply an expression to every sample. `v` is the sample.
 - [filterCHOP](#filter--filterchop) — Low-pass or moving-average smoothing.
+- [holdCHOP](#hold--holdchop) — Freeze input 1's value until input 2 fires.
 - [inCHOP](#in--inchop) — A channel input on this component's node.
 - [keyboardinCHOP](#keyboard-in--keyboardinchop) — One channel per named key, 1 while held.
 - [lagCHOP](#lag--lagchop) — Smooth a channel, with separate rise and fall times.
 - [lfoCHOP](#lfo--lfochop) — A repeating waveform over time.
+- [limitCHOP](#limit--limitchop) — Clamp, wrap, fold or quantise a channel.
 - [logicCHOP](#logic--logicchop) — Turn channels into on/off and combine them.
 - [mathCHOP](#math--mathchop) — Combine and scale channels.
 - [mergeCHOP](#merge--mergechop) — Put two CHOPs' channels side by side.
@@ -31,10 +40,16 @@ Generated from the operator registry — the same table the editor builds its me
 - [oscoutCHOP](#osc-out--oscoutchop) — Sends its channels as one OSC message per frame.
 - [outCHOP](#out--outchop) — This component's channel output.
 - [patternCHOP](#pattern--patternchop) — A fixed-length waveform buffer.
+- [renameCHOP](#rename--renamechop) — Rename channels by pattern.
+- [resampleCHOP](#resample--resamplechop) — Change how many samples a buffer has, keeping its shape.
 - [selectCHOP](#select--selectchop) — Pick and rename channels.
+- [shuffleCHOP](#shuffle--shufflechop) — Rearrange the channel/sample grid — transpose, reverse, sequence.
+- [slopeCHOP](#slope--slopechop) — The rate of change of a channel.
+- [soptochopCHOP](#sop-to-chop--soptochopchop) — Point attributes as channels, one sample per point.
 - [speedCHOP](#speed--speedchop) — Integrate a channel: velocity becomes position.
 - [switchCHOP](#switch--switchchop) — Choose one of two inputs.
 - [timerCHOP](#timer--timerchop) — A running timer with fraction, seconds, cycles and done.
+- [toptochopCHOP](#top-to-chop--toptochopchop) — Pixels as channels. Reads last frame; costs a GPU sync.
 - [triggerCHOP](#trigger--triggerchop) — An attack/decay/sustain/release envelope per channel.
 
 **COMP** (5)
@@ -45,8 +60,10 @@ Generated from the operator registry — the same table the editor builds its me
 - [lightCOMP](#light--lightcomp) — A directional light, aimed from its position at the origin.
 - [replicatorCOMP](#replicator--replicatorcomp) — Keeps one clone of a master component per row of a table.
 
-**DAT** (11)
+**DAT** (16)
 
+- [choptodatDAT](#chop-to-dat--choptodatdat) — Channels as a table of numbers.
+- [convertDAT](#convert--convertdat) — Between a table and a block of text.
 - [inDAT](#in--indat) — A data input on this component's node.
 - [jsonDAT](#json--jsondat) — Parse JSON text into a path/value table.
 - [mergeDAT](#merge--mergedat) — Join two DATs by rows or by columns.
@@ -54,18 +71,25 @@ Generated from the operator registry — the same table the editor builds its me
 - [outDAT](#out--outdat) — This component's data output.
 - [scriptDAT](#script--scriptdat) — Rows produced by a Python script.
 - [selectDAT](#select--selectdat) — Pick rows and columns, by name or index.
+- [sortDAT](#sort--sortdat) — Sort rows by a column, numerically or as text.
+- [substituteDAT](#substitute--substitutedat) — Fill $name placeholders from a two-column lookup table.
 - [tableDAT](#table--tabledat) — A table of text, stored in the project file.
 - [textDAT](#text--textdat) — A block of text.
+- [transposeDAT](#transpose--transposedat) — Swap rows and columns.
 - [udpinDAT](#udp-in--udpindat) — Datagrams received on a port, one message per row.
 - [udpoutDAT](#udp-out--udpoutdat) — Sends its input's text as a datagram when it changes.
 
-**MAT** (1)
+**MAT** (4)
 
+- [constantMAT](#constant--constantmat) — Flat colour, unaffected by lights.
 - [pbrMAT](#pbr--pbrmat) — Base colour, metallic, roughness and emission, with an optional map.
+- [phongMAT](#phong--phongmat) — Diffuse and a Blinn highlight, dialled by shininess.
+- [wireframeMAT](#wireframe--wireframemat) — Draws the edges rather than the faces.
 
-**SOP** (12)
+**SOP** (15)
 
 - [boxSOP](#box--boxsop) — A box with flat-shaded faces.
+- [circleSOP](#circle--circlesop) — A disc, ring or arc — filled, or a line to copy along.
 - [colorSOP](#color--colorsop) — Set the colour carried by every point.
 - [copySOP](#copy--copysop) — Stamp copies with a compounding transform.
 - [gridSOP](#grid--gridsop) — A flat grid of quads — the usual thing to displace.
@@ -76,34 +100,59 @@ Generated from the operator registry — the same table the editor builds its me
 - [nullSOP](#null--nullsop) — Pass-through. A stable name to reference.
 - [outSOP](#out--outsop) — This component's geometry output.
 - [sphereSOP](#sphere--spheresop) — A UV sphere.
+- [torusSOP](#torus--torussop) — A torus.
 - [transformSOP](#transform--transformsop) — Translate, rotate and scale points.
+- [tubeSOP](#tube--tubesop) — A cylinder, cone or tapered tube, with optional caps.
 
-**TOP** (20)
+**TOP** (33)
 
 - [blurTOP](#blur--blurtop) — Separable Gaussian blur.
 - [cacheTOP](#cache--cachetop) — Holds the last frame it saw when Active is off.
+- [choptotopTOP](#chop-to-top--choptotoptop) — Channels as pixels: a row per channel, a column per sample.
+- [chromakeyTOP](#chroma-key--chromakeytop) — Key out one colour, matching on hue rather than brightness.
+- [circleTOP](#circle--circletop) — An antialiased disc or ellipse.
 - [compositeTOP](#composite--compositetop) — Blend two inputs. Input 2 is composited over input 1.
 - [constantTOP](#constant--constanttop) — A flat colour at a chosen resolution.
 - [displaceTOP](#displace--displacetop) — Offsets input 1's lookup by channels of input 2.
+- [edgeTOP](#edge--edgetop) — Sobel edge detection.
 - [feedbackTOP](#feedback--feedbacktop) — Last frame's output of the Target TOP.
+- [flipTOP](#flip--fliptop) — Mirror the image about an axis, or transpose it.
 - [glslTOP](#glsl--glsltop) — Your own shader, compiled live. WGSL or Shadertoy-style GLSL.
+- [hsvadjustTOP](#hsv-adjust--hsvadjusttop) — Hue, saturation and value, optionally over one band of the wheel.
 - [inTOP](#in--intop) — A texture input on this component's node.
 - [levelTOP](#level--leveltop) — Brightness, contrast, gamma, black/white levels.
+- [lookupTOP](#lookup--lookuptop) — Input 1's brightness reads a colour out of input 2.
+- [mathTOP](#math--mathtop) — Arithmetic on two inputs, per channel.
+- [mirrorTOP](#mirror--mirrortop) — Fold the image onto itself, including a radial kaleidoscope.
 - [moviefileinTOP](#movie-file-in--moviefileintop) — Plays an image or a movie file.
+- [moviefileoutTOP](#movie-file-out--moviefileouttop) — Records its input to a movie file. Passes the picture through.
 - [noiseTOP](#noise--noisetop) — Fractal value noise. Animate Translate Z to make it move.
 - [nullTOP](#null--nulltop) — Pass-through. A stable name to reference and to view.
 - [outTOP](#out--outtop) — This component's texture output.
 - [rampTOP](#ramp--ramptop) — Linear or radial gradient between two colours.
+- [rectangleTOP](#rectangle--rectangletop) — A rectangle, with rounded corners and an optional border.
 - [renderTOP](#render--rendertop) — Draws Geometry components through a Camera.
 - [resolutionTOP](#resolution--resolutiontop) — Resamples its input to an explicit resolution.
 - [selectTOP](#select--selecttop) — This frame's output of another TOP, by path.
 - [switchTOP](#switch--switchtop) — Select one of two inputs, optionally blending between them.
+- [textTOP](#text--texttop) — Draws text, using a font file or the system's.
+- [thresholdTOP](#threshold--thresholdtop) — Split the image in two at a level, with a soft edge.
 - [transformTOP](#transform--transformtop) — Translate, rotate and scale, with an extend mode.
 - [videodeviceinTOP](#video-device-in--videodeviceintop) — Frames from a camera or capture device.
 
 ---
 
 ## CHOP
+
+### Analyze — `analyzeCHOP`
+
+Reduce each channel to one number.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Function | `function` | `average` | `average` · `maximum` · `minimum` · `rms` · `sum` · `length` · `median` |
 
 ### Animation — `animationCHOP`
 
@@ -186,6 +235,32 @@ Energy per frequency band, log spaced.
 | Gain | `gain` | `1` | 0 … 64 |
 | Decibels | `decibels` | `false` |  |
 
+### Beat — `beatCHOP`
+
+A tempo clock: ramp, pulse, count and bar.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Tempo (BPM) | `tempo` | `120` | 20 … 300 |
+| Beats Per Bar | `beatsperbar` | `4` | 1 … 32 |
+| Sample Rate | `rate` | `60` | 1 … 48000 |
+
+### Clock — `clockCHOP`
+
+Wall-clock time, which keeps running when the timeline is paused.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Sample Rate | `rate` | `60` | 1 … 48000 |
+
 ### Constant — `constantCHOP`
 
 Fixed values as channels.
@@ -219,6 +294,42 @@ Count threshold crossings.
 | Min | `min` | `0` |  |
 | Max | `max` | `8` |  |
 
+### Cross — `crossCHOP`
+
+Blend two inputs, with an equal-power option.
+
+**Inputs:** a, b
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Cross | `cross` | `0.5` | 0 … 1 |
+| Curve | `curve` | `linear` | `linear` · `equalpower` · `smooth` |
+
+### DAT to CHOP — `dattochopCHOP`
+
+Columns or rows of a table, as channels.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Channels From | `layout` | `columns` | `columns` · `rows` |
+| First Row/Column Is Names | `names` | `true` |  |
+
+### Delay — `delayCHOP`
+
+Play a channel back later, with optional feedback.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Delay (s) | `delay` | `0.25` | 0 … 10 |
+| Mix | `mix` | `1` | 0 … 1 |
+| Feedback | `feedback` | `0` | 0 … 0.95 |
+
 ### DMX Out — `dmxoutCHOP`
 
 Sends its channels as DMX over Art-Net or sACN.
@@ -239,6 +350,18 @@ DMX is a state protocol, so each frame sends the current value of each channel, 
 | Start Channel | `start` | `1` | 1 … 512 |
 | Active | `active` | `true` |  |
 
+### Expression — `expressionCHOP`
+
+Apply an expression to every sample. `v` is the sample.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Expression | `expr` | `v` |  |
+
 ### Filter — `filterCHOP`
 
 Low-pass or moving-average smoothing.
@@ -251,6 +374,18 @@ Low-pass or moving-average smoothing.
 |---|---|---|---|
 | Type | `type` | `lowpass` | `lowpass` · `movingaverage` |
 | Width (s) | `width` | `0.2` | 0 … 4 |
+
+### Hold — `holdCHOP`
+
+Freeze input 1's value until input 2 fires.
+
+**Inputs:** in, trigger
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Trigger Threshold | `threshold` | `0.5` | -10 … 10 |
 
 ### In — `inCHOP`
 
@@ -301,6 +436,19 @@ A repeating waveform over time.
 | Pulse Width | `pulsewidth` | `0.5` | 0 … 1 |
 | Channel Name | `name` | `lfo` |  |
 | Sample Rate | `rate` | `60` | 1 … 48000 |
+
+### Limit — `limitCHOP`
+
+Clamp, wrap, fold or quantise a channel.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Type | `type` | `clamp` | `clamp` · `loop` · `zigzag` · `quantise` |
+| Minimum | `min` | `0` | -10 … 10 |
+| Maximum | `max` | `1` | -10 … 10 |
+| Quantise Step | `step` | `0.1` | 0 … 10 |
 
 ### Logic — `logicCHOP`
 
@@ -449,6 +597,28 @@ A fixed-length waveform buffer.
 | Phase | `phase` | `0` | 0 … 1 |
 | Channel Name | `name` | `chan1` |  |
 
+### Rename — `renameCHOP`
+
+Rename channels by pattern.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Rename Channels | `from` | `*` |  |
+| To | `to` | `chan[1-]` |  |
+
+### Resample — `resampleCHOP`
+
+Change how many samples a buffer has, keeping its shape.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Length (samples) | `length` | `64` | 1 … 8192 |
+| Interpolate | `interp` | `linear` | `linear` · `nearest` |
+
 ### Select — `selectCHOP`
 
 Pick and rename channels.
@@ -459,6 +629,38 @@ Pick and rename channels.
 |---|---|---|---|
 | Channel Names | `channels` | `*` |  |
 | Rename To | `rename` | *(empty)* |  |
+
+### Shuffle — `shuffleCHOP`
+
+Rearrange the channel/sample grid — transpose, reverse, sequence.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Method | `method` | `transpose` | `transpose` · `reverse` · `swapfirstlast` · `sequence` |
+
+### Slope — `slopeCHOP`
+
+The rate of change of a channel.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Units | `units` | `persecond` | `persecond` · `persample` |
+
+### SOP to CHOP — `soptochopCHOP`
+
+Point attributes as channels, one sample per point.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Attributes (P N uv Cd) | `attrs` | `P` |  |
 
 ### Speed — `speedCHOP`
 
@@ -501,6 +703,20 @@ A running timer with fraction, seconds, cycles and done.
 | Cycle | `cycle` | `true` |  |
 | Play | `play` | `true` |  |
 | Sample Rate | `rate` | `60` | 1 … 48000 |
+
+### TOP to CHOP — `toptochopCHOP`
+
+Pixels as channels. Reads last frame; costs a GPU sync.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Active | `active` | `true` |  |
+| Read | `layout` | `rows` | `rows` · `columns` · `average` |
+| Row / Column | `index` | `0` | 0 … 4096 |
 
 ### Trigger — `triggerCHOP`
 
@@ -609,6 +825,29 @@ Replicants are ordinary clones: they follow the master's network as it is edited
 
 ## DAT
 
+### CHOP to DAT — `choptodatDAT`
+
+Channels as a table of numbers.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Channels As | `layout` | `columns` | `columns` · `rows` |
+| Include Names | `names` | `true` |  |
+| Number Format | `format` | `%.6g` |  |
+
+### Convert — `convertDAT`
+
+Between a table and a block of text.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Convert To | `to` | `table` | `table` · `text` |
+| Delimiter | `delimiter` | `tab` | `tab` · `comma` |
+
 ### In — `inDAT`
 
 A data input on this component's node.
@@ -671,6 +910,30 @@ Pick rows and columns, by name or index.
 | Columns | `cols` | `*` |  |
 | First Row/Column Are Names | `byname` | `true` |  |
 
+### Sort — `sortDAT`
+
+Sort rows by a column, numerically or as text.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Column (name or index) | `column` | `0` |  |
+| Order | `order` | `ascending` | `ascending` · `descending` |
+| Compare As Numbers | `numeric` | `true` |  |
+| First Row Is A Header | `header` | `true` |  |
+
+### Substitute — `substituteDAT`
+
+Fill $name placeholders from a two-column lookup table.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Template | `template` | *(empty)* |  |
+| Substitute Every Cell Instead | `table` | `false` |  |
+
 ### Table — `tableDAT`
 
 A table of text, stored in the project file.
@@ -691,6 +954,12 @@ A block of text.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Text | `text` | *(empty)* |  |
+
+### Transpose — `transposeDAT`
+
+Swap rows and columns.
+
+**Inputs:** in
 
 ### UDP In — `udpinDAT`
 
@@ -721,6 +990,17 @@ Sends its input's text as a datagram when it changes.
 
 ## MAT
 
+### Constant — `constantMAT`
+
+Flat colour, unaffected by lights.
+
+**Inputs:** color
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Color | `basecolor` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Brightness | `emit` | `1` | 0 … 4 |
+
 ### PBR — `pbrMAT`
 
 Base colour, metallic, roughness and emission, with an optional map.
@@ -733,6 +1013,30 @@ Base colour, metallic, roughness and emission, with an optional map.
 | Metallic | `metallic` | `0` | 0 … 1 |
 | Roughness | `roughness` | `0.4` | 0.02 … 1 |
 | Emit | `emit` | `0` | 0 … 4 |
+
+### Phong — `phongMAT`
+
+Diffuse and a Blinn highlight, dialled by shininess.
+
+**Inputs:** color
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Diffuse | `basecolor` | `[0.8, 0.8, 0.85, 1.0]` |  |
+| Specular | `specular` | `0.5` | 0 … 4 |
+| Shininess | `shininess` | `32` | 1 … 256 |
+| Emit | `emit` | `0` | 0 … 4 |
+
+### Wireframe — `wireframeMAT`
+
+Draws the edges rather than the faces.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Color | `basecolor` | `[0.6, 0.9, 1.0, 1.0]` |  |
+| Brightness | `emit` | `1` | 0 … 4 |
 
 ---
 
@@ -747,6 +1051,20 @@ A box with flat-shaded faces.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Size | `size` | `[1.0, 1.0, 1.0]` |  |
+| Center | `center` | `[0.0, 0.0, 0.0]` |  |
+
+### Circle — `circleSOP`
+
+A disc, ring or arc — filled, or a line to copy along.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Radius | `radius` | `[1.0, 1.0]` |  |
+| Divisions | `divisions` | `32` | 3 … 512 |
+| Arc (degrees) | `arc` | `360` | 0 … 360 |
+| Fill | `fill` | `true` |  |
 | Center | `center` | `[0.0, 0.0, 0.0]` |  |
 
 ### Color — `colorSOP`
@@ -847,6 +1165,20 @@ A UV sphere.
 | Columns | `columns` | `24` | 3 … 256 |
 | Center | `center` | `[0.0, 0.0, 0.0]` |  |
 
+### Torus — `torusSOP`
+
+A torus.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Outer Radius | `radius1` | `1` | 0 … 8 |
+| Inner Radius | `radius2` | `0.3` | 0 … 8 |
+| Rows | `rows` | `24` | 3 … 256 |
+| Columns | `columns` | `24` | 3 … 256 |
+| Center | `center` | `[0.0, 0.0, 0.0]` |  |
+
 ### Transform — `transformSOP`
 
 Translate, rotate and scale points.
@@ -858,6 +1190,22 @@ Translate, rotate and scale points.
 | Translate | `translate` | `[0.0, 0.0, 0.0]` |  |
 | Rotate (deg) | `rotate` | `[0.0, 0.0, 0.0]` |  |
 | Scale | `scale` | `[1.0, 1.0, 1.0]` |  |
+
+### Tube — `tubeSOP`
+
+A cylinder, cone or tapered tube, with optional caps.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Bottom Radius | `radius1` | `0.5` | 0 … 8 |
+| Top Radius | `radius2` | `0.5` | 0 … 8 |
+| Height | `height` | `2` | 0 … 16 |
+| Columns | `columns` | `24` | 3 … 256 |
+| Rows | `rows` | `1` | 1 … 128 |
+| Caps | `caps` | `true` |  |
+| Center | `center` | `[0.0, 0.0, 0.0]` |  |
 
 ---
 
@@ -884,6 +1232,50 @@ Freezes its input. Turn `Active` off and the texture stops updating, which is ho
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Active | `active` | `true` |  |
+
+### CHOP to TOP — `choptotopTOP`
+
+Channels as pixels: a row per channel, a column per sample.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Channel Layout | `layout` | `mono` | `mono` · `rgba` |
+
+### Chroma Key — `chromakeyTOP`
+
+Key out one colour, matching on hue rather than brightness.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Key Colour | `key` | `[0.0, 1.0, 0.0, 1.0]` |  |
+| Tolerance | `tolerance` | `0.15` | 0 … 1 |
+| Softness | `softness` | `0.1` | 0 … 1 |
+| Despill | `despill` | `1` | 0 … 1 |
+| Replace Rather Than Cut | `replace` | `false` |  |
+| Replacement | `replacement` | `[0.0, 0.0, 0.0, 1.0]` |  |
+
+### Circle — `circleTOP`
+
+An antialiased disc or ellipse.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Centre | `centre` | `[0.5, 0.5]` |  |
+| Radius | `radius` | `[0.3, 0.3]` |  |
+| Softness | `softness` | `0` | 0 … 1 |
+| Correct Aspect | `aspect` | `true` |  |
+| Fill | `fill` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Background | `background` | `[0.0, 0.0, 0.0, 0.0]` |  |
+| Resolution W | `resw` | `1280` | 1 … 4096 |
+| Resolution H | `resh` | `720` | 1 … 4096 |
 
 ### Composite — `compositeTOP`
 
@@ -922,6 +1314,20 @@ Offsets input 1's lookup by channels of input 2.
 | Offset | `offset` | `-0.5` | -1 … 1 |
 | Extend | `extend` | `hold` | `zero` · `hold` · `repeat` · `mirror` |
 
+### Edge — `edgeTOP`
+
+Sobel edge detection.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Strength | `strength` | `1` | 0 … 8 |
+| Width (px) | `width` | `1` | 0 … 16 |
+| Direction | `direction` | `both` | `both` · `horizontal` · `vertical` |
+| Keep Colour | `keepcolor` | `0` | 0 … 1 |
+| Edge Colour | `color` | `[1.0, 1.0, 1.0, 1.0]` |  |
+
 ### Feedback — `feedbackTOP`
 
 Last frame's output of the Target TOP.
@@ -937,6 +1343,18 @@ Point `Target TOP` at the node whose output you want to feed back, wire this nod
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Target TOP | `target` | *(empty)* |  |
+
+### Flip — `flipTOP`
+
+Mirror the image about an axis, or transpose it.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Flip Horizontally | `flipx` | `true` |  |
+| Flip Vertically | `flipy` | `false` |  |
+| Transpose | `transpose` | `false` |  |
 
 ### GLSL — `glslTOP`
 
@@ -961,6 +1379,21 @@ Sources are validated before the GPU sees them, so a typo gives a line number an
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
+### HSV Adjust — `hsvadjustTOP`
+
+Hue, saturation and value, optionally over one band of the wheel.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Hue Shift | `hue` | `0` | -0.5 … 0.5 |
+| Saturation | `saturation` | `1` | 0 … 4 |
+| Value | `value` | `1` | 0 … 4 |
+| Contrast | `contrast` | `1` | 0 … 4 |
+| Range Centre | `rangecentre` | `0` | 0 … 1 |
+| Range Width | `rangewidth` | `1` | 0 … 1 |
+
 ### In — `inTOP`
 
 A texture input on this component's node.
@@ -982,6 +1415,42 @@ Brightness, contrast, gamma, black/white levels.
 | Black Level | `blacklevel` | `0` | 0 … 1 |
 | White Level | `whitelevel` | `1` | 0 … 1 |
 | Invert | `invert` | `0` | 0 … 1 |
+
+### Lookup — `lookupTOP`
+
+Input 1's brightness reads a colour out of input 2.
+
+**Inputs:** index, table
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Index By | `source` | `luminance` | `luminance` · `red` · `green` · `blue` · `alpha` |
+
+### Math — `mathTOP`
+
+Arithmetic on two inputs, per channel.
+
+**Inputs:** a, b
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Operation | `operation` | `add` | `add` · `subtract` · `multiply` · `divide` · `minimum` · `maximum` · `difference` · `power` |
+| Input 1 Gain | `gain1` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Input 2 Gain | `gain2` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Offset | `offset` | `[0.0, 0.0, 0.0, 0.0]` |  |
+
+### Mirror — `mirrorTOP`
+
+Fold the image onto itself, including a radial kaleidoscope.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Mode | `mode` | `horizontal` | `horizontal` · `vertical` · `quad` · `radial` |
+| Segments | `segments` | `6` | 2 … 32 |
+| Angle | `angle` | `0` | -180 … 180 |
+| Centre | `centre` | `[0.5, 0.5]` |  |
 
 ### Movie File In — `moviefileinTOP`
 
@@ -1006,6 +1475,22 @@ The picture's own size wins: `Fallback W`/`H` is only what to show before the fi
 | Speed | `speed` | `1` | -4 … 4 |
 | Fallback W | `resw` | `1280` | 1 … 16384 |
 | Fallback H | `resh` | `720` | 1 … 16384 |
+
+### Movie File Out — `moviefileoutTOP`
+
+Records its input to a movie file. Passes the picture through.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| File | `file` | `out.mp4` |  |
+| Record | `record` | `false` |  |
+| Frame Rate | `fps` | `60` | 1 … 240 |
+| Codec | `codec` | `h264` | `h264` · `h265` · `prores` |
+| Quality | `quality` | `75` | 0 … 100 |
 
 ### Noise — `noiseTOP`
 
@@ -1050,6 +1535,25 @@ Linear or radial gradient between two colours.
 | Phase | `phase` | `0` | 0 … 1 |
 | Color 1 | `color1` | `[0.0, 0.0, 0.0, 1.0]` |  |
 | Color 2 | `color2` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Resolution W | `resw` | `1280` | 1 … 4096 |
+| Resolution H | `resh` | `720` | 1 … 4096 |
+
+### Rectangle — `rectangleTOP`
+
+A rectangle, with rounded corners and an optional border.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Centre | `centre` | `[0.5, 0.5]` |  |
+| Size | `size` | `[0.5, 0.5]` |  |
+| Softness | `softness` | `0` | 0 … 0.5 |
+| Corner Radius | `corner` | `0` | 0 … 0.5 |
+| Border Width | `border` | `0` | 0 … 0.5 |
+| Border Grey | `bordercolor` | `0` | 0 … 1 |
+| Fill | `fill` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Background | `background` | `[0.0, 0.0, 0.0, 0.0]` |  |
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
@@ -1111,6 +1615,41 @@ Select one of two inputs, optionally blending between them.
 |---|---|---|---|
 | Index | `index` | `0` | 0 … 1 |
 | Blend | `blend` | `false` |  |
+
+### Text — `textTOP`
+
+Draws text, using a font file or the system's.
+
+*No inputs — this is a generator.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Text | `text` | `OpenTouchDesigner` |  |
+| Font File | `font` | *(empty)* |  |
+| Size (px) | `size` | `48` | 4 … 512 |
+| Line Spacing | `linespacing` | `1.2` | 0.5 … 4 |
+| Horizontal Align | `halign` | `centre` | `left` · `centre` · `right` |
+| Vertical Align | `valign` | `centre` | `top` · `centre` · `bottom` |
+| Word Wrap | `wrap` | `true` |  |
+| Color | `color` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Background | `background` | `[0.0, 0.0, 0.0, 0.0]` |  |
+| Resolution W | `resw` | `1280` | 1 … 4096 |
+| Resolution H | `resh` | `720` | 1 … 4096 |
+
+### Threshold — `thresholdTOP`
+
+Split the image in two at a level, with a soft edge.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Threshold | `threshold` | `0.5` | 0 … 1 |
+| Softness | `softness` | `0.02` | 0 … 1 |
+| Compare | `source` | `luminance` | `luminance` · `maximum` · `alpha` |
+| Invert | `invert` | `false` |  |
+| Below Colour | `below` | `[0.0, 0.0, 0.0, 1.0]` |  |
+| Above Colour | `above` | `[1.0, 1.0, 1.0, 1.0]` |  |
 
 ### Transform — `transformTOP`
 

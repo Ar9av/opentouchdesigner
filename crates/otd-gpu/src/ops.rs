@@ -290,6 +290,265 @@ fn pack_switch(n: &Node, c: &EvalContext) -> PackedParams {
     ]
 }
 
+// ------------------------------------------------------------ threshold TOP
+
+fn params_threshold() -> IndexMap<String, Param> {
+    params! {
+        "threshold" => Param::float(0.5).with_label("Threshold").with_range(0.0, 1.0),
+        "softness" => Param::float(0.02).with_label("Softness").with_range(0.0, 1.0),
+        "source" => Param::menu("luminance", &["luminance", "maximum", "alpha"])
+            .with_label("Compare"),
+        "invert" => Param::bool(false).with_label("Invert"),
+        "below" => Param::rgba([0.0, 0.0, 0.0, 1.0]).with_label("Below Colour"),
+        "above" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Above Colour"),
+    }
+}
+
+fn pack_threshold(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "threshold"),
+            f(n, c, "softness"),
+            menu(n, c, "source"),
+            b(n, c, "invert"),
+        ],
+        v4(n, c, "below"),
+        v4(n, c, "above"),
+        [0.0; 4],
+    ]
+}
+
+// ----------------------------------------------------------------- edge TOP
+
+fn params_edge() -> IndexMap<String, Param> {
+    params! {
+        "strength" => Param::float(1.0).with_label("Strength").with_range(0.0, 8.0),
+        "width" => Param::float(1.0).with_label("Width (px)").with_range(0.0, 16.0),
+        "direction" => Param::menu("both", &["both", "horizontal", "vertical"])
+            .with_label("Direction"),
+        "keepcolor" => Param::float(0.0).with_label("Keep Colour").with_range(0.0, 1.0),
+        "color" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Edge Colour"),
+    }
+}
+
+fn pack_edge(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "strength"),
+            f(n, c, "width"),
+            menu(n, c, "direction"),
+            f(n, c, "keepcolor"),
+        ],
+        v4(n, c, "color"),
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// ------------------------------------------------------------------ hsv TOP
+
+fn params_hsv() -> IndexMap<String, Param> {
+    params! {
+        "hue" => Param::float(0.0).with_label("Hue Shift").with_range(-0.5, 0.5),
+        "saturation" => Param::float(1.0).with_label("Saturation").with_range(0.0, 4.0),
+        "value" => Param::float(1.0).with_label("Value").with_range(0.0, 4.0),
+        "contrast" => Param::float(1.0).with_label("Contrast").with_range(0.0, 4.0),
+        "rangecentre" => Param::float(0.0).with_label("Range Centre").with_range(0.0, 1.0),
+        "rangewidth" => Param::float(1.0).with_label("Range Width").with_range(0.0, 1.0),
+    }
+}
+
+fn pack_hsv(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            f(n, c, "hue"),
+            f(n, c, "saturation"),
+            f(n, c, "value"),
+            f(n, c, "contrast"),
+        ],
+        [f(n, c, "rangecentre"), f(n, c, "rangewidth"), 0.0, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// ----------------------------------------------------------------- flip TOP
+
+fn params_flip() -> IndexMap<String, Param> {
+    params! {
+        "flipx" => Param::bool(true).with_label("Flip Horizontally"),
+        "flipy" => Param::bool(false).with_label("Flip Vertically"),
+        "transpose" => Param::bool(false).with_label("Transpose"),
+    }
+}
+
+fn pack_flip(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [
+            b(n, c, "flipx"),
+            b(n, c, "flipy"),
+            b(n, c, "transpose"),
+            0.0,
+        ],
+        [0.0; 4],
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// --------------------------------------------------------------- mirror TOP
+
+fn params_mirror() -> IndexMap<String, Param> {
+    params! {
+        "mode" => Param::menu("horizontal", &["horizontal", "vertical", "quad", "radial"])
+            .with_label("Mode"),
+        "segments" => Param::float(6.0).with_label("Segments").with_range(2.0, 32.0),
+        "angle" => Param::float(0.0).with_label("Angle").with_range(-180.0, 180.0),
+        "centre" => Param::new(Value::Vec2([0.5, 0.5])).with_label("Centre"),
+    }
+}
+
+fn pack_mirror(n: &Node, c: &EvalContext) -> PackedParams {
+    let centre = val(n, c, "centre").as_vec4_f32();
+    [
+        [
+            menu(n, c, "mode"),
+            f(n, c, "segments"),
+            f(n, c, "angle").to_radians(),
+            centre[0],
+        ],
+        [centre[1], 0.0, 0.0, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// --------------------------------------------------------------- lookup TOP
+
+fn params_lookup() -> IndexMap<String, Param> {
+    params! {
+        "source" => Param::menu("luminance", &["luminance", "red", "green", "blue", "alpha"])
+            .with_label("Index By"),
+    }
+}
+
+fn pack_lookup(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [menu(n, c, "source"), 0.0, 0.0, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+// --------------------------------------------------------------- circle TOP
+
+fn params_circle() -> IndexMap<String, Param> {
+    with_res(params! {
+        "centre" => Param::new(Value::Vec2([0.5, 0.5])).with_label("Centre"),
+        "radius" => Param::new(Value::Vec2([0.3, 0.3])).with_label("Radius"),
+        "softness" => Param::float(0.0).with_label("Softness").with_range(0.0, 1.0),
+        "aspect" => Param::bool(true).with_label("Correct Aspect"),
+        "fill" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Fill"),
+        "background" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Background"),
+    })
+}
+
+fn pack_circle(n: &Node, c: &EvalContext) -> PackedParams {
+    let centre = val(n, c, "centre").as_vec4_f32();
+    let radius = val(n, c, "radius").as_vec4_f32();
+    [
+        [centre[0], centre[1], radius[0], radius[1]],
+        v4(n, c, "fill"),
+        v4(n, c, "background"),
+        [f(n, c, "softness"), b(n, c, "aspect"), 0.0, 0.0],
+    ]
+}
+
+// ------------------------------------------------------------ rectangle TOP
+
+fn params_rectangle() -> IndexMap<String, Param> {
+    with_res(params! {
+        "centre" => Param::new(Value::Vec2([0.5, 0.5])).with_label("Centre"),
+        "size" => Param::new(Value::Vec2([0.5, 0.5])).with_label("Size"),
+        "softness" => Param::float(0.0).with_label("Softness").with_range(0.0, 0.5),
+        "corner" => Param::float(0.0).with_label("Corner Radius").with_range(0.0, 0.5),
+        "border" => Param::float(0.0).with_label("Border Width").with_range(0.0, 0.5),
+        "bordercolor" => Param::float(0.0).with_label("Border Grey").with_range(0.0, 1.0),
+        "fill" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Fill"),
+        "background" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Background"),
+    })
+}
+
+fn pack_rectangle(n: &Node, c: &EvalContext) -> PackedParams {
+    let centre = val(n, c, "centre").as_vec4_f32();
+    let size = val(n, c, "size").as_vec4_f32();
+    [
+        // Half extents: a distance field is symmetric about the centre, and
+        // halving here means the shader does not do it per pixel.
+        [centre[0], centre[1], size[0] * 0.5, size[1] * 0.5],
+        v4(n, c, "fill"),
+        v4(n, c, "background"),
+        [
+            f(n, c, "softness"),
+            f(n, c, "corner"),
+            f(n, c, "border"),
+            f(n, c, "bordercolor"),
+        ],
+    ]
+}
+
+// ------------------------------------------------------------ chroma key TOP
+
+fn params_chromakey() -> IndexMap<String, Param> {
+    params! {
+        "key" => Param::rgba([0.0, 1.0, 0.0, 1.0]).with_label("Key Colour"),
+        "tolerance" => Param::float(0.15).with_label("Tolerance").with_range(0.0, 1.0),
+        "softness" => Param::float(0.1).with_label("Softness").with_range(0.0, 1.0),
+        "despill" => Param::float(1.0).with_label("Despill").with_range(0.0, 1.0),
+        "replace" => Param::bool(false).with_label("Replace Rather Than Cut"),
+        "replacement" => Param::rgba([0.0, 0.0, 0.0, 1.0]).with_label("Replacement"),
+    }
+}
+
+fn pack_chromakey(n: &Node, c: &EvalContext) -> PackedParams {
+    let key = v4(n, c, "key");
+    [
+        [key[0], key[1], key[2], f(n, c, "tolerance")],
+        [
+            f(n, c, "softness"),
+            f(n, c, "despill"),
+            b(n, c, "replace"),
+            0.0,
+        ],
+        v4(n, c, "replacement"),
+        [0.0; 4],
+    ]
+}
+
+// ----------------------------------------------------------------- math TOP
+
+fn params_math() -> IndexMap<String, Param> {
+    params! {
+        "operation" => Param::menu(
+            "add",
+            &["add", "subtract", "multiply", "divide", "minimum", "maximum", "difference", "power"],
+        ).with_label("Operation"),
+        "gain1" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Input 1 Gain"),
+        "gain2" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Input 2 Gain"),
+        "offset" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Offset"),
+    }
+}
+
+fn pack_math(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        [menu(n, c, "operation"), 0.0, 0.0, 0.0],
+        v4(n, c, "gain1"),
+        v4(n, c, "gain2"),
+        v4(n, c, "offset"),
+    ]
+}
+
 // ----------------------------------------------------- null / feedback TOPs
 
 fn params_none() -> IndexMap<String, Param> {
@@ -327,6 +586,64 @@ pub const RENDER: &str = "renderTOP";
 pub const MOVIE_IN: &str = "moviefileinTOP";
 /// A camera. Same decoder, a different ffmpeg input.
 pub const VIDEO_DEVICE_IN: &str = "videodeviceinTOP";
+/// Channels as pixels. Special-cased by the engine, which owns the upload.
+pub const CHOP_TO_TOP: &str = "choptotopTOP";
+/// Draws text. Special-cased by the engine, which owns the font cache and
+/// the upload.
+pub const TEXT: &str = "textTOP";
+
+fn params_text() -> IndexMap<String, Param> {
+    with_res(params! {
+        "text" => Param::str("OpenTouchDesigner").with_label("Text"),
+        // A file reference, so a bundle copies the font with the project. A
+        // show that opens on the wrong machine with the wrong face is the
+        // whole reason bundles exist.
+        "font" => Param::str("").with_label("Font File").as_file_ref(),
+        "size" => Param::float(48.0).with_label("Size (px)").with_range(4.0, 512.0),
+        "linespacing" => Param::float(1.2).with_label("Line Spacing").with_range(0.5, 4.0),
+        "halign" => Param::menu("centre", &["left", "centre", "right"])
+            .with_label("Horizontal Align"),
+        "valign" => Param::menu("centre", &["top", "centre", "bottom"])
+            .with_label("Vertical Align"),
+        "wrap" => Param::bool(true).with_label("Word Wrap"),
+        "color" => Param::rgba([1.0, 1.0, 1.0, 1.0]).with_label("Color"),
+        "background" => Param::rgba([0.0, 0.0, 0.0, 0.0]).with_label("Background"),
+    })
+}
+
+fn pack_text(n: &Node, c: &EvalContext) -> PackedParams {
+    [
+        v4(n, c, "color"),
+        v4(n, c, "background"),
+        [0.0; 4],
+        [0.0; 4],
+    ]
+}
+
+/// Records its input to a movie file. Special-cased by the engine, which owns
+/// the readback and the encoder subprocess.
+pub const MOVIE_OUT: &str = "moviefileoutTOP";
+
+fn params_movie_out() -> IndexMap<String, Param> {
+    params! {
+        // Deliberately *not* a file reference: that marks media a project
+        // depends on so a bundle can copy it, and this is a destination. A
+        // bundle chasing a recording that has not happened yet would report a
+        // missing file for something working exactly as intended.
+        "file" => Param::str("out.mp4").with_label("File"),
+        "record" => Param::bool(false).with_label("Record"),
+        "fps" => Param::float(60.0).with_label("Frame Rate").with_range(1.0, 240.0),
+        "codec" => Param::menu("h264", &["h264", "h265", "prores"]).with_label("Codec"),
+        "quality" => Param::int(75).with_label("Quality").with_range(0.0, 100.0),
+    }
+}
+
+fn params_chop_to_top() -> IndexMap<String, Param> {
+    params! {
+        "layout" => Param::menu("mono", &["mono", "rgba"])
+            .with_label("Channel Layout"),
+    }
+}
 
 fn params_movie_in() -> IndexMap<String, Param> {
     params! {
@@ -506,6 +823,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "constantTOP",
+                    input_families: &[],
                     label: "Constant",
                     family: Family::Top,
                     inputs: &[],
@@ -523,6 +841,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "noiseTOP",
+                    input_families: &[],
                     label: "Noise",
                     family: Family::Top,
                     inputs: &[],
@@ -540,6 +859,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "rampTOP",
+                    input_families: &[],
                     label: "Ramp",
                     family: Family::Top,
                     inputs: &[],
@@ -561,6 +881,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: MOVIE_IN,
+                    input_families: &[],
                     label: "Movie File In",
                     family: Family::Top,
                     inputs: &[],
@@ -578,6 +899,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: VIDEO_DEVICE_IN,
+                    input_families: &[],
                     label: "Video Device In",
                     family: Family::Top,
                     inputs: &[],
@@ -595,6 +917,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "levelTOP",
+                    input_families: &[],
                     label: "Level",
                     family: Family::Top,
                     inputs: &["in"],
@@ -612,6 +935,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "transformTOP",
+                    input_families: &[],
                     label: "Transform",
                     family: Family::Top,
                     inputs: &["in"],
@@ -629,6 +953,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "blurTOP",
+                    input_families: &[],
                     label: "Blur",
                     family: Family::Top,
                     inputs: &["in"],
@@ -646,6 +971,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "compositeTOP",
+                    input_families: &[],
                     label: "Composite",
                     family: Family::Top,
                     inputs: &["base", "over"],
@@ -663,6 +989,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "switchTOP",
+                    input_families: &[],
                     label: "Switch",
                     family: Family::Top,
                     inputs: &["0", "1"],
@@ -680,6 +1007,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: NULL,
+                    input_families: &[],
                     label: "Null",
                     family: Family::Top,
                     inputs: &["in"],
@@ -697,6 +1025,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: FEEDBACK,
+                    input_families: &[],
                     label: "Feedback",
                     family: Family::Top,
                     // No wired input on purpose: the target is named by
@@ -717,6 +1046,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: IN,
+                    input_families: &[],
                     label: "In",
                     family: Family::Top,
                     // Fed from outside the component, not by a wire in here.
@@ -735,6 +1065,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: SELECT,
+                    input_families: &[],
                     label: "Select",
                     family: Family::Top,
                     // Like Feedback, named by parameter — but this one *is*
@@ -754,6 +1085,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: OUT,
+                    input_families: &[],
                     label: "Out",
                     family: Family::Top,
                     inputs: &["in"],
@@ -771,6 +1103,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: CACHE,
+                    input_families: &[],
                     label: "Cache",
                     family: Family::Top,
                     inputs: &["in"],
@@ -788,6 +1121,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "resolutionTOP",
+                    input_families: &[],
                     label: "Resolution",
                     family: Family::Top,
                     inputs: &["in"],
@@ -805,6 +1139,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: "displaceTOP",
+                    input_families: &[],
                     label: "Displace",
                     family: Family::Top,
                     inputs: &["source", "displace"],
@@ -822,6 +1157,7 @@ fn specs() -> &'static Vec<TopSpec> {
             TopSpec {
                 def: OpDef {
                     type_name: RENDER,
+                    input_families: &[],
                     label: "Render",
                     family: Family::Top,
                     inputs: &[],
@@ -840,7 +1176,248 @@ fn specs() -> &'static Vec<TopSpec> {
             },
             TopSpec {
                 def: OpDef {
+                    type_name: "thresholdTOP",
+                    label: "Threshold",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Split the image in two at a level, with a soft edge.",
+                    time_dependent: false,
+                    params: params_threshold,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/threshold.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_threshold,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "edgeTOP",
+                    label: "Edge",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Sobel edge detection.",
+                    time_dependent: false,
+                    params: params_edge,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/edge.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_edge,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "hsvadjustTOP",
+                    label: "HSV Adjust",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Hue, saturation and value, optionally over one band of the wheel.",
+                    time_dependent: false,
+                    params: params_hsv,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/hsv.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_hsv,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "flipTOP",
+                    label: "Flip",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Mirror the image about an axis, or transpose it.",
+                    time_dependent: false,
+                    params: params_flip,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/flip.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_flip,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "mirrorTOP",
+                    label: "Mirror",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Fold the image onto itself, including a radial kaleidoscope.",
+                    time_dependent: false,
+                    params: params_mirror,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/mirror.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_mirror,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "lookupTOP",
+                    label: "Lookup",
+                    family: Family::Top,
+                    inputs: &["index", "table"],
+                    input_families: &[],
+                    summary: "Input 1's brightness reads a colour out of input 2.",
+                    time_dependent: false,
+                    params: params_lookup,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/lookup.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_lookup,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "circleTOP",
+                    label: "Circle",
+                    family: Family::Top,
+                    inputs: &[],
+                    input_families: &[],
+                    summary: "An antialiased disc or ellipse.",
+                    time_dependent: false,
+                    params: params_circle,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/circle.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_circle,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "rectangleTOP",
+                    label: "Rectangle",
+                    family: Family::Top,
+                    inputs: &[],
+                    input_families: &[],
+                    summary: "A rectangle, with rounded corners and an optional border.",
+                    time_dependent: false,
+                    params: params_rectangle,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/rectangle.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_rectangle,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "chromakeyTOP",
+                    label: "Chroma Key",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Key out one colour, matching on hue rather than brightness.",
+                    time_dependent: false,
+                    params: params_chromakey,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/chromakey.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_chromakey,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: "mathTOP",
+                    label: "Math",
+                    family: Family::Top,
+                    inputs: &["a", "b"],
+                    input_families: &[],
+                    summary: "Arithmetic on two inputs, per channel.",
+                    time_dependent: false,
+                    params: params_math,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/math.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_math,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: TEXT,
+                    label: "Text",
+                    family: Family::Top,
+                    inputs: &[],
+                    input_families: &[],
+                    summary: "Draws text, using a font file or the system's.",
+                    time_dependent: false,
+                    params: params_text,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/text.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_text,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: MOVIE_OUT,
+                    label: "Movie File Out",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[],
+                    summary: "Records its input to a movie file. Passes the picture through.",
+                    // Whether it cooks decides whether a frame is recorded, so
+                    // it cannot be allowed to sit out a frame because nothing
+                    // upstream changed.
+                    time_dependent: true,
+                    params: params_movie_out,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Input0,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: CHOP_TO_TOP,
+                    label: "CHOP to TOP",
+                    family: Family::Top,
+                    inputs: &["in"],
+                    input_families: &[Family::Chop],
+                    summary: "Channels as pixels: a row per channel, a column per sample.",
+                    // A CHOP is a moving target by assumption — see the
+                    // GLSL TOP's note about proving otherwise.
+                    time_dependent: true,
+                    params: params_chop_to_top,
+                    connector: Connector::None,
+                },
+                // Uploaded, then blitted; there is no operator shader.
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Referenced,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
                     type_name: GLSL,
+                    input_families: &[],
                     label: "GLSL",
                     family: Family::Top,
                     inputs: &["in0", "in1"],
@@ -875,6 +1452,7 @@ pub fn all() -> impl Iterator<Item = &'static TopSpec> {
 /// bolted on in Phase 3.
 pub const CONTAINER: OpDef = OpDef {
     type_name: "containerCOMP",
+    input_families: &[],
     label: "Container",
     family: Family::Comp,
     inputs: &[],

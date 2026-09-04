@@ -8,7 +8,7 @@
 [![CI](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml/badge.svg)](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml)
 [![Download](https://img.shields.io/github/v/release/Ar9av/opentouchdesigner?label=download%20macOS&color=blue)](https://github.com/Ar9av/opentouchdesigner/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-![Operators](https://img.shields.io/badge/operators-79-informational)
+![Operators](https://img.shields.io/badge/operators-118-informational)
 
 <img src="docs/img/tunnel.gif" width="640" alt="A cyan and magenta warp tunnel, built from nine nodes and no shader">
 
@@ -206,6 +206,27 @@ evaluator (`absTime`, `frame`, `sin`, `fit`, `clamp`, …), falling through to
 Python for anything more. Switching a parameter to Expression and back does
 not lose the constant underneath.
 
+**Converters** — the other way across a family boundary. Wires are same-family
+only, because that rule is what keeps a network readable at a glance; the
+exception is a converter, and it is declared per *input* rather than per
+operator, so a wire lands where it was meant to and is refused everywhere else.
+
+| | reads | writes |
+|---|---|---|
+| **DAT to CHOP** | a table | channels, named by the header row |
+| **CHOP to DAT** | channels | a table you can select, copy and send |
+| **SOP to CHOP** | geometry | `Px`/`Py`/`Pz`, `N`, `uv`, `Cd` — one sample per point |
+| **CHOP to TOP** | channels | a texture, a row per channel, for a shader to sample |
+| **TOP to CHOP** | pixels | `r`, `g`, `b`, `a` — a row, a column, or the average |
+
+**TOP to CHOP reads last frame**, and says so rather than pretending
+otherwise: this frame's passes are still in a command encoder that has not been
+submitted, and waiting for them would stall the frame on the render it is in
+the middle of building. TouchDesigner's is one frame behind for the same
+reason. It also costs a full GPU sync at the *source's* resolution — put a
+Resolution TOP in front of it, because reading 1920×1080 back every frame to
+get four numbers is the classic way to turn a 60 fps patch into a 12 fps one.
+
 **Components** — In and Out operators inside a component surface as typed
 connectors on its node, so a component's shape is defined by what is in it.
 Custom parameters are its API: operators inside read them as `parent.gain`,
@@ -263,8 +284,8 @@ path quoted inside an expression or a script becomes a cook dependency, so
 `ch('/lfo1', 'chan1')` makes `/lfo1` cook first rather than reading it stale.
 A failing expression keeps its constant and reports one line.
 
-**DATs** (`otd-dat`) — Table, Text, Select, Merge, JSON, Script, UDP In, UDP
-Out and Null. A table's contents live in the project file, so a cue list is
+**DATs** (`otd-dat`) — Table, Text, Select, Merge, Sort, Transpose, Convert,
+Substitute, JSON, Script, UDP In, UDP Out and Null. A table's contents live in the project file, so a cue list is
 versioned with the patch that uses it. Script DATs run Python and return
 rows. UDP In presents received datagrams as a table, one message per row;
 UDP Out sends its input's text as one datagram when it *changes* — a DAT
@@ -272,11 +293,12 @@ cooks whenever anything upstream does, and resending an unchanged payload
 every cook would turn a cook into a broadcast. Both are tested as real
 loopbacks, like OSC and DMX.
 
-**3D** (`otd-sop`, `otd-gpu`) — Box, Sphere, Grid, Line, Transform, Noise,
-Color, Merge, Copy and Null SOPs; Geometry, Camera and Light components; a
-PBR material with an optional colour map; and a Render TOP with a depth
-buffer whose output is an ordinary texture, so a TOP chain after it neither
-knows nor cares that a camera was involved.
+**3D** (`otd-sop`, `otd-gpu`) — Box, Sphere, Tube, Torus, Circle, Grid, Line,
+Transform, Noise, Color, Merge, Copy and Null SOPs; Geometry, Camera and Light
+components; PBR, Phong, Constant and Wireframe materials, each with an optional
+colour map; and a Render TOP with a depth buffer whose output is an ordinary
+texture, so a TOP chain after it neither knows nor cares that a camera was
+involved.
 
 Geometry is a flat interleaved buffer shaped exactly like the vertex buffer
 the renderer wants, and filters are per-point functions rather than mesh
@@ -289,9 +311,18 @@ and colour each named by parameter. A single-sample channel broadcasts to all
 of them, which is how one audio band makes the whole grid breathe.
 
 **CHOPs** (`otd-chop`) — Constant, LFO, Noise, Pattern, Math, Lag, Filter,
-Logic, Trigger, Timer, Speed, Count, Select, Merge, Switch, Animation, Null,
-plus Audio Device In, Audio Device Out, Audio File In, Audio Spectrum, MIDI
-In, MIDI Out, OSC In, OSC Out, DMX Out, Mouse In and Keyboard In.
+Logic, Trigger, Timer, Speed, Count, Slope, Delay, Limit, Hold, Shuffle,
+Rename, Analyze, Resample, Cross, Clock, Beat, Select, Merge, Switch,
+Animation, Expression, Null, plus Audio Device In, Audio Device Out, Audio File In, Audio
+Spectrum, MIDI In, MIDI Out, OSC In, OSC Out, DMX Out, Mouse In and Keyboard
+In.
+
+**Beat** and **Clock** are the two that are deliberately not the same clock.
+Beat is derived from the timeline's absolute time rather than from a counter,
+so a dropped frame does not put the tempo permanently behind — the same rule
+the Animation CHOP and Movie File In follow. Clock is wall time, and keeps
+running when the timeline is paused, which is what an installation that has to
+change at 9pm needs.
 
 **Audio File In** reads RIFF/WAVE itself — PCM in 8/16/24/32 bits or 32-bit
 float, which is what a DAW bounces — rather than pulling in a media stack for
@@ -317,9 +348,11 @@ block a frame. A missing interface reports itself on the node and produces
 silence rather than failing the cook, because losing a device mid-show must
 not stop the render.
 
-**TOPs** (`otd-gpu`) — Constant, Noise, Ramp, GLSL, Level, Transform, Blur,
-Displace, Composite, Switch, Resolution, Cache, Select, Null, Out, Feedback,
-Movie File In, Video Device In. All 16-bit float, no resolution cap. One
+**TOPs** (`otd-gpu`) — Constant, Noise, Ramp, Circle, Rectangle, Text, GLSL, Level,
+Transform, Blur, Edge, Threshold, HSV Adjust, Chroma Key, Lookup, Flip, Mirror,
+Math, Displace, Composite, Switch, Resolution, Cache, Select, Null, Out,
+Feedback, Movie File In, Movie File Out, Video Device In. All 16-bit float, no
+resolution cap. One
 command encoder per frame; transient textures are pooled and node outputs are
 retained for as long as their cache is valid.
 
@@ -403,11 +436,29 @@ viewer, a second output window for a projector, cook/GPU statistics in the top
 bar. The thumbnails are the operators' real textures shared with egui — no
 copy, no readback.
 
-## What doesn't exist yet
+**Text** — a Text TOP draws a caption, with alignment, line spacing and word
+wrap, and its alpha is real so it composites over a picture like any other
+texture. The glyphs are rasterised on the CPU and uploaded as coverage; the
+colour is applied in the shader, which is what makes Colour a live parameter
+rather than a reason to lay the text out again.
 
-**Movie File Out** — recording to a video file is not written. Reading is
-(see above); `otd render` writes a PNG sequence, which `ffmpeg` will turn
-into a movie in one command.
+**No font is embedded.** Every face good enough to be a default is either large
+or encumbered, and building one into the binary makes a licensing decision for
+everyone who redistributes a build. The Font parameter takes a `.ttf` or `.otf`
+— and it is a file reference, so a bundle carries the font to the show machine
+— and with none set the operator looks through the places each platform keeps
+its system faces. Finding none is a message on the node, not a black frame.
+
+**Recording** — a Movie File Out TOP writes its input to h264, h265 or ProRes
+through an ffmpeg subprocess, and passes the picture through so it can sit in
+the middle of a chain rather than at the end of one. Two things about it are
+deliberate. The frame is read back *after* the frame is submitted, not during
+the cook, because a recording one frame behind what the artist watched is a
+file that is wrong. And a full encoder queue **blocks** instead of dropping: a
+dropped frame is not a stutter you can forgive, it is timing that stays wrong
+forever, so the honest cost of recording is a slower editor while it runs.
+
+## What doesn't exist yet
 
 **Texture sharing** — Spout, Syphon and NDI all need platform SDKs that cannot
 be built or verified here, so none of them is written.

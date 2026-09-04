@@ -308,3 +308,117 @@ fn the_scene_references_are_cook_dependencies() {
         "the SOP should have been dragged in"
     );
 }
+
+// ---------------------------------------------------------------- materials
+
+/// The brightest pixel found on a horizontal scan through the middle.
+fn peak_on_centre_row(rig: &Rig, render: NodeId) -> [u8; 3] {
+    let (w, h, px) = rig.pixels(render);
+    let y = h as usize / 2;
+    let mut best = [0u8; 3];
+    for x in 0..w as usize {
+        let i = (y * w as usize + x) * 4;
+        if px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32
+            > best[0] as u32 + best[1] as u32 + best[2] as u32
+        {
+            best = [px[i], px[i + 1], px[i + 2]];
+        }
+    }
+    best
+}
+
+#[test]
+fn a_constant_material_ignores_the_light() {
+    // The point of the operator: turn the light off entirely and the surface
+    // must be unchanged. A PBR material in the same place must not be.
+    let gpu = gpu_or_skip!();
+    let mut rig = Rig::new(gpu);
+    let render = basic_scene(&mut rig);
+    let geo = rig.graph.find("/geo1").unwrap();
+    let light = rig.graph.find("/light1").unwrap();
+    let mat = rig.add("constantMAT", "flat1");
+    rig.set(geo, "material", Value::Str("/flat1".into()));
+    rig.set(mat, "basecolor", Value::Vec4([0.0, 1.0, 0.0, 1.0]));
+
+    rig.run(render);
+    let lit = peak_on_centre_row(&rig, render);
+    assert!(lit[1] > 100, "the sphere should be green: {lit:?}");
+
+    rig.set(light, "intensity", Value::Float(0.0));
+    rig.run(render);
+    let unlit = peak_on_centre_row(&rig, render);
+    assert_eq!(lit, unlit, "a constant material must not notice the light");
+}
+
+#[test]
+fn a_phong_materials_shininess_tightens_the_highlight() {
+    let gpu = gpu_or_skip!();
+    let mut rig = Rig::new(gpu);
+    let render = basic_scene(&mut rig);
+    let geo = rig.graph.find("/geo1").unwrap();
+    let mat = rig.add("phongMAT", "phong1");
+    rig.set(geo, "material", Value::Str("/phong1".into()));
+    rig.set(mat, "basecolor", Value::Vec4([0.1, 0.1, 0.1, 1.0]));
+    rig.set(mat, "specular", Value::Float(1.0));
+
+    // Count the pixels the highlight covers, wide then narrow.
+    let hot = |rig: &Rig| -> usize {
+        let (w, h, px) = rig.pixels(render);
+        (0..(w as usize * h as usize))
+            .filter(|i| px[i * 4] > 180)
+            .count()
+    };
+
+    rig.set(mat, "shininess", Value::Float(4.0));
+    rig.run(render);
+    let broad = hot(&rig);
+
+    rig.set(mat, "shininess", Value::Float(200.0));
+    rig.run(render);
+    let tight = hot(&rig);
+
+    assert!(broad > 0, "a specular of 1.0 should show a highlight");
+    assert!(
+        tight < broad,
+        "shininess 200 should be tighter than 4: {tight} vs {broad}"
+    );
+}
+
+#[test]
+fn a_wireframe_material_draws_edges_and_leaves_holes() {
+    // A wireframe is mostly background — that is what distinguishes it from a
+    // filled surface, and it is the cheapest thing to assert that a filled
+    // draw could not accidentally pass.
+    let gpu = gpu_or_skip!();
+    let mut rig = Rig::new(gpu);
+    let render = basic_scene(&mut rig);
+    let geo = rig.graph.find("/geo1").unwrap();
+    let sphere = rig.graph.find("/sphere1").unwrap();
+    rig.set(sphere, "radius", Value::Float(1.2));
+    // A coarse mesh on purpose: at the default 16x24 the edges alone cover
+    // half the sphere and the test could not tell a wireframe from a fill.
+    rig.set(sphere, "rows", Value::Int(5));
+    rig.set(sphere, "columns", Value::Int(7));
+
+    let covered = |rig: &Rig| -> usize {
+        let (w, h, px) = rig.pixels(render);
+        (0..(w as usize * h as usize))
+            .filter(|i| px[i * 4] as u32 + px[i * 4 + 1] as u32 + px[i * 4 + 2] as u32 > 30)
+            .count()
+    };
+
+    rig.run(render);
+    let solid = covered(&rig);
+
+    rig.add("wireframeMAT", "wire1");
+    rig.set(geo, "material", Value::Str("/wire1".into()));
+    rig.run(render);
+    let wire = covered(&rig);
+
+    assert!(solid > 0, "the solid sphere should cover something");
+    assert!(
+        wire * 2 < solid,
+        "a wireframe should be mostly holes: {wire} vs {solid}"
+    );
+    assert!(wire > 0, "but it should still draw its edges");
+}

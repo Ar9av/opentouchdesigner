@@ -8,6 +8,7 @@
 pub mod bundle;
 pub mod component;
 pub mod cook;
+pub mod crossing;
 pub mod expr;
 pub mod graph;
 pub mod history;
@@ -21,6 +22,7 @@ mod test_ops;
 pub use bundle::Bundle;
 pub use component::Component;
 pub use cook::{CookContext, CookEngine, CookError, Cooker, FrameStats};
+pub use crossing::{ChannelView, Crossing, Crossings};
 pub use expr::{ChannelSource, EvalContext, Expr};
 pub use graph::{Connector, Family, Graph, GraphError, Node, NodeFlags, NodeId, OpDef, OpRegistry};
 pub use history::History;

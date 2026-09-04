@@ -14,12 +14,13 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use otd_core::cook::resolve_bypass;
-use otd_core::{CookContext, CookError, Cooker, EvalContext, Graph, NodeId};
+use otd_core::{CookContext, CookError, Cooker, Crossings, EvalContext, Graph, NodeId};
 use slotmap::SecondaryMap;
 use wgpu::util::DeviceExt;
 
 use crate::context::GpuContext;
 use crate::ops::{self, PackedParams, Sizing};
+use crate::record::Recorder;
 use crate::render3d::{self, Renderer};
 use crate::scene::Scene;
 use crate::shader;
@@ -63,6 +64,7 @@ struct Upload {
     view: wgpu::TextureView,
     width: u32,
     height: u32,
+    format: wgpu::TextureFormat,
     revision: u64,
 }
 
@@ -94,6 +96,20 @@ pub struct TopEngine {
     /// The 3D pipeline, built on first use so a 2D-only patch never pays for
     /// it.
     renderer: Option<Renderer>,
+    /// One encoder subprocess per recording Movie File Out node. Held here
+    /// rather than in `NodeGpu` for the reason the video decoders are:
+    /// dropping one finalises a file on disk, and that must happen exactly
+    /// when the node stops recording, not whenever a texture is recycled.
+    recorders: SecondaryMap<NodeId, Recorder>,
+    /// Nodes that asked to be recorded this frame, drained in `end_frame`
+    /// once the encoder has been submitted and the pixels are real.
+    pending_records: Vec<NodeId>,
+    /// Parsed font faces, shared by every Text TOP.
+    fonts: crate::text::FontCache,
+    /// What each Text TOP last rasterised, so retyping one caption does not
+    /// re-lay-out every other one — and so a static caption costs nothing at
+    /// all after its first frame.
+    text_keys: SecondaryMap<NodeId, String>,
     pub passes_this_frame: u32,
 }
 
@@ -204,6 +220,10 @@ impl TopEngine {
             encoder: None,
             scratch: Vec::new(),
             renderer: None,
+            recorders: SecondaryMap::new(),
+            pending_records: Vec::new(),
+            fonts: crate::text::FontCache::default(),
+            text_keys: SecondaryMap::new(),
             passes_this_frame: 0,
         }
     }
@@ -376,14 +396,220 @@ impl TopEngine {
         ));
     }
 
-    /// Submit the frame's work and recycle scratch targets.
+    /// Submit the frame's work, capture any recordings, and recycle scratch.
     pub fn end_frame(&mut self) {
         if let Some(encoder) = self.encoder.take() {
             self.ctx.queue.submit(Some(encoder.finish()));
         }
+        // *After* the submit, on purpose: a readback taken during the cook
+        // copies a texture whose passes have not run yet, and a recording one
+        // frame behind what the artist watched is a file that is wrong.
+        for id in std::mem::take(&mut self.pending_records) {
+            self.capture(id);
+        }
         for t in std::mem::take(&mut self.scratch) {
             self.pool.release(t);
         }
+    }
+
+    /// Copy a recording node's output to its encoder.
+    fn capture(&mut self, id: NodeId) {
+        let Some(tex) = self.nodes.get(id).and_then(|n| n.output.as_ref()) else {
+            return;
+        };
+        let Some(recorder) = self.recorders.get(id) else {
+            return;
+        };
+        if tex.key.width != recorder.width || tex.key.height != recorder.height {
+            // The input changed size mid-recording. Every frame in a file has
+            // to be the same shape, so this is a new file rather than a
+            // silently stretched one; the next cook notices the key changed.
+            return;
+        }
+        match crate::read_pixels_rgba8(&self.ctx, tex) {
+            Ok((_, _, pixels)) => recorder.push(pixels),
+            Err(e) => {
+                self.nodes.entry(id).unwrap().or_default().status =
+                    Some(format!("could not read the frame back: {e}"));
+            }
+        }
+    }
+
+    /// Lay out and upload a Text TOP's glyphs, then tint them.
+    #[allow(clippy::too_many_arguments)]
+    fn cook_text(
+        &mut self,
+        id: NodeId,
+        ctx: &CookContext,
+        eval: &EvalContext,
+        node: &otd_core::Node,
+        width: u32,
+        height: u32,
+        label: &str,
+    ) -> Result<(), CookError> {
+        let text = |key: &str| {
+            node.param(key)
+                .map(|p| p.eval(eval).as_str())
+                .unwrap_or_default()
+        };
+        let number = |key: &str, fallback: f32| {
+            node.param(key)
+                .map(|p| p.eval(eval).as_f32())
+                .unwrap_or(fallback)
+        };
+        let index = |key: &str| {
+            node.param(key)
+                .and_then(|p| {
+                    let chosen = p.eval(eval).as_str();
+                    p.menu.as_ref()?.iter().position(|i| *i == chosen)
+                })
+                .unwrap_or(0)
+        };
+
+        let font_path = text("font");
+        let layout = crate::text::Layout {
+            text: text("text"),
+            size: number("size", 48.0).max(1.0),
+            line_spacing: number("linespacing", 1.2),
+            horizontal: crate::text::Align::from_index(index("halign")),
+            vertical: crate::text::Align::from_index(index("valign")),
+            width,
+            height,
+            wrap: node
+                .param("wrap")
+                .map(|p| p.eval(eval).as_bool())
+                .unwrap_or(true),
+        };
+
+        // Everything the raster depends on. The colour is deliberately absent:
+        // it is applied in the shader, so changing it must not re-rasterise.
+        let key = format!(
+            "{font_path}|{}|{}|{}|{}|{}|{width}x{height}|{}",
+            layout.text,
+            layout.size,
+            layout.line_spacing,
+            index("halign"),
+            index("valign"),
+            layout.wrap
+        );
+
+        if self.text_keys.get(id).map(|k| k.as_str()) != Some(key.as_str()) {
+            match self.fonts.get(&font_path) {
+                Ok(font) => {
+                    let raster = crate::text::rasterise(font, &layout);
+                    self.upload_pixels(
+                        id,
+                        raster.width,
+                        raster.height,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        &raster.pixels,
+                        u64::MAX,
+                    );
+                    self.text_keys.insert(id, key);
+                    self.nodes.entry(id).unwrap().or_default().status = None;
+                }
+                Err(e) => {
+                    // No font is a message on the node and a blank picture, not
+                    // a failed cook: losing the whole render because a caption
+                    // cannot find a face is the wrong trade.
+                    self.nodes.entry(id).unwrap().or_default().status = Some(e);
+                    self.text_keys.remove(id);
+                    return self.clear_to_black(id, ctx, label);
+                }
+            }
+        }
+
+        let Some(source_view) = self.nodes[id].upload.as_ref().map(|u| u.view.clone()) else {
+            return self.clear_to_black(id, ctx, label);
+        };
+        let params = (ops::spec(&node.op_type).unwrap().pack)(node, eval);
+        let out = self.nodes[id].output.as_ref().unwrap().view.clone();
+        let uniforms = self.uniforms(width, height, ctx, params);
+        let buf = self.write_uniform(id, 0, uniforms);
+        let dummy = self.dummy.clone();
+        self.run_pass(Pass {
+            label,
+            pipeline: PipelineRef::Builtin(ops::TEXT),
+            target: &out,
+            uniform: &buf,
+            in0: &source_view,
+            in1: &dummy,
+            nearest: false,
+        })
+    }
+
+    /// Start, stop or keep a recording, and note whether to capture this frame.
+    fn cook_movie_out(&mut self, id: NodeId, node: &otd_core::Node, eval: &EvalContext) {
+        let recording = node
+            .param("record")
+            .map(|p| p.eval(eval).as_bool())
+            .unwrap_or(false);
+        if !recording {
+            // Dropping the recorder is what closes the file — see its `Drop`.
+            if self.recorders.remove(id).is_some() {
+                self.nodes.entry(id).unwrap().or_default().status = None;
+            }
+            return;
+        }
+
+        let Some((width, height)) = self
+            .nodes
+            .get(id)
+            .and_then(|n| n.output.as_ref().map(|t| (t.key.width, t.key.height)))
+        else {
+            return;
+        };
+        let text = |key: &str| {
+            node.param(key)
+                .map(|p| p.eval(eval).as_str())
+                .unwrap_or_default()
+        };
+        let path = text("file");
+        let fps = node
+            .param("fps")
+            .map(|p| p.eval(eval).as_f32() as f64)
+            .unwrap_or(60.0);
+        let codec = match text("codec").as_str() {
+            "h265" => "libx265",
+            "prores" => "prores_ks",
+            _ => "libx264",
+        };
+        let quality = node
+            .param("quality")
+            .map(|p| p.eval(eval).as_i64())
+            .unwrap_or(75)
+            .clamp(0, 100) as u32;
+
+        // Everything that would make the frames inconsistent is in the key, so
+        // changing any of it starts a new file instead of writing mismatched
+        // frames into the open one.
+        let key = format!("{path}|{width}x{height}|{fps:.3}|{codec}|{quality}");
+        if self.recorders.get(id).map(|r| r.key.as_str()) != Some(key.as_str()) {
+            self.recorders.remove(id);
+            match Recorder::start(key, &path, width, height, fps, quality, codec) {
+                Ok(r) => {
+                    self.recorders.insert(id, r);
+                    self.nodes.entry(id).unwrap().or_default().status = None;
+                }
+                Err(e) => {
+                    self.nodes.entry(id).unwrap().or_default().status = Some(e);
+                    return;
+                }
+            }
+        }
+
+        if let Some(problem) = self.recorders.get(id).and_then(|r| r.problem()) {
+            self.nodes.entry(id).unwrap().or_default().status = Some(problem);
+        } else {
+            let written = self
+                .recorders
+                .get(id)
+                .map(|r| r.frames_written())
+                .unwrap_or(0);
+            self.nodes.entry(id).unwrap().or_default().status =
+                Some(format!("recording — {written} frames"));
+        }
+        self.pending_records.push(id);
     }
 
     /// The texture a node currently presents, following bypass flags.
@@ -407,8 +633,18 @@ impl TopEngine {
     ///
     /// Dropping the decoder is what stops its thread and kills its ffmpeg
     /// process, so deleting a camera node releases the camera.
+    /// How many frames a recording node has written, for the editor.
+    pub fn frames_recorded(&self, id: NodeId) -> Option<u64> {
+        self.recorders.get(id).map(|r| r.frames_written())
+    }
+
     pub fn forget(&mut self, id: NodeId) {
         self.videos.remove(id);
+        // Deleting a recording node finalises its file rather than truncating
+        // it: the drop closes the pipe and waits for ffmpeg's trailer.
+        self.recorders.remove(id);
+        self.pending_records.retain(|p| *p != id);
+        self.text_keys.remove(id);
         if let Some(mut n) = self.nodes.remove(id) {
             if let Some(t) = n.output.take() {
                 self.pool.release(t);
@@ -837,27 +1073,54 @@ impl TopEngine {
     /// the linear value of sRGB 0.5. Consistency with the rest of the engine
     /// beats being right in isolation.
     fn upload_frame(&mut self, id: NodeId, frame: &crate::video::Frame, revision: u64) {
+        self.upload_pixels(
+            id,
+            frame.width,
+            frame.height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            &frame.pixels,
+            revision,
+        );
+    }
+
+    /// Copy CPU pixels into this node's upload texture, reusing it when the
+    /// shape has not changed.
+    ///
+    /// `revision` is what makes a repeated cook cheap: an unchanged decoder
+    /// frame is not re-sent. A caller with nothing to compare — the CHOP to
+    /// TOP, whose channels are different every frame anyway — passes
+    /// `u64::MAX` and always writes.
+    fn upload_pixels(
+        &mut self,
+        id: NodeId,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        bytes: &[u8],
+        revision: u64,
+    ) {
+        let (width, height) = (width.max(1), height.max(1));
         let entry = self.nodes.entry(id).unwrap().or_default();
         let reusable = entry
             .upload
             .as_ref()
-            .map(|u| u.width == frame.width && u.height == frame.height)
+            .map(|u| u.width == width && u.height == height && u.format == format)
             .unwrap_or(false);
-        if reusable && entry.upload.as_ref().unwrap().revision == revision {
+        if reusable && revision != u64::MAX && entry.upload.as_ref().unwrap().revision == revision {
             return; // Nothing new to send.
         }
         if !reusable {
             let texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("otd video upload"),
+                label: Some("otd upload"),
                 size: wgpu::Extent3d {
-                    width: frame.width.max(1),
-                    height: frame.height.max(1),
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -865,11 +1128,13 @@ impl TopEngine {
             self.nodes[id].upload = Some(Upload {
                 texture,
                 view,
-                width: frame.width,
-                height: frame.height,
+                width,
+                height,
+                format,
                 revision: u64::MAX,
             });
         }
+        let bytes_per_texel = format.block_copy_size(None).unwrap_or(4);
         let upload = self.nodes[id].upload.as_mut().unwrap();
         upload.revision = revision;
         self.ctx.queue.write_texture(
@@ -879,18 +1144,106 @@ impl TopEngine {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &frame.pixels,
+            bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
+                bytes_per_row: Some(width * bytes_per_texel),
+                rows_per_image: Some(height),
             },
             wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    /// Channels as a texture.
+    ///
+    /// One row per channel, one column per sample. `Rgba16Float`, not
+    /// `Rgba8Unorm`: a channel is not a colour, and clamping it to 0..1 on the
+    /// way in would make the operator useless for the thing it is for, which
+    /// is handing a shader real numbers. Not `Rgba32Float` either — that
+    /// format is not filterable, so it cannot be bound to the one bind group
+    /// layout every operator shares, and it would buy nothing anyway when the
+    /// texture it lands in is 16-bit float like every other TOP.
+    fn cook_chop_to_top(
+        &mut self,
+        id: NodeId,
+        ctx: &CookContext,
+        eval: &EvalContext,
+        node: &otd_core::Node,
+        channels: Option<otd_core::ChannelView<'_>>,
+        label: &str,
+    ) -> Result<(), CookError> {
+        let Some((_, samples, _)) = channels else {
+            self.ensure_output(id, 1, 1);
+            return self.clear_to_black(id, ctx, label);
+        };
+        let rgba = node
+            .param("layout")
+            .map(|p| p.eval(eval).as_str() == "rgba")
+            .unwrap_or(false);
+
+        let width = samples.iter().map(|s| s.len()).max().unwrap_or(0).max(1) as u32;
+        // In RGBA mode four channels share a row, so the row count is a
+        // quarter of the channel count, rounded up.
+        let per_row = if rgba { 4 } else { 1 };
+        let rows = samples.len().div_ceil(per_row).max(1);
+
+        let mut texels = vec![0.0f32; rows * width as usize * 4];
+        for (ci, chan) in samples.iter().enumerate() {
+            let (row, comp) = if rgba {
+                (ci / 4, ci % 4)
+            } else {
+                (ci, usize::MAX)
+            };
+            if row >= rows {
+                break;
+            }
+            for x in 0..width as usize {
+                // A channel shorter than the widest is held at its last
+                // value rather than dropping to zero, so mixing a
+                // single-sample control channel with a waveform broadcasts
+                // it the way a CHOP does everywhere else.
+                let v = chan
+                    .get(x)
+                    .copied()
+                    .or_else(|| chan.last().copied())
+                    .unwrap_or(0.0);
+                let base = (row * width as usize + x) * 4;
+                if comp == usize::MAX {
+                    texels[base] = v;
+                    texels[base + 1] = v;
+                    texels[base + 2] = v;
+                    texels[base + 3] = 1.0;
+                } else {
+                    texels[base + comp] = v;
+                }
+            }
+        }
+
+        let halves: Vec<u16> = texels.iter().copied().map(crate::f32_to_f16).collect();
+        let bytes: &[u8] = bytemuck::cast_slice(&halves);
+        self.upload_pixels(id, width, rows as u32, TOP_FORMAT, bytes, u64::MAX);
+        self.ensure_output(id, width, rows as u32);
+
+        let source_view = self.nodes[id].upload.as_ref().unwrap().view.clone();
+        let out = self.nodes[id].output.as_ref().unwrap().view.clone();
+        let uniforms = self.uniforms(width, rows as u32, ctx, [[0.0; 4]; 4]);
+        let buf = self.write_uniform(id, 0, uniforms);
+        let dummy = self.dummy.clone();
+        self.run_pass(Pass {
+            label,
+            pipeline: PipelineRef::Builtin(ops::NULL),
+            target: &out,
+            uniform: &buf,
+            in0: &source_view,
+            in1: &dummy,
+            // Nearest: each texel is one sample of one channel, and
+            // interpolating between two channels is meaningless.
+            nearest: true,
+        })
     }
 
     /// A pass that produces black — what a source with nothing to show
@@ -994,8 +1347,9 @@ impl TopEngine {
         ctx: &CookContext,
         eval: &EvalContext,
         scene: Option<&dyn Scene>,
+        foreign: &Crossings,
     ) -> Result<(), CookError> {
-        self.cook_top(graph, id, ctx, eval, scene)
+        self.cook_top(graph, id, ctx, eval, scene, foreign)
     }
 }
 
@@ -1044,7 +1398,7 @@ impl Cooker for TopEngine {
         // No CHOPs in sight: parameters resolve against time alone, and
         // there is no geometry to draw.
         let eval = ctx.eval_ctx();
-        self.cook_top(graph, id, ctx, &eval, None)
+        self.cook_top(graph, id, ctx, &eval, None, &Crossings::new())
     }
 }
 
@@ -1056,6 +1410,7 @@ impl TopEngine {
         ctx: &CookContext,
         eval: &EvalContext,
         scene: Option<&dyn Scene>,
+        foreign: &Crossings,
     ) -> Result<(), CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
@@ -1091,6 +1446,15 @@ impl TopEngine {
             let target = referenced_target(graph, id, "top");
             return self.blit_from(graph, id, target, ctx, &path);
         }
+        // ---- CHOP to TOP: the pixels come from a wire of another family.
+        if node.op_type == ops::CHOP_TO_TOP {
+            let channels = foreign
+                .first()
+                .and_then(|c| c.as_ref())
+                .and_then(|c| c.as_channels());
+            return self.cook_chop_to_top(id, ctx, eval, node, channels, &path);
+        }
+
         // ---- Video: the pixels come from a decoder thread, not a shader.
         if node.op_type == ops::MOVIE_IN || node.op_type == ops::VIDEO_DEVICE_IN {
             return self.cook_video(graph, id, ctx, eval, &path);
@@ -1121,6 +1485,37 @@ impl TopEngine {
             Sizing::Referenced => FALLBACK_SIZE,
         };
         self.ensure_output(id, width, height);
+
+        // ---- Text is rasterised on the CPU and uploaded, so the shader only
+        // has to tint the coverage. That split is what makes Colour a live
+        // parameter: changing it is a uniform write, not a re-lay-out.
+        if node.op_type == ops::TEXT {
+            self.cook_text(id, ctx, eval, node, width, height, &path)?;
+            return Ok(());
+        }
+
+        // ---- Movie File Out passes its input through like a Null, and the
+        // recording is a side effect of having done so. Reading the *output*
+        // rather than the input means what lands in the file is exactly what
+        // the node's viewer shows.
+        if node.op_type == ops::MOVIE_OUT {
+            let in0 = self.input_view(graph, id, 0);
+            let out = self.nodes[id].output.as_ref().unwrap().view.clone();
+            let uniforms = self.uniforms(width, height, ctx, [[0.0; 4]; 4]);
+            let buf = self.write_uniform(id, 0, uniforms);
+            let dummy = self.dummy.clone();
+            self.run_pass(Pass {
+                label: &path,
+                pipeline: PipelineRef::Builtin(ops::NULL),
+                target: &out,
+                uniform: &buf,
+                in0: &in0,
+                in1: &dummy,
+                nearest: false,
+            })?;
+            self.cook_movie_out(id, node, eval);
+            return Ok(());
+        }
 
         // ---- The 3D pipeline is a different beast: vertex buffers, a depth
         // attachment, a cull mode. It gets its own module.

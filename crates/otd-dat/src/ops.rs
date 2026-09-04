@@ -3,7 +3,9 @@
 use std::sync::OnceLock;
 
 use otd_core::indexmap::IndexMap;
-use otd_core::{Connector, EvalContext, Family, Node, OpDef, OpRegistry, Param, Value};
+use otd_core::{
+    Connector, Crossing, Crossings, EvalContext, Family, Node, OpDef, OpRegistry, Param, Value,
+};
 
 use crate::{DatData, ScriptHost};
 
@@ -11,6 +13,8 @@ pub struct DatCtx<'a> {
     pub node: &'a Node,
     pub eval: &'a EvalContext<'a>,
     pub inputs: Vec<DatData>,
+    /// Inputs that came from another family, for the converter operators.
+    pub foreign: Crossings,
     pub scripts: Option<&'a dyn ScriptHost>,
     pub net: &'a mut crate::net::Net,
     pub path: &'a str,
@@ -41,6 +45,9 @@ impl DatCtx<'_> {
             .as_ref()
             .and_then(|m| m.iter().position(|i| *i == chosen))
             .unwrap_or(0)
+    }
+    fn foreign(&self, i: usize) -> Option<&Crossing> {
+        self.foreign.get(i).and_then(|c| c.as_ref())
     }
     fn input(&self, i: usize) -> DatData {
         self.inputs.get(i).cloned().unwrap_or_default()
@@ -417,12 +424,244 @@ fn spec(
             label,
             family: Family::Dat,
             inputs,
+            input_families: &[],
             summary,
             time_dependent: false,
             params,
             connector: Connector::None,
         },
         cook,
+    }
+}
+
+// ------------------------------------------------------------------ sort
+
+fn params_sort() -> IndexMap<String, Param> {
+    params! {
+        "column" => Param::str("0").with_label("Column (name or index)"),
+        "order" => Param::menu("ascending", &["ascending", "descending"]).with_label("Order"),
+        "numeric" => Param::bool(true).with_label("Compare As Numbers"),
+        "header" => Param::bool(true).with_label("First Row Is A Header"),
+    }
+}
+
+fn column_index(rows: &[Vec<String>], spec: &str, header: bool) -> usize {
+    if let Ok(i) = spec.trim().parse::<usize>() {
+        return i;
+    }
+    if header {
+        if let Some(head) = rows.first() {
+            if let Some(i) = head.iter().position(|c| c == spec.trim()) {
+                return i;
+            }
+        }
+    }
+    0
+}
+
+fn cook_sort(c: &mut DatCtx) -> DatData {
+    let input = c.input(0);
+    let header = c.b("header");
+    let col = column_index(&input.rows, &c.s("column"), header);
+    let numeric = c.b("numeric");
+    let descending = c.menu("order") == 1;
+
+    let mut rows = input.rows.clone();
+    let head = if header && !rows.is_empty() {
+        Some(rows.remove(0))
+    } else {
+        None
+    };
+    rows.sort_by(|a, b| {
+        let (x, y) = (
+            a.get(col).map(|s| s.as_str()).unwrap_or(""),
+            b.get(col).map(|s| s.as_str()).unwrap_or(""),
+        );
+        let ord = if numeric {
+            // A cell that is not a number sorts as if it were zero rather
+            // than falling back to string order for that one row, which
+            // would interleave the two orderings unpredictably.
+            let (x, y) = (
+                x.trim().parse::<f64>().unwrap_or(0.0),
+                y.trim().parse::<f64>().unwrap_or(0.0),
+            );
+            x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            x.cmp(y)
+        };
+        if descending { ord.reverse() } else { ord }
+    });
+    if let Some(head) = head {
+        rows.insert(0, head);
+    }
+    DatData::table(rows)
+}
+
+// ------------------------------------------------------------- transpose
+
+fn cook_transpose(c: &mut DatCtx) -> DatData {
+    let input = c.input(0);
+    let cols = input.num_cols();
+    let rows = (0..cols)
+        .map(|col| {
+            input
+                .rows
+                .iter()
+                .map(|r| r.get(col).cloned().unwrap_or_default())
+                .collect()
+        })
+        .collect();
+    DatData::table(rows)
+}
+
+// ------------------------------------------------------------ substitute
+
+fn params_substitute() -> IndexMap<String, Param> {
+    params! {
+        "template" => Param::str("").with_label("Template"),
+        "table" => Param::bool(false).with_label("Substitute Every Cell Instead"),
+    }
+}
+
+/// Fill `$name` placeholders from a two-column lookup table.
+///
+/// This is the operator that turns a cue table into a string somebody else
+/// can read — an OSC address, a UDP payload, a line of a show report — without
+/// a script. The input's first column names, the second supplies.
+fn cook_substitute(c: &mut DatCtx) -> DatData {
+    let input = c.input(0);
+    let substitute = |text: &str| -> String {
+        let mut out = text.to_string();
+        for row in &input.rows {
+            let (Some(key), Some(value)) = (row.first(), row.get(1)) else {
+                continue;
+            };
+            if key.trim().is_empty() {
+                continue;
+            }
+            out = out.replace(&format!("${key}"), value);
+        }
+        out
+    };
+
+    if !c.b("table") {
+        return DatData::text(substitute(&c.s("template")));
+    }
+    DatData::table(
+        input
+            .rows
+            .iter()
+            .map(|r| r.iter().map(|cell| substitute(cell)).collect())
+            .collect(),
+    )
+}
+
+// --------------------------------------------------------------- convert
+
+fn params_convert() -> IndexMap<String, Param> {
+    params! {
+        "to" => Param::menu("table", &["table", "text"]).with_label("Convert To"),
+        "delimiter" => Param::menu("tab", &["tab", "comma"]).with_label("Delimiter"),
+    }
+}
+
+/// Between the two shapes a DAT can have.
+///
+/// They are one representation internally — a text DAT is a table with one
+/// cell — but the operators reading them are not interchangeable, so the
+/// conversion has to be something you can put in a patch rather than a flag
+/// hidden on every node.
+fn cook_convert(c: &mut DatCtx) -> DatData {
+    let input = c.input(0);
+    let delim = if c.menu("delimiter") == 1 { ',' } else { '\t' };
+    if c.menu("to") == 1 {
+        let text = input
+            .rows
+            .iter()
+            .map(|r| r.join(&delim.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return DatData::text(text);
+    }
+    DatData::from_delimited(&input.as_text(), delim)
+}
+
+// ------------------------------------------------------- CHOP to DAT
+
+fn params_chop_to() -> IndexMap<String, Param> {
+    params! {
+        "layout" => Param::menu("columns", &["columns", "rows"])
+            .with_label("Channels As"),
+        "names" => Param::bool(true).with_label("Include Names"),
+        "format" => Param::str("%.6g").with_label("Number Format"),
+    }
+}
+
+/// Channels as a table — the readable end of a CHOP.
+///
+/// Mostly this is how you *look* at a CHOP: wire one in and the numbers are
+/// text you can select and copy. It is also how a channel leaves the patch,
+/// since a UDP Out DAT sends whatever text reaches it, so "send my six
+/// smoothed values to the lighting desk" is two nodes rather than a feature.
+fn cook_chop_to_dat(c: &mut DatCtx) -> DatData {
+    let Some((names, samples, _)) = c.foreign(0).and_then(|f| f.as_channels()) else {
+        return DatData::table(Vec::new());
+    };
+    let fmt = c.s("format");
+    let show_names = c.b("names");
+    let num = |v: f32| format_number(&fmt, v);
+
+    let length = samples.iter().map(|s| s.len()).max().unwrap_or(0);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+
+    if c.menu("layout") == 0 {
+        // A column per channel, a row per sample — the spreadsheet shape.
+        if show_names {
+            rows.push(names.to_vec());
+        }
+        for i in 0..length {
+            rows.push(
+                samples
+                    .iter()
+                    .map(|s| s.get(i).copied().map(num).unwrap_or_default())
+                    .collect(),
+            );
+        }
+    } else {
+        for (name, s) in names.iter().zip(samples) {
+            let mut row = Vec::with_capacity(s.len() + 1);
+            if show_names {
+                row.push(name.clone());
+            }
+            row.extend(s.iter().copied().map(num));
+            rows.push(row);
+        }
+    }
+    DatData::table(rows)
+}
+
+/// `%.6g`-style formatting without pulling in a formatting crate: the only
+/// thing that actually varies is how many digits to keep.
+fn format_number(spec: &str, v: f32) -> String {
+    let digits = spec
+        .trim_start_matches(['%', '.'])
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse::<usize>()
+        .unwrap_or(6)
+        .min(17);
+    if spec.ends_with('f') {
+        format!("{v:.digits$}")
+    } else {
+        // Trailing zeros are noise in a table you are reading.
+        let s = format!("{:.*}", digits, v);
+        let s = if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s
+        };
+        if s == "-0" { "0".into() } else { s }
     }
 }
 
@@ -512,6 +751,50 @@ fn specs() -> &'static Vec<DatSpec> {
         );
         script.def.time_dependent = true;
         v.push(script);
+
+        v.push(spec(
+            "sortDAT",
+            "Sort",
+            &["in"],
+            "Sort rows by a column, numerically or as text.",
+            params_sort,
+            cook_sort,
+        ));
+        v.push(spec(
+            "transposeDAT",
+            "Transpose",
+            &["in"],
+            "Swap rows and columns.",
+            no_params,
+            cook_transpose,
+        ));
+        v.push(spec(
+            "substituteDAT",
+            "Substitute",
+            &["in"],
+            "Fill $name placeholders from a two-column lookup table.",
+            params_substitute,
+            cook_substitute,
+        ));
+        v.push(spec(
+            "convertDAT",
+            "Convert",
+            &["in"],
+            "Between a table and a block of text.",
+            params_convert,
+            cook_convert,
+        ));
+
+        let mut to_dat = spec(
+            "choptodatDAT",
+            "CHOP to DAT",
+            &["in"],
+            "Channels as a table of numbers.",
+            params_chop_to,
+            cook_chop_to_dat,
+        );
+        to_dat.def.input_families = &[Family::Chop];
+        v.push(to_dat);
 
         let mut in_dat = spec(
             IN,

@@ -30,6 +30,9 @@ impl SopCtx<'_> {
     fn i(&self, key: &str) -> i64 {
         self.val(key).as_i64()
     }
+    fn b(&self, key: &str) -> bool {
+        self.val(key).as_bool()
+    }
     fn v3(&self, key: &str) -> [f32; 3] {
         let v = self.val(key).as_vec4_f32();
         [v[0], v[1], v[2]]
@@ -490,12 +493,248 @@ fn spec(
             label,
             family: Family::Sop,
             inputs,
+            input_families: &[],
             summary,
             time_dependent: false,
             params,
             connector: Connector::None,
         },
         cook,
+    }
+}
+
+// ------------------------------------------------------------------ tube
+
+fn params_tube() -> IndexMap<String, Param> {
+    params! {
+        "radius1" => Param::float(0.5).with_label("Bottom Radius").with_range(0.0, 8.0),
+        "radius2" => Param::float(0.5).with_label("Top Radius").with_range(0.0, 8.0),
+        "height" => Param::float(2.0).with_label("Height").with_range(0.0, 16.0),
+        "columns" => Param::int(24).with_label("Columns").with_range(3.0, 256.0),
+        "rows" => Param::int(1).with_label("Rows").with_range(1.0, 128.0),
+        "caps" => Param::bool(true).with_label("Caps"),
+        "center" => Param::xyz([0.0, 0.0, 0.0]).with_label("Center"),
+    }
+}
+
+/// A tube, cone or cylinder depending on the two radii — one operator rather
+/// than three, because they differ only in a number.
+fn cook_tube(c: &mut SopCtx) -> Geometry {
+    let (r1, r2) = (c.f("radius1"), c.f("radius2"));
+    let h = c.f("height");
+    let cols = c.i("columns").clamp(3, 256) as usize;
+    let rows = c.i("rows").clamp(1, 128) as usize;
+    let o = c.v3("center");
+
+    let mut points = Vec::new();
+    for row in 0..=rows {
+        let v = row as f32 / rows as f32;
+        let y = o[1] - h * 0.5 + h * v;
+        let r = r1 + (r2 - r1) * v;
+        for col in 0..=cols {
+            let u = col as f32 / cols as f32;
+            let a = u * std::f32::consts::TAU;
+            let (s, cs) = (a.sin(), a.cos());
+            // The side normal leans by the taper, so a cone shades as a cone
+            // rather than as a cylinder that happens to be narrower at one
+            // end.
+            let slope = (r1 - r2) / h.max(1e-5);
+            let n = normalise([cs, slope, s]);
+            points.push(Point {
+                position: [o[0] + cs * r, y, o[2] + s * r],
+                normal: n,
+                uv: [u, v],
+                color: [1.0; 4],
+            });
+        }
+    }
+
+    let stride = cols + 1;
+    let mut indices = Vec::new();
+    for row in 0..rows {
+        for col in 0..cols {
+            let a = (row * stride + col) as u32;
+            let b = a + stride as u32;
+            // The opposite order to the Sphere's: its rows run top to bottom
+            // and these run bottom to top, so the same index pattern would
+            // wind the sides inside out.
+            indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+
+    if c.b("caps") {
+        for (end, r, ny) in [(0.0f32, r1, -1.0f32), (1.0, r2, 1.0)] {
+            if r <= 0.0 {
+                continue; // A cone's point needs no disc.
+            }
+            let y = o[1] - h * 0.5 + h * end;
+            let centre = points.len() as u32;
+            points.push(Point {
+                position: [o[0], y, o[2]],
+                normal: [0.0, ny, 0.0],
+                uv: [0.5, 0.5],
+                color: [1.0; 4],
+            });
+            for col in 0..=cols {
+                let a = col as f32 / cols as f32 * std::f32::consts::TAU;
+                points.push(Point {
+                    position: [o[0] + a.cos() * r, y, o[2] + a.sin() * r],
+                    normal: [0.0, ny, 0.0],
+                    uv: [a.cos() * 0.5 + 0.5, a.sin() * 0.5 + 0.5],
+                    color: [1.0; 4],
+                });
+            }
+            for col in 0..cols {
+                let a = centre + 1 + col as u32;
+                // The two caps wind opposite ways, since they face opposite
+                // ways and culling is on. The ring runs anticlockwise in XZ,
+                // so taking it in order gives a face normal of -Y.
+                if ny < 0.0 {
+                    indices.extend([centre, a, a + 1]);
+                } else {
+                    indices.extend([centre, a + 1, a]);
+                }
+            }
+        }
+    }
+
+    Geometry {
+        points,
+        indices,
+        topology: Topology::Triangles,
+    }
+}
+
+fn normalise(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+// ----------------------------------------------------------------- torus
+
+fn params_torus() -> IndexMap<String, Param> {
+    params! {
+        "radius1" => Param::float(1.0).with_label("Outer Radius").with_range(0.0, 8.0),
+        "radius2" => Param::float(0.3).with_label("Inner Radius").with_range(0.0, 8.0),
+        "rows" => Param::int(24).with_label("Rows").with_range(3.0, 256.0),
+        "columns" => Param::int(24).with_label("Columns").with_range(3.0, 256.0),
+        "center" => Param::xyz([0.0, 0.0, 0.0]).with_label("Center"),
+    }
+}
+
+fn cook_torus(c: &mut SopCtx) -> Geometry {
+    let (big, small) = (c.f("radius1"), c.f("radius2"));
+    let rows = c.i("rows").clamp(3, 256) as usize;
+    let cols = c.i("columns").clamp(3, 256) as usize;
+    let o = c.v3("center");
+
+    let mut points = Vec::with_capacity((rows + 1) * (cols + 1));
+    for row in 0..=rows {
+        let v = row as f32 / rows as f32;
+        let phi = v * std::f32::consts::TAU;
+        for col in 0..=cols {
+            let u = col as f32 / cols as f32;
+            let theta = u * std::f32::consts::TAU;
+            // The normal points away from the centre of the tube, which is
+            // the circle of radius `big` — not away from the origin.
+            let n = [phi.cos() * theta.cos(), phi.sin(), phi.cos() * theta.sin()];
+            let r = big + small * phi.cos();
+            points.push(Point {
+                position: [
+                    o[0] + theta.cos() * r,
+                    o[1] + small * phi.sin(),
+                    o[2] + theta.sin() * r,
+                ],
+                normal: n,
+                uv: [u, v],
+                color: [1.0; 4],
+            });
+        }
+    }
+
+    let stride = cols + 1;
+    let mut indices = Vec::with_capacity(rows * cols * 6);
+    for row in 0..rows {
+        for col in 0..cols {
+            let a = (row * stride + col) as u32;
+            let b = a + stride as u32;
+            // As with the Tube: rows run the opposite way to the Sphere's, so
+            // they need the opposite index order to wind outwards.
+            indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    Geometry {
+        points,
+        indices,
+        topology: Topology::Triangles,
+    }
+}
+
+// ---------------------------------------------------------------- circle
+
+fn params_circle() -> IndexMap<String, Param> {
+    params! {
+        "radius" => Param::new(Value::Vec2([1.0, 1.0])).with_label("Radius"),
+        "divisions" => Param::int(32).with_label("Divisions").with_range(3.0, 512.0),
+        "arc" => Param::float(360.0).with_label("Arc (degrees)").with_range(0.0, 360.0),
+        "fill" => Param::bool(true).with_label("Fill"),
+        "center" => Param::xyz([0.0, 0.0, 0.0]).with_label("Center"),
+    }
+}
+
+/// A disc, a ring, or an arc of either. Unfilled it is a line primitive,
+/// which is what makes it useful as a path for a Copy SOP to walk.
+fn cook_circle(c: &mut SopCtx) -> Geometry {
+    let r = c.v4("radius");
+    let n = c.i("divisions").clamp(3, 512) as usize;
+    let arc = c.f("arc").clamp(0.0, 360.0).to_radians();
+    let closed = arc >= std::f32::consts::TAU - 1e-4;
+    let o = c.v3("center");
+    let fill = c.b("fill");
+
+    let steps = if closed { n } else { n + 1 };
+    let mut points = Vec::with_capacity(steps + 1);
+    if fill {
+        points.push(Point {
+            position: o,
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.5, 0.5],
+            color: [1.0; 4],
+        });
+    }
+    for i in 0..steps {
+        let a = i as f32 / n as f32 * arc;
+        points.push(Point {
+            position: [o[0] + a.cos() * r[0], o[1] + a.sin() * r[1], o[2]],
+            normal: [0.0, 0.0, 1.0],
+            uv: [a.cos() * 0.5 + 0.5, a.sin() * 0.5 + 0.5],
+            color: [1.0; 4],
+        });
+    }
+
+    if !fill {
+        return Geometry {
+            points,
+            indices: Vec::new(),
+            topology: Topology::Lines,
+        };
+    }
+    let mut indices = Vec::with_capacity(steps * 3);
+    for i in 0..steps {
+        let a = 1 + i as u32;
+        let b = if closed {
+            1 + ((i + 1) % steps) as u32
+        } else if i + 1 < steps {
+            a + 1
+        } else {
+            continue;
+        };
+        indices.extend([0, a, b]);
+    }
+    Geometry {
+        points,
+        indices,
+        topology: Topology::Triangles,
     }
 }
 
@@ -518,6 +757,30 @@ fn specs() -> &'static Vec<SopSpec> {
                 "A UV sphere.",
                 params_sphere,
                 cook_sphere,
+            ),
+            spec(
+                "tubeSOP",
+                "Tube",
+                &[],
+                "A cylinder, cone or tapered tube, with optional caps.",
+                params_tube,
+                cook_tube,
+            ),
+            spec(
+                "torusSOP",
+                "Torus",
+                &[],
+                "A torus.",
+                params_torus,
+                cook_torus,
+            ),
+            spec(
+                "circleSOP",
+                "Circle",
+                &[],
+                "A disc, ring or arc — filled, or a line to copy along.",
+                params_circle,
+                cook_circle,
             ),
             spec(
                 "gridSOP",

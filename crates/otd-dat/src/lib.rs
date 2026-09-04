@@ -13,7 +13,9 @@
 pub mod net;
 pub mod ops;
 
-use otd_core::{ChannelSource, CookContext, CookError, Cooker, EvalContext, Family, Graph, NodeId};
+use otd_core::{
+    ChannelSource, CookContext, CookError, Cooker, Crossings, EvalContext, Family, Graph, NodeId,
+};
 use slotmap::SecondaryMap;
 
 /// A DAT's contents: rows of cells.
@@ -149,6 +151,7 @@ impl DatEngine {
     }
 
     /// Cook one DAT and return its contents.
+    #[allow(clippy::too_many_arguments)]
     pub fn cook_node(
         &mut self,
         graph: &Graph,
@@ -157,6 +160,7 @@ impl DatEngine {
         eval: &EvalContext,
         store: &DatStore,
         scripts: Option<&dyn ScriptHost>,
+        foreign: Crossings,
     ) -> Result<DatData, CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
@@ -190,6 +194,7 @@ impl DatEngine {
             node,
             eval,
             inputs,
+            foreign,
             scripts,
             net: &mut self.net,
             path: &path,
@@ -231,7 +236,7 @@ impl Cooker for DatHost {
         }
         let DatHost { engine, store } = self;
         let eval = ctx.eval_ctx();
-        let data = engine.cook_node(graph, id, ctx, &eval, store, None)?;
+        let data = engine.cook_node(graph, id, ctx, &eval, store, None, Crossings::new())?;
         store.insert(id, data);
         Ok(())
     }
