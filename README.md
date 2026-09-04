@@ -160,15 +160,17 @@ budget  16.67 ms   1 frame(s) over
 | | |
 |---|---|
 | `Tab` | add an operator (auto-wires from the selection) |
+| click · `Shift`/`Cmd`-click | select a node · add it to the selection |
+| `Cmd/Ctrl+A` | select every node in the network on screen |
 | double-click | set a node as the output viewer |
 | `B` | bypass the selected node |
 | `Space` | play / pause time |
 | `H` | reset the view |
-| `Delete` | delete the selection (reconnecting the chain around it) |
+| `Delete` | delete the selection, however many nodes (reconnecting the chains around them) |
 | `I` / double-click a COMP | step inside a component |
 | `U` | step back out (or click the breadcrumb) |
 | `Cmd/Ctrl+Z` · `Cmd/Ctrl+Shift+Z` | undo · redo |
-| `Cmd/Ctrl+K` | the assistant bar — describe a patch, Enter builds it |
+| `Cmd/Ctrl+K` | the assistant bar — describe a patch, Enter builds it. `/clear` empties the network, `/help` lists the commands |
 | `F1` | perform mode — the editor disappears and the window is the output. `F1` or `Escape` to come back |
 | drag background | pan · scroll to zoom |
 | drag output port → input port | wire · click an input port to unwire |

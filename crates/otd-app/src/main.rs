@@ -3,6 +3,7 @@
 mod app;
 mod assistant;
 mod canvas;
+mod media;
 mod params;
 
 fn main() -> eframe::Result<()> {
@@ -17,9 +18,20 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    // A project named on the command line opens instead of the starter patch,
+    // so a `.otd` can be handed to the editor the way any other file is —
+    // from a shell, from a script, from a "reopen this and look at it".
+    let project = std::env::args().nth(1).map(std::path::PathBuf::from);
+
     eframe::run_native(
         "OpenTouchDesigner",
         options,
-        Box::new(|cc| Ok(Box::new(app::OtdApp::new(cc)?))),
+        Box::new(|cc| {
+            let mut app = app::OtdApp::new(cc)?;
+            if let Some(path) = project {
+                app.open(Some(path));
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

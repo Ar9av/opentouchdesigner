@@ -53,6 +53,33 @@ takes seconds to fade; `0.85` is a short tail; `1.0` never fades and the
 image saturates to white within a second or two. There is no correct value —
 this is the dial you sit and turn.
 
+## Recipe 0 — your own footage
+
+**Drag a video, an image or a WAV onto the network.** That is the whole
+gesture. A movie becomes a Movie File In already playing and already on the
+viewer; a WAV becomes an Audio File In whose channels you can drag onto any
+parameter; a `.fs` becomes a GLSL TOP with the shader's inputs as parameters;
+a `.otd` opens. No camera? **Media → Use Webcam**.
+
+Then put things after it. With the clip selected, **Media → Add Effect** — or
+right-click the node — gives you a Level, a Blur, an HSV Adjust, a
+kaleidoscope Mirror and the rest, wired in and viewed in one click. Everything
+in Recipes 1–5 works on your clip exactly as it does on a Noise TOP: it is a
+texture the moment it is decoded, and nothing downstream knows the difference.
+
+Three things worth knowing:
+
+- **Drop onto an existing node**, not onto empty canvas, and the file lands
+  *there* — on a Movie File In it swaps the clip; on a Blur it makes the
+  player upstream and wires it in.
+- **Movies need `ffmpeg`** (`brew install ffmpeg`). It is looked for on your
+  `PATH` and in the usual install directories, so it is found whether the app
+  was started from a shell or double-clicked. Stills do not need it — PNG and
+  JPEG are decoded in-process. A node that cannot find ffmpeg says so on its
+  own body.
+- **Keep media beside the project** and paths are stored relative, so
+  *File → Export Bundle…* can copy the whole show to another machine.
+
 ## Recipe 1 — the tunnel (this is what `tunnel` is)
 
 Nine nodes, no shader. Open it and follow along.
@@ -145,6 +172,11 @@ The ceiling of a patch is not the operator list.
 - **Paste Shadertoy GLSL.** Set a GLSL TOP's `language` to `glsl` and paste a
   `mainImage` function. `iTime`, `iResolution` and `iFrame` are in scope. Most
   single-buffer Shadertoy shaders run unmodified.
+- **Feed a shader your picture.** Wire something into the GLSL TOP and read it
+  as `iChannel0` — `texture(iChannel0, uv)` — with the second input on
+  `iChannel1`. This is what turns a shader from a generator into an effect. The
+  four Uniform parameters arrive as `U.p0`..`U.p3`, so the numbers worth
+  turning can stay on the node instead of being buried in the source.
 - **Import ISF.** *Import ISF…* on a GLSL TOP loads an
   [Interactive Shader Format](https://isf.video) shader — thousands exist —
   and turns its JSON header into real parameters on the node, which you can

@@ -28,8 +28,28 @@ pub struct Plan {
     pub notes: String,
     pub nodes: Vec<PlannedNode>,
     pub connections: Vec<PlannedWire>,
+    /// Operators already in the network to retune. Separate from `nodes`
+    /// because they are not being created: naming an existing operator under
+    /// `nodes` used to get you a renamed duplicate beside the original and the
+    /// original left exactly as it was, which is the opposite of what "make
+    /// this slower" means.
+    pub sets: Vec<PlannedSet>,
+    /// Operators already in the network to remove, by name. Only direct
+    /// children of the network being edited — see [`apply`].
+    pub deletes: Vec<String>,
     /// Name of the node to set as the viewer, if any.
     pub viewer: Option<String>,
+}
+
+/// A change to an operator that already exists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlannedSet {
+    pub node: String,
+    /// Left as raw JSON: coercing a value needs the parameter's declared type,
+    /// and that comes off the node in the graph, which the parser cannot see.
+    /// [`apply`] does it once it has both.
+    pub params: BTreeMap<String, serde_json::Value>,
+    pub expressions: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +74,10 @@ pub struct PlannedWire {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Applied {
     pub created: Vec<String>,
+    /// Parameters retuned on operators that already existed, as `node.key`.
+    pub changed: Vec<String>,
+    /// Operators removed, by the name they had.
+    pub removed: Vec<String>,
     pub wired: usize,
     /// Things that were skipped, with the reason. Reported rather than
     /// swallowed: a parameter the model invented is worth knowing about.
@@ -239,8 +263,13 @@ Reply with ONE JSON object and nothing else. No prose, no markdown fences.
       "expressions": {{"translate": "absTime * 0.06"}}}}
   ],
   "connections": [{{"from": "noise1", "to": "level1", "input": 0}}],
+  "set": [{{"node": "level1", "params": {{"brightness": 0.9}}}}],
+  "delete": ["blur2", "oldramp1"],
   "viewer": "out1"
 }}
+
+`nodes` creates, `set` retunes what is already there, `delete` removes it.
+All four lists are optional; a plan may be nothing but a `set`.
 
 RULES
 - Use only operator types from the catalogue below. Never invent one.
@@ -261,6 +290,27 @@ the request is almost always "add this to what I have", not "start again".
   operator that is already in the list to get at its output.
 - Leave existing parameters alone unless the request is about them. Numbers
   already set are ones somebody dialled in.
+- To CHANGE one of those numbers, use `set` — do not list the operator under
+  `nodes`. A name that already exists gets renamed rather than overwritten,
+  so `nodes` would leave you a duplicate beside the original and the original
+  untouched.
+- To REMOVE an operator, name it in `delete`. Only operators in the list
+  below, and only ones you did not just create. When you delete out of the
+  middle of a chain its input is spliced into whatever it fed, so the chain
+  stays joined without you rewiring it.
+
+WHEN THE REQUEST IS TO SIMPLIFY
+"Make it simpler", "clean this up", "that is too much" means fewer operators
+doing the same job — a `delete` list, sometimes with a `set` to compensate.
+- Say in `notes` what you took out and why it was safe.
+- Take out whole redundant branches rather than one node from each. Two
+  chains compositing into the same node where one would do is the usual find.
+- Do NOT delete the source. A moviefileinTOP, a camera, an audiofileinTOP:
+  that is the material, and a patch without it has nothing to process.
+- Do NOT delete the node the viewer is set to, or the last nullTOP in a
+  chain. If a chain must lose its end, wire the new end up in `connections`.
+- Deleting everything is refused. If the patch really is beyond saving, say
+  so in `notes` and suggest `/clear`.
 - Read the source off the network, not out of thin air: if there is a
   moviefileinTOP, that clip is what the user means by "it", and the new
   chain hangs off that node rather than off a fresh noiseTOP.
@@ -293,6 +343,32 @@ WHAT MAKES A GOOD-LOOKING PATCH
   allowed above `mainImage`. Write GLSL, not WGSL: this is the dialect with
   a million worked examples, and a shader that does not compile is a black
   node. Keep it short and make sure every identifier is one you declared.
+
+- A glslTOP READS ITS INPUTS as `iChannel0` (input 0) and `iChannel1`
+  (input 1), exactly as Shadertoy does. This is the ONLY way to get the
+  incoming picture, and it is what "an effect on top of the video" means —
+  a shader that never mentions `iChannel0` has thrown the clip away and
+  drawn over the top of it:
+
+      void mainImage(out vec4 fragColor, in vec2 fragCoord) {{
+          vec2 uv = fragCoord / iResolution.xy;
+          uv.x += 0.02 * sin(uv.y * 20.0 + iTime * 2.0);
+          fragColor = texture(iChannel0, uv);
+      }}
+
+  Declare nothing to get them: `iChannel0` is already there, and writing
+  `uniform sampler2D iChannel0;` yourself is a compile error.
+
+  These are TouchDesigner's names, and this is not TouchDesigner. None of
+  them exist here and every one of them is a black node:
+  `sTD2DInputs[...]`, `sIn0`, `vUV`, `uniform1`, `uTD*`. Nor does the
+  ancient `texture2D(...)` — the function is `texture(...)`.
+
+  The node's `uniform1` .. `uniform4` parameters arrive in the shader as
+  `U.p0` .. `U.p3`, four vec4s — `U.p0.x` is the first component of
+  `uniform1`. Use them for the one or two quantities somebody will want to
+  turn, and set their starting values in `params`. Everything else is a
+  `const float` at the top of the source.
 
 OPERATOR CATALOGUE
 {}"#,
@@ -416,10 +492,14 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
         ..Default::default()
     };
 
+    // Optional: a plan that only retunes or only deletes creates nothing, and
+    // demanding an empty array for it is a rule the model has to remember for
+    // no gain. The "nothing in it at all" check is at the bottom.
     let nodes = value
         .get("nodes")
         .and_then(|n| n.as_array())
-        .ok_or("the reply had no `nodes` array")?;
+        .cloned()
+        .unwrap_or_default();
 
     for (i, entry) in nodes.iter().enumerate() {
         let op = entry
@@ -494,8 +574,47 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
         }
     }
 
-    if plan.nodes.is_empty() {
-        return Err("the plan had no nodes in it".into());
+    if let Some(sets) = value.get("set").and_then(|s| s.as_array()) {
+        for entry in sets {
+            let Some(node) = entry.get("node").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            let params = entry
+                .get("params")
+                .and_then(|p| p.as_object())
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            let expressions = entry
+                .get("expressions")
+                .and_then(|p| p.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            plan.sets.push(PlannedSet {
+                node: node.to_string(),
+                params,
+                expressions,
+            });
+        }
+    }
+
+    if let Some(gone) = value.get("delete").and_then(|d| d.as_array()) {
+        for entry in gone {
+            if let Some(name) = entry.as_str() {
+                plan.deletes.push(name.to_string());
+            }
+        }
+    }
+
+    // A plan used to have to build something to be a plan. It no longer does:
+    // "delete the second feedback loop" and "slow the zoom down" are complete
+    // requests that create nothing, and rejecting them sent the model back to
+    // invent a node it did not need.
+    if plan.nodes.is_empty() && plan.sets.is_empty() && plan.deletes.is_empty() {
+        return Err("the plan had nothing in it — no nodes, no changes, no deletions".into());
     }
     Ok(plan)
 }
@@ -631,11 +750,156 @@ pub fn apply(
         }
     }
 
+    // ---- retune what already exists
+    //
+    // After the wiring, so a plan can create a node, join it on and set a
+    // number on the operator it now feeds, all in one answer.
+    for change in &plan.sets {
+        let Some(id) = resolve(graph, &made, &change.node) else {
+            applied
+                .warnings
+                .push(format!("no node named {} to change", change.node));
+            continue;
+        };
+        for (key, raw) in &change.params {
+            // The declared type comes off the node, which is the only place
+            // it exists — `set` names an operator the model did not create
+            // and whose type it is only asserting.
+            let Some(declared) = graph.node(id).param(key).map(|p| p.value.clone()) else {
+                applied
+                    .warnings
+                    .push(format!("{} has no parameter `{key}`", change.node));
+                continue;
+            };
+            let Some(value) = json_to_value(raw, &declared) else {
+                applied
+                    .warnings
+                    .push(format!("{}.{key}: {raw} is not a {declared:?}", change.node));
+                continue;
+            };
+            match graph.set_param(id, key, value) {
+                Ok(()) => applied.changed.push(format!("{}.{key}", change.node)),
+                Err(e) => applied
+                    .warnings
+                    .push(format!("{}.{key}: {e}", change.node)),
+            }
+        }
+        for (key, source) in &change.expressions {
+            if graph.node(id).param(key).is_none() {
+                applied
+                    .warnings
+                    .push(format!("{} has no parameter `{key}`", change.node));
+                continue;
+            }
+            match graph.set_expression(id, key, source) {
+                Ok(()) => applied.changed.push(format!("{}.{key}", change.node)),
+                Err(e) => applied
+                    .warnings
+                    .push(format!("{}.{key}: {e}", change.node)),
+            }
+        }
+    }
+
+    // ---- remove what was asked to go
+    //
+    // Last, so everything above could rewire around it first, and fenced in
+    // three ways. A model that has just been handed deletion is a model that
+    // can empty somebody's patch on a misread, and none of these cost
+    // anything when it has read correctly:
+    //
+    //  * **Direct children of this network only.** `resolve` will happily
+    //    find a path into a component the user is not looking at; a delete
+    //    that reaches somewhere off screen is not one they can see happen.
+    //  * **Nothing it created this turn.** Creating a node and deleting it in
+    //    the same answer is a model talking to itself, and honouring it makes
+    //    the reported node count a lie.
+    //  * **Never the whole network.** Clearing the canvas is `/clear`, one
+    //    word, undoable and obviously deliberate. Arriving at it through
+    //    "make it simpler" is not what anybody meant.
+    let children: Vec<NodeId> = graph.node(parent).children.clone();
+    let mut doomed: Vec<NodeId> = Vec::new();
+    for name in &plan.deletes {
+        let bare = name.trim().trim_start_matches('/');
+        if made.contains_key(bare) {
+            applied
+                .warnings
+                .push(format!("{bare} was created by this plan; not deleting it"));
+            continue;
+        }
+        match graph
+            .find_from(parent, bare)
+            .filter(|id| children.contains(id))
+        {
+            Some(id) if !doomed.contains(&id) => doomed.push(id),
+            Some(_) => {}
+            None => applied
+                .warnings
+                .push(format!("no node named {bare} in this network to delete")),
+        }
+    }
+    let survivors = children.len() + made.len() - doomed.len();
+    if !doomed.is_empty() && survivors == 0 {
+        applied.warnings.push(format!(
+            "refused to delete all {} operators — use /clear if that is what you meant",
+            doomed.len()
+        ));
+        doomed.clear();
+    }
+    // Every splice is worked out against the graph as it stands, then all of
+    // them are removed, then the wires are run. Healing one node at a time
+    // reads a graph the previous removal already changed: deleting `b` and
+    // `c` out of `a -> b -> c -> d` would look up `c`'s input *after* `b` was
+    // gone, find nothing, and leave `d` with an empty input.
+    let splices = splices_for(graph, &doomed);
+    for id in &doomed {
+        applied.removed.push(graph.node(*id).name.clone());
+        let _ = graph.remove(*id);
+    }
+    for (src, consumer, slot) in splices {
+        let _ = graph.connect(src, consumer, slot);
+    }
+
     let viewer = plan
         .viewer
         .as_ref()
         .and_then(|name| resolve(graph, &made, name));
     Ok((applied, viewer))
+}
+
+/// The wires that keep a chain joined when a run of nodes is taken out of it.
+///
+/// Without this, "make it simpler" deletes three operators out of the middle
+/// of a chain and leaves the survivors with an empty input 0 — a black
+/// texture, and a patch that looks like the delete broke it.
+///
+/// Read-only, and worked out for the whole `doomed` set at once, because the
+/// answer depends on the graph *before* any of them are removed. Returns
+/// `(source, consumer, slot)` triples to run once they are gone.
+pub fn splices_for(graph: &Graph, doomed: &[NodeId]) -> Vec<(NodeId, NodeId, usize)> {
+    let mut out = Vec::new();
+    for id in doomed {
+        // Walk back past anything that is also going, so the two surviving
+        // ends meet rather than one of them joining a corpse.
+        let mut source = graph.node(*id).inputs.first().copied().flatten();
+        while let Some(src) = source {
+            if !doomed.contains(&src) {
+                break;
+            }
+            source = graph.node(src).inputs.first().copied().flatten();
+        }
+        let Some(src) = source else { continue };
+        for consumer in graph.consumers(*id) {
+            if doomed.contains(&consumer) {
+                continue;
+            }
+            for (slot, wired) in graph.node(consumer).inputs.iter().enumerate() {
+                if *wired == Some(*id) {
+                    out.push((src, consumer, slot));
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -790,6 +1054,185 @@ mod tests {
         let second = graph.find(&format!("/{}", applied.created[1])).unwrap();
         let first_of_second = graph.find(&format!("/{}", applied.created[0]));
         assert_eq!(graph.node(second).inputs[0], first_of_second);
+    }
+
+    /// `a -> b -> c`, the shape every simplify test needs.
+    fn chain(reg: &OpRegistry) -> (Graph, NodeId) {
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "a", "op": "pass" },
+                { "name": "b", "op": "pass" },
+                { "name": "c", "op": "pass" }
+            ],
+            "connections": [
+                { "from": "a", "to": "b", "input": 0 },
+                { "from": "b", "to": "c", "input": 0 }
+            ]
+        });
+        let plan = parse_plan(&value, reg).unwrap();
+        apply(&mut graph, root, reg, &plan).unwrap();
+        (graph, root)
+    }
+
+    #[test]
+    fn set_retunes_an_operator_that_already_exists() {
+        // The whole point of `set`: naming it under `nodes` used to get a
+        // renamed duplicate beside the original, with the original untouched.
+        let reg = test_registry();
+        let (mut graph, root) = chain(&reg);
+        let value = serde_json::json!({
+            "set": [{ "node": "b", "params": { "gain": 0.25, "mode": "add" } }]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        assert!(applied.created.is_empty(), "set creates nothing");
+        assert_eq!(applied.changed.len(), 2, "{:?}", applied.warnings);
+        let b = graph.find("/b").unwrap();
+        assert_eq!(graph.node(b).param("gain").unwrap().value, Value::Float(0.25));
+        // Still three nodes: no duplicate got made.
+        assert_eq!(graph.node(root).children.len(), 3);
+    }
+
+    #[test]
+    fn set_coerces_and_reports_a_parameter_that_is_not_there() {
+        let reg = test_registry();
+        let (mut graph, root) = chain(&reg);
+        let value = serde_json::json!({
+            // An int for a float parameter, and one that does not exist.
+            "set": [{ "node": "b", "params": { "gain": 2, "warp_factor": 9 } }]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        let b = graph.find("/b").unwrap();
+        assert_eq!(graph.node(b).param("gain").unwrap().value, Value::Float(2.0));
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("warp_factor")),
+            "{:?}",
+            applied.warnings
+        );
+    }
+
+    #[test]
+    fn delete_removes_the_node_and_joins_the_chain_back_up() {
+        // Deleting from the middle without this leaves `c` with an empty
+        // input, which is a black texture and looks like the delete broke it.
+        let reg = test_registry();
+        let (mut graph, root) = chain(&reg);
+        let value = serde_json::json!({ "delete": ["b"] });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        assert_eq!(applied.removed, vec!["b"]);
+        assert!(graph.find("/b").is_none());
+        let c = graph.find("/c").unwrap();
+        assert_eq!(graph.node(c).inputs[0], graph.find("/a"), "chain healed");
+    }
+
+    #[test]
+    fn deleting_a_run_of_nodes_joins_the_two_surviving_ends() {
+        // `a -> b -> c` with both b and c going: nothing to heal onto, but the
+        // walk back must not reconnect through a node that is also leaving.
+        let reg = test_registry();
+        let (mut graph, root) = chain(&reg);
+        let extra = serde_json::json!({
+            "nodes": [{ "name": "d", "op": "pass" }],
+            "connections": [{ "from": "c", "to": "d", "input": 0 }]
+        });
+        let plan = parse_plan(&extra, &reg).unwrap();
+        apply(&mut graph, root, &reg, &plan).unwrap();
+
+        let value = serde_json::json!({ "delete": ["b", "c"] });
+        let plan = parse_plan(&value, &reg).unwrap();
+        apply(&mut graph, root, &reg, &plan).unwrap();
+
+        let d = graph.find("/d").unwrap();
+        assert_eq!(
+            graph.node(d).inputs[0],
+            graph.find("/a"),
+            "d should have been spliced onto a, not left empty or wired to a corpse"
+        );
+    }
+
+    #[test]
+    fn a_plan_may_be_nothing_but_a_change() {
+        // "Slow the zoom down" creates nothing. Rejecting it for having no
+        // `nodes` sent the model back to invent one it did not need.
+        let reg = test_registry();
+        let value = serde_json::json!({ "set": [{ "node": "b", "params": { "gain": 0.5 } }] });
+        assert!(parse_plan(&value, &reg).is_ok());
+        let empty = serde_json::json!({ "notes": "nothing to do" });
+        assert!(parse_plan(&empty, &reg).is_err());
+    }
+
+    #[test]
+    fn deleting_the_whole_network_is_refused() {
+        // A model handed deletion can empty a patch on one misread. Clearing
+        // the canvas is `/clear` — one word, obviously deliberate.
+        let reg = test_registry();
+        let (mut graph, root) = chain(&reg);
+        let value = serde_json::json!({ "delete": ["a", "b", "c"] });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        assert!(applied.removed.is_empty());
+        assert_eq!(graph.node(root).children.len(), 3, "nothing was removed");
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("/clear")),
+            "{:?}",
+            applied.warnings
+        );
+    }
+
+    #[test]
+    fn a_node_the_plan_just_created_is_not_deleted_by_it() {
+        // A model talking to itself. Honouring it makes the reported node
+        // count a lie.
+        let reg = test_registry();
+        let (mut graph, root) = chain(&reg);
+        let value = serde_json::json!({
+            "nodes": [{ "name": "fresh", "op": "pass" }],
+            "connections": [{ "from": "c", "to": "fresh", "input": 0 }],
+            "delete": ["fresh"]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        assert!(applied.removed.is_empty(), "{:?}", applied.removed);
+        assert!(graph.find("/fresh").is_some());
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("fresh")),
+            "{:?}",
+            applied.warnings
+        );
+    }
+
+    #[test]
+    fn delete_cannot_reach_outside_the_network_being_edited() {
+        // `resolve` will happily find a path into a component the user is not
+        // looking at. A delete they cannot see happen is not one they can
+        // catch.
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let outer = parse_plan(
+            &serde_json::json!({ "nodes": [{ "name": "keep", "op": "pass" }] }),
+            &reg,
+        )
+        .unwrap();
+        apply(&mut graph, root, &reg, &outer).unwrap();
+
+        let value = serde_json::json!({
+            "nodes": [{ "name": "new1", "op": "pass" }],
+            "delete": ["/keep/nested1", "somewhere_else"]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+        assert!(applied.removed.is_empty(), "{:?}", applied.removed);
+        assert_eq!(applied.warnings.len(), 2, "{:?}", applied.warnings);
     }
 
     #[test]

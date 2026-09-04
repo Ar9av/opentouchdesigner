@@ -221,9 +221,18 @@ pub fn complete_with_repair(
         &text,
         &format!(
             "The shader compiler rejected it:\n{complaints}\n\n\
+             `Unknown variable` is almost always a name from TouchDesigner or \
+             from a desktop GL version, and neither is what compiles here. The \
+             input images are `iChannel0` and `iChannel1` — not `sTD2DInputs`, \
+             not `sIn0`, and not declared with `uniform sampler2D`. The node's \
+             uniform1..4 parameters are `U.p0`..`U.p3`. Sampling is `texture()`, \
+             never `texture2D()`.\n\n\
              Reply with the same JSON again, with those shaders fixed. Keep \
              everything else identical. If you cannot fix a shader, replace that \
-             node's source with something simple that compiles."
+             node's source with something simple that compiles — and if it had an \
+             input wired, that fallback must still pass the input through with \
+             `texture(iChannel0, fragCoord / iResolution.xy)` rather than \
+             drawing over it."
         ),
     );
     match provider::complete(&retry, key, keys) {

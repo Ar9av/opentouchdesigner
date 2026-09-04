@@ -69,6 +69,13 @@ pub struct Assistant {
     /// Notes from the last plan that was applied.
     pub last: Option<String>,
     pub warnings: Vec<String>,
+    /// Shaders that were built anyway and will not compile, as
+    /// `(node, error)`. Kept apart from `warnings` because they are not the
+    /// same kind of news: a skipped parameter leaves a patch that works, and
+    /// a red glslTOP leaves one whose output is black from that node down.
+    /// Folded into "N thing(s) skipped" it goes unread, and the patch reads as
+    /// built right up until the viewer stays dark.
+    pub broken: Vec<(String, String)>,
     pub error: Option<String>,
     pub status: String,
 }
@@ -110,6 +117,7 @@ impl Default for Assistant {
             pending: None,
             last: None,
             warnings: Vec::new(),
+            broken: Vec::new(),
             error: None,
             status: String::new(),
         }
@@ -494,6 +502,36 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
                 .color(Color32::from_rgb(235, 120, 120)),
         )
         .on_hover_text(error);
+    } else if !app.assistant.broken.is_empty() {
+        // The model's own notes describe the patch it meant to build, which
+        // is not the one on the canvas. A red node beats a cheerful sentence.
+        let names: Vec<&str> = app
+            .assistant
+            .broken
+            .iter()
+            .map(|(node, _)| node.as_str())
+            .collect();
+        let detail = app
+            .assistant
+            .broken
+            .iter()
+            .map(|(node, error)| format!("{node}: {error}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{} will not compile — black from there down",
+                    names.join(", ")
+                ))
+                .small()
+                .color(Color32::from_rgb(235, 120, 120)),
+            )
+            .on_hover_text(detail);
+            if ui.small_button("⚠").clicked() {
+                app.assistant.open = true;
+            }
+        });
     } else if let Some(notes) = &app.assistant.last {
         ui.horizontal(|ui| {
             ui.label(RichText::new(one_line(notes)).small().weak())
@@ -816,6 +854,19 @@ fn prompt_section(app: &mut OtdApp, ui: &mut egui::Ui) {
         ui.separator();
         ui.label(notes);
     }
+    // Said out loud, above the notes and never folded away. This is the one
+    // failure that looks like a success: the nodes are all there, the status
+    // line counts them, and the picture is black from the red node down.
+    if !app.assistant.broken.is_empty() {
+        ui.separator();
+        for (node, error) in &app.assistant.broken {
+            ui.colored_label(
+                Color32::from_rgb(235, 120, 120),
+                format!("{node}: shader will not compile — everything after it is black"),
+            );
+            ui.label(RichText::new(error).small().monospace().weak());
+        }
+    }
     if !app.assistant.warnings.is_empty() {
         ui.collapsing(
             format!("{} thing(s) skipped", app.assistant.warnings.len()),
@@ -847,12 +898,63 @@ fn check_shader(source: &str, is_glsl: bool) -> Result<(), String> {
     }
 }
 
+/// Commands the box answers itself, without spending a round trip.
+///
+/// The prompt box is the only text field in the editor you type a sentence
+/// into, so it is where a slash command gets typed whether or not one exists.
+/// It is also the wrong thing to hand to a model: "/clear" as a *request*
+/// gets you a patch about clearing, slowly, for money.
+///
+/// Returns `true` if the prompt was a command and has been dealt with.
+fn local_command(app: &mut OtdApp) -> bool {
+    let line = app.assistant.prompt.trim().to_string();
+    if !line.starts_with('/') {
+        return false;
+    }
+    let word = line.split_whitespace().next().unwrap_or("").to_lowercase();
+    match word.as_str() {
+        "/clear" => {
+            let n = app.clear_network();
+            app.assistant.prompt.clear();
+            // Both, because the two halves of the assistant show different
+            // things: the panel has a status line and the collapsed bar does
+            // not, and a command that appears to do nothing gets typed twice.
+            let said = match n {
+                0 => "The network was already empty.".to_string(),
+                1 => "Cleared 1 node. Cmd/Ctrl+Z puts it back.".to_string(),
+                n => format!("Cleared {n} nodes. Cmd/Ctrl+Z puts them back."),
+            };
+            app.assistant.status = said.clone();
+            app.assistant.last = Some(said);
+        }
+        "/help" => {
+            app.assistant.prompt.clear();
+            app.assistant.last = Some(
+                "/clear empties the network you are looking at (one undo).\n\
+                 /help is this.\n\
+                 Anything not starting with a slash is a request for the model."
+                    .into(),
+            );
+        }
+        other => {
+            app.assistant.error = Some(format!("no command {other} — try /clear or /help"));
+        }
+    }
+    true
+}
+
 /// Build the request here, where the graph is, and hand it to a worker.
 fn send(app: &mut OtdApp) {
     app.assistant.error = None;
     app.assistant.warnings.clear();
+    app.assistant.broken.clear();
     app.assistant.last = None;
     app.assistant.status.clear();
+
+    // Commands are answered here and never reach a provider.
+    if local_command(app) {
+        return;
+    }
 
     // A key typed but not saved should still work for this one request.
     let mut keys = app.assistant.keys.clone();
@@ -939,15 +1041,39 @@ fn poll(app: &mut OtdApp) {
             if let Some(viewer) = viewer {
                 app.viewer = Some(viewer);
             }
+            // A plan may now remove nodes, so ids held outside the graph can
+            // be stale the moment it lands. The cook takes a removed node as
+            // a root and panics on the lookup, so this is not cosmetic.
+            app.selection.retain(|id| app.graph.contains(*id));
             app.selected = applied
                 .created
                 .first()
-                .and_then(|name| app.graph.find_from(current, name));
-            app.assistant.status = format!(
-                "{} node(s), {} wire(s)",
-                applied.created.len(),
-                applied.wired
-            );
+                .and_then(|name| app.graph.find_from(current, name))
+                .or_else(|| app.selected.filter(|id| app.graph.contains(*id)));
+            if let Some(id) = app.selected {
+                app.select_only(id);
+            }
+            if !app.viewer.map(|id| app.graph.contains(id)).unwrap_or(false) {
+                app.viewer = None;
+            }
+
+            let mut parts = Vec::new();
+            if !applied.created.is_empty() {
+                parts.push(format!("{} node(s)", applied.created.len()));
+            }
+            if applied.wired > 0 {
+                parts.push(format!("{} wire(s)", applied.wired));
+            }
+            if !applied.changed.is_empty() {
+                parts.push(format!("{} retuned", applied.changed.len()));
+            }
+            if !applied.removed.is_empty() {
+                parts.push(format!("{} removed", applied.removed.len()));
+            }
+            if parts.is_empty() {
+                parts.push("nothing changed".into());
+            }
+            app.assistant.status = parts.join(", ");
             app.assistant.warnings = applied.warnings;
             // Anything the model built and then forgot to join on. The nodes
             // are real and they cook; saying so beats leaving them to be
@@ -962,11 +1088,7 @@ fn poll(app: &mut OtdApp) {
             // A shader that survived the repair round still broken would
             // otherwise be a red node and a silently black output.
             if let Ok(json) = patch::extract_json(&text) {
-                for (node, error) in patch::shader_problems(&json, check_shader) {
-                    app.assistant
-                        .warnings
-                        .push(format!("{node}: shader still does not compile — {error}"));
-                }
+                app.assistant.broken = patch::shader_problems(&json, check_shader);
             }
             if let Some(repair) = repaired {
                 app.assistant

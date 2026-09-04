@@ -40,6 +40,18 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
     ui.label(RichText::new(summary).weak().small());
 
+    // What the node itself has to say — a missing ffmpeg, a camera that has
+    // not been granted, a shader that did not compile. It is already on the
+    // node body, but the body is 176 pixels wide and this is where somebody
+    // looks once they have selected the node that is misbehaving.
+    if let Some(status) = app.engines.node_status(&app.graph, id) {
+        ui.label(
+            RichText::new(status)
+                .small()
+                .color(Color32::from_rgb(230, 170, 110)),
+        );
+    }
+
     // The longer note, from the same table the operator reference is built
     // from — one source, two surfaces, so the editor and the docs cannot say
     // different things.
@@ -122,8 +134,10 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
         }
         // A file parameter gets a Browse button. Typing an absolute path
         // from memory is nobody's idea of patching.
-        if key == "file" && app.graph.node(id).op_type == otd_gpu::ops::MOVIE_IN {
-            movie_file_row(app, ui, id);
+        if app.graph.node(id).params[&key].is_file_ref()
+            || (key == "file" && app.graph.node(id).op_type == otd_gpu::ops::MOVIE_OUT)
+        {
+            file_row(app, ui, id, &key);
             continue;
         }
 
@@ -176,8 +190,11 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
                 let (glyph, tint) = match mode {
                     ParamMode::Constant => ("=", Color32::from_rgb(140, 142, 150)),
                     ParamMode::Expression => ("ƒ", Color32::from_rgb(150, 200, 255)),
-                    ParamMode::Export => ("→", Color32::from_rgb(150, 220, 150)),
-                    ParamMode::Bind => ("↔", Color32::from_rgb(220, 180, 120)),
+                    // Arrows are tofu: egui's bundled fonts have no glyph for
+                    // them, and a mode button that draws a hollow box says
+                    // less than nothing. These two are in the font.
+                    ParamMode::Export => ("»", Color32::from_rgb(150, 220, 150)),
+                    ParamMode::Bind => ("«»", Color32::from_rgb(220, 180, 120)),
                 };
                 let btn = ui
                     .add(
@@ -230,7 +247,7 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             app.history.end_gesture();
             let p = app.graph.node_mut(id).params.get_mut(&key).unwrap();
             p.set_export(&drag.op_path, &drag.channel);
-            app.status = format!("{label} ← {}:{}", drag.op_path, drag.channel);
+            app.status = format!("{label} <- {}:{}", drag.op_path, drag.channel);
             continue;
         }
 
@@ -516,41 +533,46 @@ fn channel_list(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
     }
 }
 
-/// The code editor for a GLSL TOP's `source` parameter.
-/// The Movie File In file field: a text box you can paste into, and a Browse
-/// button for everyone else.
-fn movie_file_row(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
-    let mut path = app.graph.node(id).param("file").unwrap().value.as_str();
+/// Any parameter that names a file on disk: a text box you can paste into, a
+/// Browse button for everyone else, and a line saying whether the file is
+/// actually there.
+///
+/// Every file parameter gets this, not just the movie player's — a font that
+/// silently does not load and a movie that silently does not load are the same
+/// bug, and neither should need a trip to the terminal to diagnose.
+fn file_row(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId, key: &str) {
+    let node = app.graph.node(id);
+    let param = &node.params[key];
+    let label = if param.label.is_empty() {
+        key.to_string()
+    } else {
+        param.label.clone()
+    };
+    let mut path = param.value.as_str();
+    let op_type = node.op_type.clone();
+
     ui.horizontal(|ui| {
-        ui.label("File");
+        ui.label(label);
         if ui.button("Browse…").clicked() {
-            let picked = rfd::FileDialog::new()
-                .add_filter(
-                    "Image or movie",
-                    &[
-                        "png", "jpg", "jpeg", "webp", "bmp", "tga", "tif", "tiff", "mp4", "mov",
-                        "m4v", "mkv", "webm", "avi", "gif",
-                    ],
-                )
-                .pick_file();
+            let picked = crate::media::pick_for(&op_type, key);
             if let Some(p) = picked {
                 app.edit(&format!("file:{id:?}"));
-                let _ = app
-                    .graph
-                    .set_param(id, "file", Value::Str(p.display().to_string()));
-                path = p.display().to_string();
+                let picked = crate::media::stored_path(app, &p);
+                let _ = app.graph.set_param(id, key, Value::Str(picked.clone()));
+                path = picked;
             }
         }
     });
     let response = ui.add(
         egui::TextEdit::singleline(&mut path)
             .desired_width(f32::INFINITY)
-            .hint_text("a path, or drop a file on the canvas"),
+            .hint_text("a path, or drop a file on this node"),
     );
     if response.changed() {
         app.edit(&format!("file:{id:?}"));
-        let _ = app.graph.set_param(id, "file", Value::Str(path));
+        let _ = app.graph.set_param(id, key, Value::Str(path.clone()));
     }
+
     // Relative paths resolve against the project, which is what makes a
     // bundle portable — worth saying where somebody is about to type one.
     if let Some(dir) = app.graph.base_dir() {
@@ -559,6 +581,18 @@ fn movie_file_row(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
                 .weak()
                 .small(),
         );
+    }
+    // The commonest reason a media node shows nothing is that the path is
+    // wrong. Say so here rather than making somebody guess at a black frame.
+    if !path.trim().is_empty() {
+        let resolved = app.graph.resolve_external(path.trim());
+        if !resolved.exists() {
+            ui.label(
+                RichText::new(format!("no file at {}", resolved.display()))
+                    .small()
+                    .color(Color32::from_rgb(230, 130, 130)),
+            );
+        }
     }
 }
 
