@@ -668,6 +668,32 @@ impl Graph {
         Some(cur)
     }
 
+    /// Resolve a path the way an operator's reference parameter reads it:
+    /// `/x/y` from the root, anything else from the referencing node's own
+    /// component, with `..` stepping out. A component whose Feedback targets
+    /// `out1` therefore works in every instance and in every project — an
+    /// absolute path would nail it to one address.
+    pub fn find_from(&self, from: NodeId, path: &str) -> Option<NodeId> {
+        let path = path.trim();
+        if path.starts_with('/') {
+            return self.find(path);
+        }
+        let mut cur = self.nodes.get(from)?.parent.unwrap_or(self.root);
+        for seg in path.split('/').filter(|s| !s.is_empty()) {
+            match seg {
+                "." => {}
+                ".." => cur = self.nodes[cur].parent.unwrap_or(self.root),
+                _ => {
+                    cur = *self.nodes[cur]
+                        .children
+                        .iter()
+                        .find(|c| self.nodes[**c].name == seg)?;
+                }
+            }
+        }
+        Some(cur)
+    }
+
     // ---------------------------------------------------------- parameters
 
     pub fn set_param(&mut self, id: NodeId, key: &str, value: Value) -> Result<(), GraphError> {

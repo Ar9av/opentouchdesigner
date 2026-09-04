@@ -188,8 +188,7 @@ impl OtdApp {
         // walk, so this is cheap enough to do every frame and means the
         // editor never shows a stale copy.
         // Replicators first — they may create clones for syncing to fill.
-        let replicated =
-            otd_engine::replicator::sync(&mut self.graph, &self.engines.dats);
+        let replicated = otd_engine::replicator::sync(&mut self.graph, &self.engines.dats);
         let synced = self.graph.sync_clones(&self.registry);
         if replicated > 0 {
             self.status = format!("replicated {replicated} node(s)");
@@ -705,6 +704,17 @@ impl OtdApp {
                         for name in otd_engine::demo::NAMES {
                             if ui.button(*name).clicked() {
                                 self.load_demo(name);
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.menu_button("Palette", |ui| {
+                        for item in otd_engine::palette::ITEMS {
+                            if ui.button(item.name).on_hover_text(item.summary).clicked() {
+                                self.edit("palette");
+                                let id = item.build(&mut self.graph, &self.registry, self.current);
+                                self.selected = Some(id);
+                                self.status = format!("added {} from the palette", item.name);
                                 ui.close();
                             }
                         }

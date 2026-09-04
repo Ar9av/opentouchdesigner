@@ -12,6 +12,7 @@
 
 pub mod demo;
 pub mod docs;
+pub mod palette;
 pub mod replicator;
 
 use std::cell::RefCell;
