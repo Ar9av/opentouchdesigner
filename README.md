@@ -252,8 +252,8 @@ than a crate, and none of it can be verified without it installed.
 **Texture sharing** — Spout, Syphon and NDI all need platform SDKs that cannot
 be built or verified here, so none of them is written.
 
-Everything else is Phases 5–6 of [PLAN.md](PLAN.md): Ableton Link, perform
-mode, a timeline, undo.
+**Ableton Link** — not written. Everything else in
+[PLAN.md](PLAN.md) Phases 0–6 is.
 
 ## Layout
 
@@ -304,8 +304,19 @@ criterion is asserted rather than claimed:
   instanced spheres are one draw call, an audio band scales all of them, the
   render feeds a TOP chain, and the whole thing runs at 2.3 ms/frame
 
-The OSC test is a real UDP loopback and the spectrum test is a real FFT, so
-those paths are exercised rather than mocked.
+- [`otd-engine/tests/keyframes.rs`](crates/otd-engine/tests/keyframes.rs) —
+  keyed curves reach the pixels through the ordinary Export path, hold their
+  values exactly through a constant segment, and moving one key changes one
+  line of the project file
+- [`otd-gpu/tests/undo.rs`](crates/otd-gpu/tests/undo.rs) — undo changes the
+  *picture*, not just the parameter panel, even though it hands the cook
+  engine revisions that have gone backwards
+- [`otd-cli/tests/cli.rs`](crates/otd-cli/tests/cli.rs) — the real binary
+  against real project files, including a bundle that still runs after the
+  component it was authored against is deleted and the folder is moved
+
+The OSC and DMX tests are real UDP loopbacks and the spectrum test is a real
+FFT, so those paths are exercised rather than mocked.
 
 ## Docs
 
