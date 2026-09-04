@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app", "crates/otd-chop", "crates/otd-engine", "crates/otd-py", "crates/otd-dat", "crates/otd-sop", "crates/otd-cli"]
+members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app", "crates/otd-chop", "crates/otd-engine", "crates/otd-py", "crates/otd-dat", "crates/otd-sop", "crates/otd-cli", "crates/otd-ai"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ rust-version = "1.85"
 otd-core = { path = "crates/otd-core" }
 otd-chop = { path = "crates/otd-chop" }
 otd-gpu = { path = "crates/otd-gpu" }
+otd-ai = { path = "crates/otd-ai" }
 otd-engine = { path = "crates/otd-engine" }
 
 [profile.dev]

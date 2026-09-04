@@ -153,6 +153,21 @@ instance. An unchanged table makes zero graph edits, a removed row removes
 exactly its node, and anything you place inside the replicator by hand is
 yours and is left alone.
 
+**Assistant** — ✨ in the top bar: describe a patch and have it built into the
+network you are looking at. Anthropic, OpenAI or OpenRouter; paste a key or
+set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`.
+
+It is not a chatbot bolted on the side. The model is told about the operators
+**by the registry** — the same table the editor builds its menus and
+`OPERATORS.md` from — so it cannot suggest an operator that does not exist or
+one under a name it used to have, and there is no second list to keep in sync.
+The reply is JSON, validated before anything is created: an invented operator
+fails the whole plan (half a patch is worse than none), an invented parameter
+is dropped and reported, values are coerced to the parameter's declared type,
+and the lot is a single undo. Keys never enter a project file — they live in a
+`0600` file outside every project, and provider errors are scrubbed of them
+before they reach the panel. See [`docs/AI.md`](docs/AI.md).
+
 **Palette** — *File → Palette* holds prebuilt components: `trails` (a
 packaged feedback loop), `bloom`, `vignette` (a shader with knobs) and
 `audiolevel` (microphone to one smoothed channel). Each is an ordinary
@@ -335,6 +350,7 @@ crates/otd-gpu      wgpu TOP engine, shaders, the 3D pipeline
 crates/otd-engine   the cross-family cook, demo patches, headless renderer
 crates/otd-app      egui editor shell
 crates/otd-cli      `otd` — the same engine with no window
+crates/otd-ai       providers, key storage, patch generation      (no GPU, no UI)
 ```
 
 `otd-gpu` and `otd-chop` know nothing about each other. `otd-engine` is the
@@ -404,6 +420,10 @@ FFT, so those paths are exercised rather than mocked.
 feedback loops, contrast before the loop, colourising through a ramp,
 exporting audio onto parameters, stealing Shadertoy and ISF shaders,
 instancing, and why a patch turns to mud.
+
+[`docs/AI.md`](docs/AI.md) — the assistant: providers and keys, where a key is
+and is not allowed to go, how the model is told what the operators are, and
+what stops a bad reply damaging your patch.
 
 [`docs/OPERATORS.md`](docs/OPERATORS.md) is the operator reference — all 79,
 with their inputs, parameters, defaults and ranges. It is *generated* from the

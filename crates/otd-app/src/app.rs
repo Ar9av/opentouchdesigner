@@ -72,6 +72,9 @@ pub struct OtdApp {
 
     pub history: History,
 
+    /// The assistant panel: describe a patch, get operators.
+    pub assistant: crate::assistant::Assistant,
+
     pub project_path: Option<PathBuf>,
     pub status: String,
     pub cook_error: Option<String>,
@@ -131,6 +134,7 @@ impl OtdApp {
             thumbs: HashMap::new(),
             visible: Vec::new(),
             history: History::default(),
+            assistant: crate::assistant::Assistant::default(),
             project_path: None,
             status: String::new(),
             cook_error: None,
@@ -622,6 +626,7 @@ impl eframe::App for OtdApp {
             self.side_panel(ui);
             crate::canvas::show(self, ui);
         }
+        crate::assistant::window(self, ui.ctx());
         self.output_viewport(ui.ctx());
 
         // A realtime tool repaints continuously; there is always time moving.
@@ -779,6 +784,8 @@ impl OtdApp {
                 {
                     self.perform = true;
                 }
+                ui.toggle_value(&mut self.assistant.open, "✨ Assistant")
+                    .on_hover_text("Describe a patch and have it built into this network");
                 ui.toggle_value(&mut self.show_monitor, "Perf")
                     .on_hover_text("Per-node cook cost and GPU memory");
                 ui.toggle_value(&mut self.output_window, "Output")

@@ -1,0 +1,18 @@
+[package]
+name = "otd-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+otd-core = { version = "0.1.0", path = "../otd-core" }
+serde_json = "1.0.151"
+# rustls rather than native-tls: no OpenSSL, nothing to install to build.
+ureq = { version = "3.3.0", default-features = false, features = ["rustls", "json"] }
+log = "0.4.33"
+
+[dev-dependencies]
+# The example wants the real operator set; the library must not depend on it.
+otd-engine = { version = "0.1.0", path = "../otd-engine" }
