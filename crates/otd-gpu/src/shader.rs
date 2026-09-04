@@ -56,6 +56,14 @@ layout(set = 0, binding = 0) uniform Uniforms {
     vec4 p1;
     vec4 p2;
     vec4 p3;
+    vec4 p4;
+    vec4 p5;
+    vec4 p6;
+    vec4 p7;
+    vec4 p8;
+    vec4 p9;
+    vec4 p10;
+    vec4 p11;
 } U;
 #define iResolution vec3(U.res.xy, 1.0)
 #define iTime U.time.x
@@ -182,6 +190,24 @@ mod tests {
                    }";
         if let Err(e) = validate_glsl(&wrap_glsl(src)) {
             panic!("Shadertoy-style GLSL failed to compile: {e}");
+        }
+    }
+
+    /// The uniform block is declared three times — the Rust struct, the WGSL
+    /// prelude and the GLSL one — and a shader reading `U.p9` from a block
+    /// that stops at `p3` is a validation error a long way from its cause.
+    #[test]
+    fn both_uniform_blocks_declare_every_parameter_vector() {
+        let last = crate::ops::PARAM_VECS - 1;
+        for (language, source) in [("GLSL", GLSL_PREAMBLE), ("WGSL", COMMON_WGSL)] {
+            assert!(
+                source.contains(&format!("p{last}")),
+                "the {language} uniform block stops short of p{last}"
+            );
+            assert!(
+                !source.contains(&format!("p{}", last + 1)),
+                "the {language} uniform block declares more than ops::PARAM_VECS vectors"
+            );
         }
     }
 

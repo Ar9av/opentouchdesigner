@@ -19,7 +19,7 @@ use slotmap::SecondaryMap;
 use wgpu::util::DeviceExt;
 
 use crate::context::GpuContext;
-use crate::ops::{self, PackedParams, Sizing};
+use crate::ops::{self, Sizing, WideParams};
 use crate::record::Recorder;
 use crate::render3d::{self, Renderer};
 use crate::scene::Scene;
@@ -34,7 +34,7 @@ pub const FALLBACK_SIZE: (u32, u32) = (1280, 720);
 struct Uniforms {
     res: [f32; 4],
     time: [f32; 4],
-    params: PackedParams,
+    params: WideParams,
 }
 
 #[derive(Default)]
@@ -522,7 +522,7 @@ impl TopEngine {
         let Some(source_view) = self.nodes[id].upload.as_ref().map(|u| u.view.clone()) else {
             return self.clear_to_black(id, ctx, label);
         };
-        let params = (ops::spec(&node.op_type).unwrap().pack)(node, eval);
+        let params = ops::spec(&node.op_type).unwrap().pack_params(node, eval);
         let out = self.nodes[id].output.as_ref().unwrap().view.clone();
         let uniforms = self.uniforms(width, height, ctx, params);
         let buf = self.write_uniform(id, 0, uniforms);
@@ -881,13 +881,7 @@ impl TopEngine {
         self.output(graph, id)
     }
 
-    fn uniforms(
-        &self,
-        width: u32,
-        height: u32,
-        ctx: &CookContext,
-        params: PackedParams,
-    ) -> Uniforms {
+    fn uniforms(&self, width: u32, height: u32, ctx: &CookContext, params: WideParams) -> Uniforms {
         Uniforms {
             res: [
                 width as f32,
@@ -1058,7 +1052,7 @@ impl TopEngine {
 
         let source_view = self.nodes[id].upload.as_ref().unwrap().view.clone();
         let out = self.nodes[id].output.as_ref().unwrap().view.clone();
-        let uniforms = self.uniforms(frame.width, frame.height, ctx, [[0.0; 4]; 4]);
+        let uniforms = self.uniforms(frame.width, frame.height, ctx, ops::NO_PARAMS);
         let buf = self.write_uniform(id, 0, uniforms);
         let dummy = self.dummy.clone();
         self.run_pass(Pass {
@@ -1241,7 +1235,7 @@ impl TopEngine {
 
         let source_view = self.nodes[id].upload.as_ref().unwrap().view.clone();
         let out = self.nodes[id].output.as_ref().unwrap().view.clone();
-        let uniforms = self.uniforms(width, rows as u32, ctx, [[0.0; 4]; 4]);
+        let uniforms = self.uniforms(width, rows as u32, ctx, ops::NO_PARAMS);
         let buf = self.write_uniform(id, 0, uniforms);
         let dummy = self.dummy.clone();
         self.run_pass(Pass {
@@ -1270,7 +1264,7 @@ impl TopEngine {
             (out.key.width, out.key.height)
         };
         let out = self.nodes[id].output.as_ref().unwrap().view.clone();
-        let uniforms = self.uniforms(w, h, ctx, [[0.0; 4]; 4]);
+        let uniforms = self.uniforms(w, h, ctx, ops::NO_PARAMS);
         let buf = self.write_uniform(id, 0, uniforms);
         let dummy = self.dummy.clone();
         self.run_pass(Pass {
@@ -1304,7 +1298,7 @@ impl TopEngine {
         };
         self.ensure_output(id, src.key.width, src.key.height);
         let out = self.nodes[id].output.as_ref().unwrap().view.clone();
-        let uniforms = self.uniforms(src.key.width, src.key.height, ctx, [[0.0; 4]; 4]);
+        let uniforms = self.uniforms(src.key.width, src.key.height, ctx, ops::NO_PARAMS);
         let buf = self.write_uniform(id, 0, uniforms);
         let dummy = self.dummy.clone();
         self.run_pass(Pass {
@@ -1512,7 +1506,7 @@ impl TopEngine {
         if node.op_type == ops::MOVIE_OUT {
             let in0 = self.input_view(graph, id, 0);
             let out = self.nodes[id].output.as_ref().unwrap().view.clone();
-            let uniforms = self.uniforms(width, height, ctx, [[0.0; 4]; 4]);
+            let uniforms = self.uniforms(width, height, ctx, ops::NO_PARAMS);
             let buf = self.write_uniform(id, 0, uniforms);
             let dummy = self.dummy.clone();
             self.run_pass(Pass {
@@ -1558,7 +1552,7 @@ impl TopEngine {
             }
         }
 
-        let params = (spec.pack)(node, eval);
+        let params = spec.pack_params(node, eval);
         let base = self.uniforms(width, height, ctx, params);
         let nearest = node
             .param("filter")

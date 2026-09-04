@@ -15,7 +15,39 @@ use otd_core::{Connector, EvalContext, Family, Node, OpDef, OpRegistry, Param, V
 pub const COMMON_WGSL: &str = include_str!("shaders/common.wgsl");
 
 /// Four `vec4`s of operator parameters, handed to the shader as a uniform.
+///
+/// What a built-in operator packs. Sixteen components is more than any of them
+/// wants — the widest is eight — so widening this type would cost every
+/// `pack_*` function a shape change to buy room nothing here needs. The GLSL
+/// TOP, which carries other people's shaders, gets [`WideParams`] instead.
 pub type PackedParams = [[f32; 4]; 4];
+
+/// Vectors in the uniform block the shader actually sees.
+///
+/// Twelve rather than four because of imported ISF: of the 327 published
+/// shaders, sixteen declare more inputs than four vectors hold, and twelve is
+/// where the last of them fits (`RE RGB Gradient Generator` and `Multi
+/// Gradient`, at 48 components each). Measured, not guessed —
+/// `cargo run -p otd-gpu --example isf_corpus` is the check.
+///
+/// The cost is 128 bytes per uniform buffer, most of them zero for most
+/// operators, against a bind group layout that stays single and a `TopSpec`
+/// table that stays one line per operator.
+pub const PARAM_VECS: usize = 12;
+
+/// The full parameter block: [`PackedParams`] widened to [`PARAM_VECS`].
+pub type WideParams = [[f32; 4]; PARAM_VECS];
+
+/// An empty parameter block, for the passes that have no operator behind them
+/// — blits, uploads, the black frame a failed node shows.
+pub const NO_PARAMS: WideParams = [[0.0; 4]; PARAM_VECS];
+
+/// Put a built-in operator's four vectors at the bottom of the wide block.
+pub fn widen(packed: PackedParams) -> WideParams {
+    let mut out = NO_PARAMS;
+    out[..4].copy_from_slice(&packed);
+    out
+}
 
 /// How an operator decides its output resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +76,22 @@ pub struct TopSpec {
     /// The shader comes from a parameter and is compiled at cook time.
     pub dynamic_shader: bool,
     pub pack: fn(&Node, &EvalContext) -> PackedParams,
+}
+
+impl TopSpec {
+    /// The uniform block for this operator, wide enough for any of them.
+    ///
+    /// A wide packer is an exception rather than per-operator configuration,
+    /// so it is a branch here and not a `TopSpec` field: a field would put
+    /// `wide_pack: None` on all forty entries and raise the cost of adding an
+    /// operator, which is the one thing this table is organised to keep low.
+    pub fn pack_params(&self, node: &Node, ctx: &EvalContext) -> WideParams {
+        if self.def.type_name == GLSL {
+            pack_glsl_wide(node, ctx)
+        } else {
+            widen((self.pack)(node, ctx))
+        }
+    }
 }
 
 // ------------------------------------------------------------ param helpers
@@ -763,14 +811,21 @@ fn params_glsl() -> IndexMap<String, Param> {
     })
 }
 
+/// The four generic Uniform parameters, for a hand-written shader.
 fn pack_glsl(n: &Node, c: &EvalContext) -> PackedParams {
+    let mut out = [[0.0f32; 4]; 4];
+    out.copy_from_slice(&pack_glsl_wide(n, c)[..4]);
+    out
+}
+
+fn pack_glsl_wide(n: &Node, c: &EvalContext) -> WideParams {
     let plain = || {
-        [
+        widen([
             v4(n, c, "uniform1"),
             v4(n, c, "uniform2"),
             v4(n, c, "uniform3"),
             v4(n, c, "uniform4"),
-        ]
+        ])
     };
 
     // A GLSL TOP with custom parameters — the shape ISF import leaves behind,
@@ -793,7 +848,7 @@ fn pack_glsl(n: &Node, c: &EvalContext) -> PackedParams {
         return plain();
     };
 
-    let mut out = [[0.0f32; 4]; 4];
+    let mut out = NO_PARAMS;
     for ((key, param), slot) in custom.iter().zip(slots) {
         let value = param.eval(c);
         match slot.width {

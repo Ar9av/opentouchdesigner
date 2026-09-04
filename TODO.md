@@ -8,20 +8,31 @@ Ordered by value per unit of work within each section.
 
 ## ISF import
 
-Currently **213 of 327** published shaders import and compile.
+Currently **225 of 327** published shaders import and compile.
 
 ```bash
 git clone --depth 1 https://github.com/Vidvox/ISF-Files
 cargo run -p otd-gpu --example isf_corpus -- ISF-Files
 ```
 
-- [ ] **More uniform space than four vec4s** — 16 shaders. The contained one,
-      and the next to do. A GLSL TOP has 16 floats of parameter space, so a
-      shader with five colours does not fit. Widening the block is easy in
-      itself; the cost is that `PackedParams` is shared by every operator, so
-      either ~40 `pack_*` functions change shape or `TopSpec` grows a second,
-      wider packing function that only the GLSL TOP sets. Prefer the latter —
-      the built-ins genuinely do not need the room.
+- [x] **More uniform space than four vec4s** — done, 213 → 225. The block is
+      twelve `vec4`s wide (`ops::PARAM_VECS`), which is where the widest
+      published shader fits: `Multi Gradient` and `RE RGB Gradient Generator`
+      want 48 components each. `PackedParams` stayed four vectors, so no
+      built-in `pack_*` changed shape; `TopSpec::pack_params` widens them with
+      zeros and the GLSL TOP packs the full block instead. Twelve of the
+      sixteen now import and compile. The other four went on to fail for
+      reasons of their own — three want an audio texture (below) and `Worley
+      Cells` fails inside `nearestNodeIndex`, which is a translation bug and
+      not about space.
+
+- [ ] **Audio-texture inputs** — 5 shaders. ISF's `audio` and `audioFFT` input
+      types are textures a host fills with the live waveform or its spectrum.
+      We map the unknown type to a float, so `IMG_NORM_PIXEL` on it becomes
+      `texture()` on a scalar and the shader fails to compile. The shader side
+      is small — treat them as image inputs — but they are only worth anything
+      once a CHOP can be the texture, so it is really "wire audio to a GLSL
+      TOP input", not an importer fix.
 
 - [ ] **Multi-pass** — 56 shaders, and the largest single bucket by some way.
       Needs several render targets per node and a pass index the shader can

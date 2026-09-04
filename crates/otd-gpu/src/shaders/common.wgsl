@@ -11,11 +11,22 @@ struct Uniforms {
   // x = absolute time (s), y = local time (s), z = frame, w = fps
   time: vec4<f32>,
   // Operator parameters, packed by the Rust side. See ops.rs for the layout
-  // each operator expects.
+  // each operator expects. Built-in operators fill p0..p3 and leave the rest
+  // zero; the GLSL TOP uses all twelve, because imported ISF shaders declare
+  // as many as forty-eight components of inputs. Keep the count in step with
+  // ops::PARAM_VECS and with the GLSL block in shader.rs — a test checks.
   p0: vec4<f32>,
   p1: vec4<f32>,
   p2: vec4<f32>,
   p3: vec4<f32>,
+  p4: vec4<f32>,
+  p5: vec4<f32>,
+  p6: vec4<f32>,
+  p7: vec4<f32>,
+  p8: vec4<f32>,
+  p9: vec4<f32>,
+  p10: vec4<f32>,
+  p11: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> U: Uniforms;

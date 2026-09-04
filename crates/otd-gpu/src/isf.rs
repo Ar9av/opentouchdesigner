@@ -10,11 +10,17 @@
 //! Measured against the published collection at Vidvox/ISF-Files — 327 real
 //! shaders — rather than against shaders written for the test, which only
 //! ever proves the happy path. `cargo run -p otd-gpu --example isf_corpus`
-//! reports the current figure and groups what fails by why. It stands at 213
+//! reports the current figure and groups what fails by why. It stands at 225
 //! of 327, and the remaining buckets are: multi-pass (56, a real feature and
 //! a real absence), shaders whose varyings come from a companion vertex
-//! shader we do not run (17), shaders wanting more uniform space than four
-//! vec4s (16), and persistent buffers (a subset of multi-pass).
+//! shader we do not run (17), names we do not define — persistent buffers
+//! mostly, which are multi-pass by another route (18), and shaders wanting an
+//! audio texture (5), which needs a sound source before it needs a shader
+//! change.
+//!
+//! Uniform space used to be a bucket of sixteen and is now none: the block is
+//! twelve `vec4`s wide, which is where the widest published shader fits. See
+//! [`crate::ops::PARAM_VECS`].
 //!
 //! What is supported is what the format actually uses in practice: `float`,
 //! `bool`, `long` (a menu), `color`, `point2D` and `image` inputs, the
@@ -33,7 +39,7 @@ pub enum IsfError {
     BadJson(String),
     #[error("multi-pass ISF shaders are not supported yet")]
     MultiPass,
-    #[error("this shader needs more uniform space than a GLSL TOP has (4 vec4s)")]
+    #[error("this shader needs more uniform space than a GLSL TOP has (12 vec4s)")]
     TooManyInputs,
 }
 
@@ -46,7 +52,7 @@ pub struct Isf {
     /// Parameters to put on the node, in the order the header declares them.
     pub params: IndexMap<String, Param>,
     /// Which uniform each parameter feeds, in declaration order. The engine
-    /// packs them into `U.p0..p3`.
+    /// packs them into `U.p0..p11`.
     pub inputs: Vec<IsfInput>,
     /// GLSL ready to hand to the GLSL TOP.
     pub source: String,
@@ -259,10 +265,10 @@ pub fn apply(graph: &mut Graph, id: NodeId, isf: &Isf) {
     }
 }
 
-/// Where one parameter lands in the `U.p0..p3` uniform block.
+/// Where one parameter lands in the `U.p0..p11` uniform block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot {
-    /// Which `U.p*` — 0..3.
+    /// Which `U.p*` — 0..`ops::PARAM_VECS`.
     pub vec: usize,
     /// First component within it — 0..3, i.e. `.x`..`.w`.
     pub component: usize,
@@ -292,8 +298,9 @@ impl Slot {
 /// How many uniform components a value of this type occupies.
 ///
 /// Packing floats into components rather than giving each its own vector is
-/// what makes the sixteen components enough: a shader with eight dials is
-/// entirely ordinary, and eight `vec4`s would not fit.
+/// what stretches the block as far as it goes: a shader with eight dials is
+/// entirely ordinary, and eight `vec4`s of them would be four times the room
+/// they need.
 pub fn width(value: &otd_core::Value) -> usize {
     use otd_core::Value::*;
     match value {
@@ -313,10 +320,11 @@ pub fn width(value: &otd_core::Value) -> usize {
 /// reassemble it, which is exactly the kind of invisible contract that breaks
 /// silently later.
 ///
-/// `None` when the parameters do not fit in the four vectors available.
+/// `None` when the parameters do not fit in the vectors available.
 pub fn layout(widths: impl IntoIterator<Item = usize>) -> Option<Vec<Slot>> {
+    let capacity = crate::ops::PARAM_VECS * 4;
     let mut out = Vec::new();
-    let mut cursor = 0usize; // in components, 0..16
+    let mut cursor = 0usize; // in components, 0..capacity
     for w in widths {
         if w == 0 {
             continue;
@@ -324,7 +332,7 @@ pub fn layout(widths: impl IntoIterator<Item = usize>) -> Option<Vec<Slot>> {
         // Align: a vec4 to a vector, a vec2 to an even component.
         let align = if w == 4 { 4 } else { w.min(2) };
         cursor = cursor.next_multiple_of(align);
-        if cursor + w > 16 {
+        if cursor + w > capacity {
             return None;
         }
         out.push(Slot {
@@ -634,17 +642,45 @@ void main() {}"#;
 
     #[test]
     fn a_shader_that_does_not_fit_is_refused_rather_than_aliased() {
-        // Seventeen dials do not fit in sixteen components. Silently folding
-        // the extras onto slot 3 would look like it worked.
-        assert_eq!(layout(std::iter::repeat_n(1, 17)), None);
-        assert!(layout(std::iter::repeat_n(1, 16)).is_some());
+        // One dial past the end does not fit. Silently folding the extras onto
+        // the last slot would look like it worked.
+        let capacity = crate::ops::PARAM_VECS * 4;
+        assert_eq!(layout(std::iter::repeat_n(1, capacity + 1)), None);
+        assert!(layout(std::iter::repeat_n(1, capacity)).is_some());
 
-        let inputs: String = (0..5)
+        let colors = |n: usize| {
+            let inputs: String = (0..n)
+                .map(|i| format!(r#"{{ "NAME": "c{i}", "TYPE": "color" }}"#))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("/*{{ \"INPUTS\": [{inputs}] }}*/\nvoid main() {{}}")
+        };
+        assert_eq!(
+            import(&colors(crate::ops::PARAM_VECS + 1)).unwrap_err(),
+            IsfError::TooManyInputs
+        );
+
+        // Five colours were the old ceiling, and the published corpus has
+        // sixteen shaders past it — `Corner Colors` is one, and it is the
+        // whole reason the block is twelve vectors wide rather than four.
+        assert!(import(&colors(5)).is_ok(), "five colours have to fit now");
+        assert!(import(&colors(crate::ops::PARAM_VECS)).is_ok());
+    }
+
+    /// A parameter in the widened part of the block reaches the shader by the
+    /// same name it had in the header.
+    #[test]
+    fn an_input_past_the_first_four_vectors_gets_a_slot() {
+        let inputs: String = (0..6)
             .map(|i| format!(r#"{{ "NAME": "c{i}", "TYPE": "color" }}"#))
             .collect::<Vec<_>>()
             .join(",");
         let src = format!("/*{{ \"INPUTS\": [{inputs}] }}*/\nvoid main() {{}}");
-        assert_eq!(import(&src).unwrap_err(), IsfError::TooManyInputs);
+        let isf = import(&src).unwrap();
+        assert!(isf.source.contains("c4 = U.p4;"), "{}", isf.source);
+        assert!(isf.source.contains("c5 = U.p5;"));
+        crate::shader::validate_glsl(&crate::shader::wrap_glsl(&isf.source))
+            .expect("a six-colour shader should compile");
     }
 
     #[test]
