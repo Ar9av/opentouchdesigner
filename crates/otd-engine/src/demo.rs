@@ -498,8 +498,78 @@ pub fn instanced_audio(registry: &OpRegistry) -> (Graph, NodeId) {
     (graph, out)
 }
 
+/// Keyframes driving a shape: one Animation CHOP, three curves, three
+/// parameters. The Phase 6 timeline made visible.
+pub fn keyframes(registry: &OpRegistry) -> (Graph, NodeId) {
+    let mut graph = Graph::new();
+    let root = graph.root();
+    let add = |graph: &mut Graph, op: &str, name: &str, pos: [f32; 2]| {
+        let def = registry.get(op).unwrap().clone();
+        let id = graph.create(root, &def, Some(name)).unwrap();
+        graph.node_mut_quiet(id).pos = pos;
+        id
+    };
+
+    let anim = add(&mut graph, "animationCHOP", "anim1", [-420.0, 140.0]);
+    let ramp = add(&mut graph, "rampTOP", "ramp1", [-420.0, -140.0]);
+    let xform = add(&mut graph, "transformTOP", "xform1", [-200.0, -140.0]);
+    let level = add(&mut graph, "levelTOP", "level1", [0.0, -140.0]);
+    let out = add(&mut graph, "nullTOP", "out1", [200.0, -140.0]);
+
+    graph.connect(ramp, xform, 0).unwrap();
+    graph.connect(xform, level, 0).unwrap();
+    graph.connect(level, out, 0).unwrap();
+
+    // Three curves, each a different interpolation, so the difference between
+    // them is visible in one glance at the curve editor.
+    graph
+        .set_param(
+            anim,
+            "keys",
+            Value::Str(
+                "\
+# channel  time  value  interpolation
+rotate     0     0      smooth
+rotate     4     180    smooth
+scale      0     0.4    spline
+scale      2     1      spline
+scale      4     0.4    spline
+bright     0     0.5    linear
+bright     1     2      constant
+bright     3     2      linear
+bright     4     0.5    linear
+"
+                .into(),
+            ),
+        )
+        .unwrap();
+    graph
+        .set_param(anim, "play", Value::Str("loop".into()))
+        .unwrap();
+
+    // A vertical ramp rather than a radial one: a radial ramp is
+    // rotation-invariant, so the `rotate` curve would drive something
+    // invisible and the demo would be showing two curves while claiming three.
+    graph
+        .set_param(ramp, "type", Value::Str("vertical".into()))
+        .unwrap();
+    graph.set_param(ramp, "resw", Value::Int(640)).unwrap();
+    graph.set_param(ramp, "resh", Value::Int(360)).unwrap();
+
+    export(&mut graph, xform, "rotate", "/anim1", "rotate");
+    export(&mut graph, level, "brightness", "/anim1", "bright");
+    // Scale is a vec2, so it takes an expression reading the same channel
+    // rather than an export, which drives a single float.
+    graph
+        .set_expression(xform, "scale", "ch('/anim1', 'scale')")
+        .unwrap();
+
+    (graph, out)
+}
+
 pub fn by_name(name: &str, registry: &OpRegistry) -> Option<(Graph, NodeId)> {
     match name {
+        "keyframes" => Some(keyframes(registry)),
         "starter" => Some(starter(registry)),
         "feedback" => Some(feedback(registry, 1920, 1080)),
         "audioreactive" => Some(audio_reactive(registry)),
@@ -517,4 +587,5 @@ pub const NAMES: &[&str] = &[
     "lfo",
     "components",
     "instances3d",
+    "keyframes",
 ];

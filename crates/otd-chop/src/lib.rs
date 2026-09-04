@@ -4,12 +4,14 @@
 //! UI; device work happens on its own threads and hands buffers to the cook
 //! (PLAN.md §4).
 
+pub mod anim;
 pub mod data;
 pub mod dmx;
 pub mod engine;
 pub mod io;
 pub mod ops;
 
+pub use anim::{Curve, Curves, Interp, Key};
 pub use data::{CONTROL_RATE, Channel, ChopData};
 pub use engine::{ChannelStore, ChopEngine, ChopHost, Network};
 pub use io::{InputState, Io};

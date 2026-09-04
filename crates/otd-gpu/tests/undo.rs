@@ -43,15 +43,14 @@ fn undo_changes_the_pixels_not_just_the_parameter() {
     let mut time = CookContext::default();
     let mut history = History::default();
 
-    let frame =
-        |graph: &Graph, engine: &mut TopEngine, cook: &mut CookEngine, t: &CookContext| {
-            engine.begin_frame();
-            cook.cook_frame(graph, &[node], t, engine).unwrap();
-            engine.end_frame();
-            let tex = engine.output(graph, node).unwrap();
-            let (_, _, pixels) = read_pixels_rgba8(&ctx, tex).unwrap();
-            [pixels[0], pixels[1], pixels[2]]
-        };
+    let frame = |graph: &Graph, engine: &mut TopEngine, cook: &mut CookEngine, t: &CookContext| {
+        engine.begin_frame();
+        cook.cook_frame(graph, &[node], t, engine).unwrap();
+        engine.end_frame();
+        let tex = engine.output(graph, node).unwrap();
+        let (_, _, pixels) = read_pixels_rgba8(&ctx, tex).unwrap();
+        [pixels[0], pixels[1], pixels[2]]
+    };
 
     assert_eq!(frame(&graph, &mut engine, &mut cook, &time), [255, 0, 0]);
 

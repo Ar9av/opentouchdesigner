@@ -32,6 +32,7 @@ a CHOP shows its waveform.
 | `lfo` | the smallest thing that shows a channel driving a parameter |
 | `components` | one visualiser component used twice, listening to different bands |
 | `instances3d` | 256 instanced spheres driven by audio, rendered and bloomed |
+| `keyframes` | three keyed curves — eased, splined and stepped — driving rotation, scale and brightness |
 
 ### Headless
 
@@ -198,6 +199,20 @@ Afterwards it is an ordinary GLSL TOP: the imported dials can be exported to,
 bound and animated like any others. Scalars share a `vec4` rather than each
 taking one, and a shader that wants more uniform space than exists is refused
 with a message instead of quietly aliasing onto the last slot.
+
+**Keyframes** — an Animation CHOP holds named curves with `constant`, `linear`,
+`smooth` and `spline` keys. Making them a CHOP rather than a new subsystem is
+the whole design: a keyed value is a value over time, which is what a channel
+is, so keyframes export to parameters, filter, merge and lag like everything
+else with no new mechanism anywhere. The keys are plain text in the project
+file — `channel time value interp`, one per line — so moving one key is a
+one-line diff, and typing twenty evenly spaced keys is faster than dragging
+them. The parameter panel draws them as an editable curve on the same time
+axis as the timeline.
+
+**Timeline** — a scrubbable playhead with a loop range along the bottom. The
+playhead *is* the network's clock, so dragging it drags the whole patch; there
+is no second notion of time that could drift from what is rendering.
 
 **Undo/redo** — everywhere, because it works by snapshotting the graph rather
 than by writing an inverse for each of create, delete, wire, unwire, four
