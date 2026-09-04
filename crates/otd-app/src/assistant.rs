@@ -26,6 +26,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{Color32, RichText};
 use otd_ai::{Ask, Keys, Provider, cli, patch};
+use otd_core::NodeId;
 
 use crate::app::OtdApp;
 
@@ -52,6 +53,21 @@ pub struct Assistant {
     /// that quietly went away is not — you have to notice the absence first.
     /// With it on, "make this simpler" and "take the blur out" work.
     pub allow_delete: bool,
+    /// Whether the request is confined to the selected operators. Off by
+    /// default, because most asks are about the patch as a whole.
+    ///
+    /// On, the rest of the network is locked: nothing outside the selection is
+    /// retuned, removed, or rewired. Useful once a patch is big enough that
+    /// "make the trails longer" could reasonably be read as touching three
+    /// different chains.
+    pub scope_selection: bool,
+    /// The names in scope at the moment the request went out.
+    ///
+    /// Captured at send rather than read at reply, because the selection is a
+    /// live thing and the round trip is seconds long: clicking a different
+    /// node while the model is thinking must not move the goalposts the answer
+    /// is filtered against.
+    pub scoped_to: Vec<String>,
     /// A still to work back from. With one attached the prompt is optional:
     /// pointing at a picture is a complete request.
     pub image: Option<otd_ai::Image>,
@@ -114,6 +130,8 @@ impl Default for Assistant {
             key_input: String::new(),
             prompt: String::new(),
             allow_delete: false,
+            scope_selection: false,
+            scoped_to: Vec::new(),
             image: None,
             image_tex: None,
             bar_rect: egui::Rect::NOTHING,
@@ -461,6 +479,26 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
                 "Let the assistant remove operators as well as add them — \
                  needed for \"simplify this\" or \"take the blur out\"",
             );
+
+        // Next to the dustbin because it is the same kind of switch: a
+        // standing limit on what the answer is allowed to do, rather than
+        // something you phrase differently each time you want it.
+        let count = scope_of(app).len();
+        ui.add_enabled_ui(count > 0 || app.assistant.scope_selection, |ui| {
+            ui.toggle_value(&mut app.assistant.scope_selection, "🔒")
+                .on_hover_text(match count {
+                    0 => "Confine the request to the selected operators — \
+                          but nothing is selected, so this would do nothing"
+                        .to_string(),
+                    1 => "Confine the request to the 1 selected operator — \
+                          the rest of the network is left exactly as it is"
+                        .to_string(),
+                    n => format!(
+                        "Confine the request to the {n} selected operators — \
+                         the rest of the network is left exactly as it is"
+                    ),
+                });
+        });
 
         if app.assistant.not_configured() {
             let (short, hint) = match app.assistant.provider.needs_key() {
@@ -995,6 +1033,15 @@ fn send(app: &mut OtdApp) {
         None => otd_ai::Key::new(""),
     };
 
+    let scope = match app.assistant.scope_selection {
+        true => scope_of(app),
+        false => Vec::new(),
+    };
+    app.assistant.scoped_to = scope
+        .iter()
+        .map(|id| app.graph.node(*id).name.clone())
+        .collect();
+
     let request = otd_ai::request_for(&Ask {
         provider: app.assistant.provider,
         model: app.assistant.model.clone(),
@@ -1005,6 +1052,7 @@ fn send(app: &mut OtdApp) {
         selected: app.selected,
         registry: &app.registry,
         allow_delete: app.assistant.allow_delete,
+        scope: &scope,
     });
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -1015,6 +1063,28 @@ fn send(app: &mut OtdApp) {
             let _ = tx.send(result.map(|r| (r.text, r.repaired)));
         });
     app.assistant.pending = Some(rx);
+}
+
+/// The operators a scoped request is confined to.
+///
+/// The multi-selection when there is one, otherwise whatever single node is
+/// selected — clicking one node and locking to it is the common case, and
+/// making that require a shift-click first would be a rule with no reason.
+/// Empty when nothing is selected, which turns scoping off rather than
+/// locking the whole patch.
+fn scope_of(app: &OtdApp) -> Vec<NodeId> {
+    if !app.selection.is_empty() {
+        return app
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| app.graph.contains(*id))
+            .collect();
+    }
+    app.selected
+        .filter(|id| app.graph.contains(*id))
+        .into_iter()
+        .collect()
 }
 
 /// Drop the plan's removals unless the user turned removal on, and say which
@@ -1064,6 +1134,13 @@ fn poll(app: &mut OtdApp) {
     // at the canvas is an operator that is no longer on it.
     if let Some(kept) = gate_deletes(&mut plan, app.assistant.allow_delete) {
         app.assistant.warnings.push(kept);
+    }
+    // Same reasoning one line up: the prompt asked, this is what makes it
+    // true. Filtered against the selection as it was when the request went
+    // out, not as it is now.
+    let scoped_to = std::mem::take(&mut app.assistant.scoped_to);
+    if let Some(skipped) = patch::gate_scope(&mut plan, &scoped_to) {
+        app.assistant.warnings.push(skipped);
     }
 
     // One checkpoint, before anything is created, so the whole patch undoes

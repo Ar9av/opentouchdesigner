@@ -60,6 +60,7 @@ fn main() {
             selected: None,
             registry: &registry,
             allow_delete: true,
+            scope: &[],
         };
         let started = std::time::Instant::now();
         match otd_ai::ask(&ask, &keys) {

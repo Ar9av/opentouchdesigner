@@ -72,6 +72,7 @@ fn main() {
         selected: None,
         registry: &registry,
         allow_delete: true,
+        scope: &[],
     };
 
     // Codex's default model is deliberately empty — "whatever the CLI is

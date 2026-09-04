@@ -178,6 +178,7 @@ pub fn describe(
     graph: &Graph,
     parent: NodeId,
     selected: Option<NodeId>,
+    scope: &[NodeId],
     registry: &OpRegistry,
 ) -> String {
     let children = graph.node(parent).children.clone();
@@ -235,6 +236,14 @@ pub fn describe(
         }
         if Some(id) == selected {
             out.push_str(" [SELECTED — \"it\" in the request means this node]");
+        }
+        // Marked per node rather than listed once at the top: the model has to
+        // decide operator by operator whether it may touch one, and a list
+        // somewhere else is a lookup it will sometimes skip.
+        if scope.contains(&id) {
+            out.push_str(" [IN SCOPE]");
+        } else if !scope.is_empty() {
+            out.push_str(" [LOCKED]");
         }
         out.push('\n');
     }
@@ -534,6 +543,27 @@ pub const NO_DELETE_RULE: &str = "\n\nREMOVAL IS OFF FOR THIS REQUEST\n\
      was asked for can only be done by removing something, do the part that \
      can be done and say in `notes` what would have to go and that removal is \
      switched off.";
+
+/// Told to the model when the user has locked the request to a selection.
+///
+/// Paired with [`gate_scope`], which is what makes it true. The prompt is how
+/// the model avoids wasting the request on operators it is not allowed to
+/// touch; the gate is why "only change these" is a guarantee rather than a
+/// hope.
+pub const SCOPE_RULE: &str = "\n\nONLY THE OPERATORS MARKED [IN SCOPE] MAY CHANGE\n\
+     The user selected part of the network and asked for that part to be \
+     worked on. Operators marked [IN SCOPE] are yours: retune them with \
+     `set`, rewire their inputs, remove them. Every operator marked [LOCKED] \
+     stays exactly as it is — do not `set` it, do not `delete` it, and do not \
+     wire anything into its inputs.\n\
+     Reading FROM a locked operator is fine and is usually how this works: \
+     name it as the `from` of a connection and take its output. What you may \
+     not do is change what goes INTO it.\n\
+     You may still create operators, and anything you create is in scope by \
+     definition — wire new ones to each other and into the selected ones \
+     freely. If the request cannot be done without changing a locked \
+     operator, do the part that can be done and say in `notes` which operator \
+     would have to change and that the selection is locked.";
 
 /// The extra brief for working from a reference image, appended to the user
 /// turn when there is one.
@@ -900,6 +930,67 @@ fn json_to_value(raw: &serde_json::Value, declared: &Value) -> Option<Value> {
 /// than abandoning the parts that worked — by this point the plan has already
 /// been validated, so what is left are soft failures like a wire between two
 /// families.
+/// Confine a plan to the operators the user selected.
+///
+/// The counterpart to [`SCOPE_RULE`], and the reason it means something. A
+/// model told "only touch these" mostly complies, and mostly is not what
+/// "only change these nodes" asks for — the whole point of selecting first is
+/// that the rest of the patch is known to be safe. So the plan is filtered
+/// against the selection rather than trusted to have been.
+///
+/// Three things count as changing an existing operator, and all three are
+/// dropped when it is not in scope:
+///
+///  * a `set` on it,
+///  * a `delete` of it,
+///  * a connection whose *destination* is it — wiring something new into an
+///    operator's input changes what that operator does just as surely as
+///    retuning it. Reading from it is left alone: `from` may name anything,
+///    which is what lets a new chain hang off a locked source.
+///
+/// Anything the plan creates is in scope by definition; it did not exist to
+/// be protected. An empty `scope` means no scoping and nothing is filtered.
+pub fn gate_scope(plan: &mut Plan, scope: &[String]) -> Option<String> {
+    if scope.is_empty() {
+        return None;
+    }
+    let made: Vec<String> = plan.nodes.iter().map(|n| n.name.clone()).collect();
+    let allowed = |name: &str| {
+        let bare = name.trim().trim_start_matches('/');
+        scope.iter().any(|s| s == bare) || made.iter().any(|m| m == bare)
+    };
+
+    let mut spared: Vec<String> = Vec::new();
+    plan.sets.retain(|s| {
+        allowed(&s.node) || {
+            spared.push(format!("retuning {}", s.node));
+            false
+        }
+    });
+    plan.deletes.retain(|d| {
+        allowed(d) || {
+            spared.push(format!("removing {d}"));
+            false
+        }
+    });
+    plan.connections.retain(|w| {
+        allowed(&w.to) || {
+            spared.push(format!("rewiring {}", w.to));
+            false
+        }
+    });
+
+    if spared.is_empty() {
+        return None;
+    }
+    spared.sort();
+    spared.dedup();
+    Some(format!(
+        "skipped {} — only the selected operators are in scope",
+        spared.join(", ")
+    ))
+}
+
 pub fn apply(
     graph: &mut Graph,
     parent: NodeId,
@@ -1936,6 +2027,95 @@ mod tests {
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
     }
 
+    /// "Only change these nodes" has to be a guarantee, not a request.
+    ///
+    /// The three ways a plan can change an operator that already exists are
+    /// filtered when it is out of scope. The fourth thing a plan can do —
+    /// read from it — is deliberately left alone, because hanging a new chain
+    /// off a locked source is the normal shape of a scoped edit.
+    #[test]
+    fn a_scoped_plan_cannot_touch_what_was_not_selected() {
+        let reg = test_registry();
+        let json = serde_json::json!({
+            "notes": "worked on the selection",
+            "nodes": [{ "name": "new1", "op": "pass" }],
+            "connections": [
+                // Allowed: reads a locked operator, writes to a selected one.
+                { "from": "locked1", "to": "picked1", "input": 0 },
+                // Allowed: writes to something this plan just made.
+                { "from": "picked1", "to": "new1", "input": 0 },
+                // Refused: changes what goes into a locked operator.
+                { "from": "new1", "to": "locked1", "input": 0 },
+            ],
+            "set": [
+                { "node": "picked1", "params": { "gain": 0.5 } },
+                { "node": "locked1", "params": { "gain": 0.9 } },
+            ],
+            "delete": ["picked1", "locked1"],
+        });
+        let mut plan = parse_plan(&json, &reg).unwrap();
+        let skipped = gate_scope(&mut plan, &["picked1".to_string()])
+            .expect("something was out of scope and that is worth saying");
+
+        assert_eq!(plan.sets.len(), 1);
+        assert_eq!(plan.sets[0].node, "picked1");
+        assert_eq!(plan.deletes, vec!["picked1".to_string()]);
+        assert_eq!(plan.connections.len(), 2, "only the inbound wire goes");
+        assert!(
+            plan.connections.iter().all(|w| w.to != "locked1"),
+            "something is still wired into a locked operator"
+        );
+        assert!(
+            plan.connections.iter().any(|w| w.from == "locked1"),
+            "reading from a locked operator should still be allowed"
+        );
+        // And the user is told, by name, what did not happen.
+        assert!(skipped.contains("locked1"), "{skipped}");
+        assert!(!skipped.contains("picked1"), "{skipped}");
+    }
+
+    /// No selection means no scoping — not a locked-down patch.
+    #[test]
+    fn an_empty_scope_filters_nothing() {
+        let reg = test_registry();
+        let json = serde_json::json!({
+            "set": [{ "node": "anything1", "params": { "gain": 0.5 } }],
+            "delete": ["whatever1"],
+        });
+        let mut plan = parse_plan(&json, &reg).unwrap();
+        let before = plan.clone();
+        assert_eq!(gate_scope(&mut plan, &[]), None);
+        assert_eq!(plan, before);
+    }
+
+    /// The model is shown which operators it may touch, per operator.
+    #[test]
+    fn a_description_marks_what_is_in_scope_and_what_is_locked() {
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let plan = parse_plan(&plan_json(), &reg).unwrap();
+        apply(&mut graph, root, &reg, &plan).unwrap();
+        let a = graph.find_from(root, "a").unwrap();
+
+        let scoped = describe(&graph, root, None, &[a], &reg);
+        let line = |name: &str| {
+            scoped
+                .lines()
+                .find(|l| l.starts_with(&format!("- {name} ")))
+                .unwrap_or_else(|| panic!("no line for {name} in:\n{scoped}"))
+                .to_string()
+        };
+        assert!(line("a").ends_with("[IN SCOPE]"), "{}", line("a"));
+        assert!(line("b").ends_with("[LOCKED]"), "{}", line("b"));
+
+        // With nothing scoped, neither mark appears — an unscoped request
+        // should not read as though everything were locked.
+        let open = describe(&graph, root, None, &[], &reg);
+        assert!(!open.contains("[IN SCOPE]"), "{open}");
+        assert!(!open.contains("[LOCKED]"), "{open}");
+    }
+
     #[test]
     fn the_catalogue_is_generated_from_the_registry() {
         let reg = test_registry();
@@ -1961,11 +2141,11 @@ mod tests {
         let reg = test_registry();
         let mut graph = Graph::new();
         let root = graph.root();
-        assert!(describe(&graph, root, None, &reg).contains("empty"));
+        assert!(describe(&graph, root, None, &[], &reg).contains("empty"));
 
         let plan = parse_plan(&plan_json(), &reg).unwrap();
         apply(&mut graph, root, &reg, &plan).unwrap();
-        let text = describe(&graph, root, None, &reg);
+        let text = describe(&graph, root, None, &[], &reg);
         assert!(text.contains("a (pass)"), "{text}");
         assert!(text.contains("0<-a"), "{text}");
     }
@@ -1984,7 +2164,7 @@ mod tests {
 
         let tuned = graph.find_from(root, "a").unwrap();
         graph.set_param(tuned, "gain", Value::Float(0.35)).unwrap();
-        let text = describe(&graph, root, Some(tuned), &reg);
+        let text = describe(&graph, root, Some(tuned), &[], &reg);
 
         assert!(text.contains("gain=0.35"), "{text}");
         assert!(text.contains("[SELECTED"), "{text}");
@@ -1992,7 +2172,7 @@ mod tests {
         assert!(text.contains(" at ["), "{text}");
         // A default is in the catalogue already; repeating it is prompt
         // spent to say nothing.
-        let untouched = describe(&graph, root, None, &reg);
+        let untouched = describe(&graph, root, None, &[], &reg);
         assert!(!untouched.contains("gain=1"), "{untouched}");
     }
 

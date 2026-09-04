@@ -48,6 +48,13 @@ pub struct Ask<'a> {
     /// Whether the plan may remove operators. Off in the editor unless the
     /// user turns it on for the request — see [`patch::NO_DELETE_RULE`].
     pub allow_delete: bool,
+    /// Operators the request is confined to. Empty means the whole network is
+    /// fair game, which is the usual case.
+    ///
+    /// Non-empty and the rest of the patch is locked: see [`patch::SCOPE_RULE`]
+    /// for what the model is told and [`patch::gate_scope`] for what is
+    /// enforced regardless of what it was told.
+    pub scope: &'a [NodeId],
 }
 
 /// Build the request for an ask.
@@ -58,7 +65,7 @@ pub struct Ask<'a> {
 /// UI thread where the graph lives — so nothing that touches the network ever
 /// touches a frame.
 pub fn request_for(ask: &Ask) -> Request {
-    let network = patch::describe(ask.graph, ask.parent, ask.selected, ask.registry);
+    let network = patch::describe(ask.graph, ask.parent, ask.selected, ask.scope, ask.registry);
     let prompt = ask.prompt.trim();
 
     let user = match &ask.image {
@@ -79,11 +86,16 @@ pub fn request_for(ask: &Ask) -> Request {
         None => format!("{network}\n\nThe request:\n{prompt}"),
     };
 
+    let mut system = patch::system_prompt(ask.registry);
+    if !ask.allow_delete {
+        system += patch::NO_DELETE_RULE;
+    }
+    if !ask.scope.is_empty() {
+        system += patch::SCOPE_RULE;
+    }
+
     Request::new(ask.provider, &ask.model)
-        .system(match ask.allow_delete {
-            true => patch::system_prompt(ask.registry),
-            false => patch::system_prompt(ask.registry) + patch::NO_DELETE_RULE,
-        })
+        .system(system)
         .user(user)
         .image(ask.image.clone())
 }
@@ -139,7 +151,10 @@ impl Repair {
 /// question.
 fn repair_request(request: &Request, reply: &str, complaint: &str) -> Request {
     Request {
-        user: format!("{}\n\nYou replied with this:\n{reply}\n\n{complaint}", request.user),
+        user: format!(
+            "{}\n\nYou replied with this:\n{reply}\n\n{complaint}",
+            request.user
+        ),
         ..request.clone()
     }
 }

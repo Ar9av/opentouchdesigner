@@ -169,6 +169,7 @@ fn main() {
                 selected: Some(source),
                 registry: &reg,
                 allow_delete: true,
+                scope: &[],
             };
             let request = otd_ai::request_for(&ask);
             let reply =

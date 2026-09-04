@@ -357,6 +357,7 @@ fn main() {
                 selected,
                 registry: &registry,
                 allow_delete: true,
+                scope: &[],
             };
             let request = otd_ai::request_for(&ask);
 
