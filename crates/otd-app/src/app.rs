@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use egui::TextureId;
@@ -35,6 +37,12 @@ pub struct OtdApp {
     pub drag: Option<DragState>,
     pub create_dialog: Option<CreateDialog>,
     pub show_perf: bool,
+    /// A second window showing only the viewer output — the projector feed.
+    pub output_window: bool,
+    pub output_fullscreen: bool,
+    /// Set from inside the output viewport when the user closes it. The
+    /// viewport callback is `'static` and cannot reach `self`.
+    output_closed: Arc<AtomicBool>,
 
     thumbs: HashMap<NodeId, (TextureId, u64)>,
     /// Nodes that were on screen last frame — the visible cook roots.
@@ -84,51 +92,35 @@ impl OtdApp {
             drag: None,
             create_dialog: None,
             show_perf: true,
+            output_window: false,
+            output_fullscreen: false,
+            output_closed: Arc::new(AtomicBool::new(false)),
             thumbs: HashMap::new(),
             visible: Vec::new(),
             project_path: None,
             status: String::new(),
             cook_error: None,
         };
-        app.load_starter_patch();
+        app.load_demo("starter");
         Ok(app)
     }
 
-    /// The Phase 0 exit criterion, as the thing you see when you launch:
-    /// Noise -> Level -> Null, animated, live.
-    fn load_starter_patch(&mut self) {
-        let root = self.graph.root();
-        let noise = self
-            .graph
-            .create(root, self.registry.get("noiseTOP").unwrap(), None)
-            .unwrap();
-        let level = self
-            .graph
-            .create(root, self.registry.get("levelTOP").unwrap(), None)
-            .unwrap();
-        let out = self
-            .graph
-            .create(root, self.registry.get("nullTOP").unwrap(), None)
-            .unwrap();
-        self.graph.connect(noise, level, 0).unwrap();
-        self.graph.connect(level, out, 0).unwrap();
-
-        self.graph.node_mut_quiet(noise).pos = [-360.0, -60.0];
-        self.graph.node_mut_quiet(level).pos = [-100.0, -60.0];
-        self.graph.node_mut_quiet(out).pos = [160.0, -60.0];
-
-        // An expression on Translate is what makes the branch time dependent,
-        // and therefore what makes it re-cook every frame.
-        self.graph
-            .set_expression(noise, "translate", "absTime * 0.15")
-            .unwrap();
-        self.graph
-            .set_expression(level, "contrast", "1.5 + sin(absTime) * 0.5")
-            .unwrap();
-
-        self.selected = Some(noise);
+    /// Load one of the built-in patches (see `otd_gpu::demo`). The editor
+    /// opens on `starter`, which is the Phase 0 exit criterion made visible.
+    pub fn load_demo(&mut self, name: &str) {
+        let Some((graph, out)) = otd_gpu::demo::by_name(name, &self.registry) else {
+            self.status = format!("no built-in patch called `{name}`");
+            return;
+        };
+        self.graph = graph;
+        self.top.reset();
+        self.cook.reset();
+        self.thumbs.clear();
+        self.project_path = None;
+        self.time = CookContext::default();
         self.viewer = Some(out);
-        self.status = "New project".into();
+        self.selected = self.graph.walk().into_iter().nth(1);
+        self.status = format!("{name} patch");
     }
 
     // -------------------------------------------------------------- cooking
@@ -305,13 +297,7 @@ impl OtdApp {
     }
 
     pub fn new_project(&mut self) {
-        self.graph = Graph::new();
-        self.top.reset();
-        self.cook.reset();
-        self.thumbs.clear();
-        self.project_path = None;
-        self.time = CookContext::default();
-        self.load_starter_patch();
+        self.load_demo("starter");
     }
 }
 
@@ -324,6 +310,7 @@ impl eframe::App for OtdApp {
         self.top_bar(ui);
         self.side_panel(ui);
         crate::canvas::show(self, ui);
+        self.output_viewport(ui.ctx());
 
         // A realtime tool repaints continuously; there is always time moving.
         ui.ctx().request_repaint();
@@ -352,6 +339,15 @@ impl OtdApp {
                         self.save(None);
                         ui.close();
                     }
+                    ui.separator();
+                    ui.menu_button("Examples", |ui| {
+                        for name in otd_gpu::demo::NAMES {
+                            if ui.button(*name).clicked() {
+                                self.load_demo(name);
+                                ui.close();
+                            }
+                        }
+                    });
                 });
 
                 ui.separator();
@@ -368,6 +364,13 @@ impl OtdApp {
                     "frame {}   {:.2}s",
                     self.time.frame, self.time.abs_time
                 ));
+
+                ui.separator();
+                ui.toggle_value(&mut self.output_window, "Output")
+                    .on_hover_text("Open a second window showing only the viewer");
+                if self.output_window {
+                    ui.toggle_value(&mut self.output_fullscreen, "Fullscreen");
+                }
 
                 ui.separator();
                 ui.label(format!("{:.0} fps", self.smoothed_fps));
@@ -390,6 +393,61 @@ impl OtdApp {
                 });
             });
         });
+    }
+
+    /// The output window: a second OS window showing only the viewer TOP,
+    /// which is what gets dragged onto a projector (PLAN.md Phase 1).
+    fn output_viewport(&mut self, ctx: &egui::Context) {
+        if self.output_closed.swap(false, Ordering::Relaxed) {
+            self.output_window = false;
+        }
+        if !self.output_window {
+            return;
+        }
+        let tex = self
+            .viewer
+            .filter(|v| self.graph.contains(*v))
+            .and_then(|v| self.thumbnail(v));
+        let closed = self.output_closed.clone();
+        let builder = egui::ViewportBuilder::default()
+            .with_title("OpenTouchDesigner — Output")
+            .with_inner_size([1280.0, 720.0])
+            .with_fullscreen(self.output_fullscreen);
+
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("otd-output"),
+            builder,
+            move |ui, _class| {
+                egui::CentralPanel::no_frame()
+                    .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+                    .show(ui, |ui| {
+                        if let Some((tid, size)) = tex {
+                            // Letterbox rather than stretch: a show output
+                            // with the wrong aspect ratio is worse than bars.
+                            let avail = ui.available_size();
+                            let aspect = size[0] as f32 / size[1].max(1) as f32;
+                            let (mut w, mut h) = (avail.x, avail.x / aspect);
+                            if h > avail.y {
+                                h = avail.y;
+                                w = h * aspect;
+                            }
+                            let rect = egui::Rect::from_center_size(
+                                ui.max_rect().center(),
+                                egui::vec2(w, h),
+                            );
+                            ui.painter().image(
+                                tid,
+                                rect,
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    });
+                if ui.ctx().input(|i| i.viewport().close_requested()) {
+                    closed.store(true, Ordering::Relaxed);
+                }
+            },
+        );
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui) {

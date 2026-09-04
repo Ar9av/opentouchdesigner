@@ -72,11 +72,22 @@ pub fn registry() -> OpRegistry {
 #[derive(Default)]
 pub struct CountingCooker {
     pub log: Vec<String>,
+    /// `(node, target)` pairs reported as non-wire dependencies, standing in
+    /// for a Select TOP's Target parameter.
+    pub references: Vec<(NodeId, NodeId)>,
 }
 
 impl Cooker for CountingCooker {
     fn cook(&mut self, graph: &Graph, id: NodeId, _ctx: &CookContext) -> Result<(), CookError> {
         self.log.push(graph.path(id));
         Ok(())
+    }
+
+    fn extra_inputs(&self, _graph: &Graph, id: NodeId) -> Vec<NodeId> {
+        self.references
+            .iter()
+            .filter(|(from, _)| *from == id)
+            .map(|(_, to)| *to)
+            .collect()
     }
 }

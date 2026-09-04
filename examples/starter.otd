@@ -6,6 +6,7 @@
     (
       path: "/level1",
       op: "levelTOP",
+      pos: (-100.0, -60.0),
       inputs: [
         "/noise1",
       ],
@@ -20,6 +21,7 @@
     (
       path: "/noise1",
       op: "noiseTOP",
+      pos: (-360.0, -60.0),
       params: {
         "translate": (
           value: Vec3((0.0, 0.0, 0.0)),
@@ -31,6 +33,7 @@
     (
       path: "/null1",
       op: "nullTOP",
+      pos: (160.0, -60.0),
       inputs: [
         "/level1",
       ],

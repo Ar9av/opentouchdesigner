@@ -13,7 +13,7 @@ otd-core = { version = "0.1.0", path = "../otd-core" }
 pollster = "1.0.1"
 slotmap = "1.1.1"
 thiserror = "2.0.19"
-wgpu = "29"
+wgpu = { version = "29", features = ["glsl"] }
 
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
