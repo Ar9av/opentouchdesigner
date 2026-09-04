@@ -993,6 +993,8 @@ Playback is a function of the timeline, not a private play head: the frame shown
 
 The picture's own size wins: `Fallback W`/`H` is only what to show before the first frame arrives, or if the file cannot be read.
 
+`Speed` tracks the timeline exactly at 1× and 2×. Past that it falls behind, and the reason is the transport rather than the decoder: frames cross a pipe as raw RGBA, so 1138×640 is 2.9 MB each, and asking for 8× is asking for well over a gigabyte a second through it. Scrubbing is unaffected — a jump seeks rather than races.
+
 *No inputs — this is a generator.*
 
 *Time dependent: cooks every frame, and everything downstream of it does too.*

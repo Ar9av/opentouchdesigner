@@ -270,6 +270,20 @@ pub struct Source {
     /// Bumped whenever a different frame is adopted, so the engine uploads
     /// to the GPU only when there is something new to upload.
     pub revision: u64,
+    /// A forward seek has been issued and the new stream has not produced a
+    /// frame yet.
+    ///
+    /// Starting an ffmpeg costs about a tenth of a second, and asking for
+    /// playback faster than the machine decodes means the playhead has run on
+    /// again by the time it is ready — so the next cook seeks again, killing
+    /// the process that was about to deliver. Repeat, and the picture sticks
+    /// on whatever frame arrived last: at speed 20 it froze ten seconds in.
+    ///
+    /// Counting cooks was the wrong lever, because `otd render` runs flat out
+    /// and twenty-four of its cooks can be less than one process start. What
+    /// matters is not how long it has been but whether the last seek has
+    /// *landed*, which is this.
+    awaiting_seek: bool,
     /// Set by a worker that could not do its job, and read by the cook.
     problem: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -311,6 +325,7 @@ impl Source {
             current: -1,
             frame: None,
             revision: 0,
+            awaiting_seek: false,
             problem,
         }
     }
@@ -325,6 +340,7 @@ impl Source {
             current: -1,
             frame: None,
             revision: 0,
+            awaiting_seek: false,
             problem: Default::default(),
         };
         source.reader = Some(source.spawn_file(path, start_index)?);
@@ -386,6 +402,7 @@ impl Source {
             current: -1,
             frame: None,
             revision: 0,
+            awaiting_seek: false,
             problem,
         })
     }
@@ -443,6 +460,8 @@ impl Source {
         }
 
         if adopted {
+            // Whatever we were waiting for has arrived.
+            self.awaiting_seek = false;
             self.revision += 1;
             if self.info.width == 0 {
                 if let Some(f) = &self.frame {
@@ -454,13 +473,19 @@ impl Source {
 
         // A file whose playhead moved backwards, or jumped far ahead, is
         // cheaper to re-open at the new time than to decode up to.
-        if !self.live
-            && self.info.fps > 0.0
-            && (wanted < self.current || wanted > self.current + SEEK_AHEAD_LIMIT)
-        {
-            if let Ok(reader) = self.spawn_file(path, wanted.max(0)) {
-                self.reader = Some(reader);
-                self.current = wanted.max(0) - 1;
+        if !self.live && self.info.fps > 0.0 {
+            let backwards = wanted < self.current;
+            let far_ahead = wanted > self.current + SEEK_AHEAD_LIMIT;
+            // A backward jump is somebody scrubbing and must feel immediate,
+            // so it preempts a pending seek. A forward one waits for the last
+            // seek to land, or playback faster than this machine decodes
+            // spends all its time starting processes it then kills.
+            if backwards || (far_ahead && !self.awaiting_seek) {
+                if let Ok(reader) = self.spawn_file(path, wanted.max(0)) {
+                    self.reader = Some(reader);
+                    self.current = wanted.max(0) - 1;
+                    self.awaiting_seek = true;
+                }
             }
         }
 
