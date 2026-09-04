@@ -63,6 +63,34 @@ const NOTES: &[(&str, &str)] = &[
          extrapolating.",
     ),
     (
+        "moviefileinTOP",
+        "Still images — PNG, JPEG, WebP, BMP, TGA, TIFF — are decoded \
+         in-process, with no external tool involved. Everything that moves \
+         goes through an `ffmpeg` subprocess, so mp4, mov, mkv, webm, avi and \
+         animated GIF all play if ffmpeg is on the PATH, and the node says so \
+         plainly if it is not.\n\n\
+         Playback is a function of the timeline, not a private play head: the \
+         frame shown at time `t` is always the file at `t × speed`. Scrubbing \
+         the timeline scrubs the movie, the loop range loops it, and a \
+         headless `otd render` writes exactly the frames the editor showed. \
+         Seeking backwards restarts the decode at the new time, which is why \
+         a scrub is a real scrub rather than a rewind.\n\n\
+         The picture's own size wins: `Fallback W`/`H` is only what to show \
+         before the first frame arrives, or if the file cannot be read.",
+    ),
+    (
+        "videodeviceinTOP",
+        "A camera, through ffmpeg. `Requested W`/`H` and the frame rate are \
+         requests rather than commands — a capture device only does the modes \
+         it does — so they are negotiated to the nearest mode the device \
+         actually reports, and the node shows what the device said if none \
+         will work.\n\n\
+         On macOS the first use raises the system camera-permission prompt, \
+         and nothing arrives until it is granted. The picture is always the \
+         newest frame decoded, so latency stays at about one frame; pausing \
+         the timeline pauses this like everything else in the network.",
+    ),
+    (
         "audiofileinCHOP",
         "Plays RIFF/WAVE — PCM in 8, 16, 24 or 32 bits, or 32-bit float — \
          which is what a DAW bounces. Compressed formats wait for the video \

@@ -74,6 +74,11 @@ pub struct Param {
     /// is a dependency exactly like a wire.
     #[serde(skip)]
     path_ref: bool,
+    /// This parameter's value is a path to a file on disk — a movie, an
+    /// image, an audio stem. Not a cook dependency, but an *export*
+    /// dependency: a bundle has to bring it along.
+    #[serde(skip)]
+    file_ref: bool,
 }
 
 /// Pull operator paths out of an expression.
@@ -153,6 +158,7 @@ impl Param {
             refs: Vec::new(),
             script: false,
             path_ref: false,
+            file_ref: false,
         }
     }
 
@@ -167,6 +173,21 @@ impl Param {
 
     pub fn is_path_ref(&self) -> bool {
         self.path_ref
+    }
+
+    /// Mark this parameter as naming a file on disk.
+    ///
+    /// Nothing about cooking changes; this is what lets an export find the
+    /// media a project depends on. A show file that copies its components but
+    /// leaves the movie behind is a file that will be missing at 8pm, which is
+    /// the whole reason bundles exist.
+    pub fn as_file_ref(mut self) -> Self {
+        self.file_ref = true;
+        self
+    }
+
+    pub fn is_file_ref(&self) -> bool {
+        self.file_ref
     }
 
     /// Mark this parameter as holding script source. Operator paths quoted

@@ -328,9 +328,10 @@ impl OtdApp {
         match otd_core::bundle::export(&self.graph, &self.registry, self.time.fps, &dir, &name) {
             Ok(bundle) => {
                 self.status = format!(
-                    "Exported {} — {} component(s){}",
+                    "Exported {} — {} component(s), {} media file(s){}",
                     bundle.project.display(),
                     bundle.components.len(),
+                    bundle.media.len(),
                     if bundle.missing.is_empty() {
                         String::new()
                     } else {

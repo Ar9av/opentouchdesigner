@@ -322,6 +322,35 @@ pub const CACHE: &str = "cacheTOP";
 pub const GLSL: &str = "glslTOP";
 /// Draws the 3D scene. Special-cased by the engine, which owns the pipeline.
 pub const RENDER: &str = "renderTOP";
+/// Plays an image or a movie. Special-cased by the engine, which owns the
+/// decoder threads and the upload.
+pub const MOVIE_IN: &str = "moviefileinTOP";
+/// A camera. Same decoder, a different ffmpeg input.
+pub const VIDEO_DEVICE_IN: &str = "videodeviceinTOP";
+
+fn params_movie_in() -> IndexMap<String, Param> {
+    params! {
+        "file" => Param::str("").with_label("File").as_file_ref(),
+        "play" => Param::menu("loop", &["loop", "once", "hold"]).with_label("Play"),
+        "speed" => Param::float(1.0).with_label("Speed").with_range(-4.0, 4.0),
+        // Not a resolution: the picture's own size wins. This is what to
+        // show before the first frame arrives, and if the file is missing.
+        "resw" => Param::int(1280).with_label("Fallback W").with_range(1.0, 16384.0),
+        "resh" => Param::int(720).with_label("Fallback H").with_range(1.0, 16384.0),
+    }
+}
+
+fn params_video_device_in() -> IndexMap<String, Param> {
+    params! {
+        "device" => Param::str("").with_label("Device (blank = default)"),
+        // Requested, not commanded: a camera only does the modes it does, so
+        // these are negotiated to the nearest one the device reports.
+        "resw" => Param::int(1280).with_label("Requested W").with_range(1.0, 16384.0),
+        "resh" => Param::int(720).with_label("Requested H").with_range(1.0, 16384.0),
+        "fps" => Param::float(30.0).with_label("Requested Frame Rate").with_range(1.0, 240.0),
+        "active" => Param::bool(true).with_label("Active"),
+    }
+}
 
 fn params_render() -> IndexMap<String, Param> {
     with_res(params! {
@@ -524,6 +553,44 @@ fn specs() -> &'static Vec<TopSpec> {
                 two_pass: false,
                 dynamic_shader: false,
                 pack: pack_ramp,
+            },
+            // The engine special-cases both of these: their pixels come from
+            // a decoder thread rather than from a shader, and their size
+            // comes from the picture rather than from a parameter. The Null
+            // shader is what copies the uploaded frame into the output.
+            TopSpec {
+                def: OpDef {
+                    type_name: MOVIE_IN,
+                    label: "Movie File In",
+                    family: Family::Top,
+                    inputs: &[],
+                    summary: "Plays an image or a movie file.",
+                    time_dependent: true,
+                    params: params_movie_in,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
+            },
+            TopSpec {
+                def: OpDef {
+                    type_name: VIDEO_DEVICE_IN,
+                    label: "Video Device In",
+                    family: Family::Top,
+                    inputs: &[],
+                    summary: "Frames from a camera or capture device.",
+                    time_dependent: true,
+                    params: params_video_device_in,
+                    connector: Connector::None,
+                },
+                shader: include_str!("shaders/null.wgsl"),
+                sizing: Sizing::Params,
+                two_pass: false,
+                dynamic_shader: false,
+                pack: pack_none,
             },
             TopSpec {
                 def: OpDef {

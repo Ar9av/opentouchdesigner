@@ -224,6 +224,9 @@ impl Engines {
         if let Some(err) = self.top.shader_error(id) {
             return Some(err.to_string());
         }
+        if let Some(status) = self.top.status(id) {
+            return Some(status.to_string());
+        }
         let path = graph.path(id);
         self.chop
             .status(&path)

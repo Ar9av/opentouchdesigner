@@ -315,12 +315,13 @@ fn bundle(args: &Args) -> Result<(), String> {
     let out = otd_core::bundle::export(&graph, &registry, fps, &args.out, &name)
         .map_err(|e| format!("{}: {e}", args.out.display()))?;
     println!(
-        "{}  ({} component(s))",
+        "{}  ({} component(s), {} media file(s))",
         out.project.display(),
-        out.components.len()
+        out.components.len(),
+        out.media.len()
     );
     for (path, file, reason) in &out.missing {
-        eprintln!("missing component — {path} refers to `{file}`: {reason}");
+        eprintln!("missing — {path} refers to `{file}`: {reason}");
     }
     // A bundle with a missing component will fail on the show machine. Better
     // to fail here, where somebody is watching.
