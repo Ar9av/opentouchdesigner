@@ -12,10 +12,13 @@
 
 pub mod demo;
 
+use std::cell::RefCell;
+
 use otd_chop::InputState;
 use otd_chop::engine::{ChannelStore, ChopEngine, Network};
-use otd_core::{CookContext, CookError, Cooker, Family, Graph, NodeId, OpRegistry};
+use otd_core::{ChannelSource, CookContext, CookError, Cooker, Family, Graph, NodeId, OpRegistry};
 use otd_gpu::{GpuContext, TopEngine};
+use otd_py::PyEngine;
 
 pub use otd_chop::{Channel, ChopData};
 
@@ -28,11 +31,49 @@ pub fn registry() -> OpRegistry {
     r
 }
 
+/// The network plus the interpreter: everything a parameter can read.
+///
+/// `otd-chop`'s `Network` answers channel and parameter lookups; this adds
+/// the Python fallback for expressions the built-in language cannot parse.
+/// The interpreter is behind a `RefCell` because compiling caches, and a
+/// parameter evaluation is a `&self` call all the way down.
+struct FullNetwork<'a> {
+    chops: Network<'a>,
+    python: &'a RefCell<PyEngine>,
+}
+
+impl otd_core::ChannelSource for FullNetwork<'_> {
+    fn channel(&self, op_path: &str, channel: &str) -> Option<f32> {
+        self.chops.channel(op_path, channel)
+    }
+    fn param_value(&self, op_path: &str, param: &str) -> Option<otd_core::Value> {
+        self.chops.param_value(op_path, param)
+    }
+    fn parent_param(&self, node_path: &str, param: &str) -> Option<otd_core::Value> {
+        self.chops.parent_param(node_path, param)
+    }
+    fn eval_python(
+        &self,
+        source: &str,
+        ctx: &otd_core::EvalContext,
+        path: &str,
+    ) -> Option<Result<otd_core::Value, String>> {
+        // A re-entrant evaluation — Python reading a parameter that is itself
+        // Python — would deadlock on the RefCell. Refusing is the honest
+        // outcome, and the parameter falls back to its constant.
+        let mut py = self.python.try_borrow_mut().ok()?;
+        Some(py.eval(source, ctx, path))
+    }
+}
+
 pub struct Engines {
     pub top: TopEngine,
     pub chop: ChopEngine,
     /// Cooked channels, owned here — see the module docs.
     pub channels: ChannelStore,
+    /// The embedded interpreter. Started once; a machine where it cannot
+    /// start still opens projects, with Python expressions reporting why.
+    pub python: RefCell<PyEngine>,
 }
 
 impl Engines {
@@ -41,6 +82,7 @@ impl Engines {
             top: TopEngine::new(gpu),
             chop: ChopEngine::new(),
             channels: ChannelStore::new(),
+            python: RefCell::new(PyEngine::new()),
         }
     }
 
@@ -63,7 +105,6 @@ impl Engines {
 
     /// The value a parameter would read if it exported from this channel.
     pub fn channel_value(&self, graph: &Graph, path: &str, channel: &str) -> Option<f32> {
-        use otd_core::ChannelSource;
         Network {
             graph,
             chops: &self.channels,
@@ -71,9 +112,36 @@ impl Engines {
         .channel(path, channel)
     }
 
+    /// Evaluate a parameter the way the cook would, for the editor's display.
+    pub fn eval_param(
+        &self,
+        graph: &Graph,
+        id: NodeId,
+        key: &str,
+        ctx: &CookContext,
+    ) -> Option<otd_core::Value> {
+        let path = graph.path(id);
+        let net = FullNetwork {
+            chops: Network {
+                graph,
+                chops: &self.channels,
+            },
+            python: &self.python,
+        };
+        let eval = otd_core::EvalContext {
+            path: Some(&path),
+            ..ctx.eval_ctx_with(&net)
+        };
+        Some(graph.get(id)?.param(key)?.eval(&eval))
+    }
+
+    /// Why Python is unavailable, if it is.
+    pub fn python_error(&self) -> Option<String> {
+        self.python.borrow().startup_error.clone()
+    }
+
     /// The value a parameter would read if it were bound to this one.
     pub fn param_value(&self, graph: &Graph, path: &str, param: &str) -> Option<otd_core::Value> {
-        use otd_core::ChannelSource;
         Network {
             graph,
             chops: &self.channels,
@@ -115,14 +183,18 @@ impl Cooker for Engines {
             top,
             chop,
             channels,
+            python,
         } = self;
 
         match family {
             Family::Chop => {
                 let data = {
-                    let net = Network {
-                        graph,
-                        chops: channels,
+                    let net = FullNetwork {
+                        chops: Network {
+                            graph,
+                            chops: channels,
+                        },
+                        python,
                     };
                     let eval = ctx.eval_ctx_with(&net);
                     chop.cook_node(graph, id, ctx, &eval, channels)?
@@ -131,9 +203,12 @@ impl Cooker for Engines {
                 Ok(())
             }
             Family::Top => {
-                let net = Network {
-                    graph,
-                    chops: channels,
+                let net = FullNetwork {
+                    chops: Network {
+                        graph,
+                        chops: channels,
+                    },
+                    python,
                 };
                 let eval = ctx.eval_ctx_with(&net);
                 top.cook_node(graph, id, ctx, &eval)

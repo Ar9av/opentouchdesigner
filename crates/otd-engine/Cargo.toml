@@ -10,6 +10,7 @@ rust-version.workspace = true
 otd-chop = { version = "0.1.0", path = "../otd-chop" }
 otd-core = { version = "0.1.0", path = "../otd-core" }
 otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
+otd-py = { version = "0.1.0", path = "../otd-py" }
 
 [dev-dependencies]
 image = { version = "0.25.9", default-features = false, features = ["png"] }

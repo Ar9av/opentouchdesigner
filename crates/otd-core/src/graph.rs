@@ -154,7 +154,7 @@ impl Node {
     /// sources. The cook engine turns these into dependencies so the source
     /// cooks first and its animation propagates here.
     pub fn param_sources(&self) -> impl Iterator<Item = &str> {
-        self.params.values().filter_map(|p| p.source_op())
+        self.params.values().flat_map(|p| p.referenced_ops())
     }
 
     /// True when some parameter reads a custom parameter on the enclosing
