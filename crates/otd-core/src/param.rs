@@ -46,6 +46,12 @@ pub struct Param {
     /// Menu entries, if this parameter is a menu.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub menu: Option<Vec<String>>,
+    /// Added by the author rather than by the operator definition. Custom
+    /// parameters on a component are that component's API (PLAN.md §2.3), so
+    /// they are written to the project file in full — nothing else knows they
+    /// exist.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub custom: bool,
 
     #[serde(skip)]
     compiled: Option<Expr>,
@@ -55,6 +61,10 @@ pub struct Param {
 
 fn is_default_mode(m: &ParamMode) -> bool {
     *m == ParamMode::Constant
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Param {
@@ -67,9 +77,16 @@ impl Param {
             source: String::new(),
             range: None,
             menu: None,
+            custom: false,
             compiled: None,
             error: None,
         }
+    }
+
+    /// Mark this as an author-defined parameter on a component.
+    pub fn as_custom(mut self) -> Self {
+        self.custom = true;
+        self
     }
 
     pub fn with_label(mut self, label: &str) -> Self {

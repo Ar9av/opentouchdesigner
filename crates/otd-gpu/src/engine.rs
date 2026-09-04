@@ -656,6 +656,12 @@ impl TopEngine {
     ) -> Result<(), CookError> {
         let node = graph.get(id).ok_or(CookError::NoSuchNode)?;
         let path = graph.path(id);
+        // Parameters are evaluated knowing where they live, so `parent.x`
+        // resolves against the right component.
+        let eval = &EvalContext {
+            path: Some(&path),
+            ..*eval
+        };
 
         // COMPs hold sub-networks; they have no texture of their own yet.
         if node.family != otd_core::Family::Top {

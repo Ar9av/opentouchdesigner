@@ -101,7 +101,11 @@ impl Project {
                     .and_then(|d| d.get(key))
                     .map(|d| param_matches_default(param, d))
                     .unwrap_or(false);
-                if !is_default {
+                // A custom parameter has no operator definition behind it, so
+                // it is written in full — it *is* the definition.
+                if param.custom {
+                    params.insert(key.clone(), param.clone());
+                } else if !is_default {
                     // Labels, ranges and menus belong to the operator
                     // definition, not to the project. Writing them would put
                     // UI metadata in every diff and make an operator's
@@ -183,6 +187,14 @@ impl Project {
                 node.pos = [entry.pos.0, entry.pos.1];
                 node.flags = entry.flags;
                 for (key, saved) in &entry.params {
+                    // A custom parameter exists only in the file; restore it
+                    // whole, including its type, label and range.
+                    if saved.custom {
+                        let mut saved = saved.clone();
+                        saved.recompile();
+                        node.params.insert(key.clone(), saved);
+                        continue;
+                    }
                     if let Some(slot) = node.params.get_mut(key) {
                         let mut saved = saved.clone();
                         // Keep the operator's declared type authoritative;

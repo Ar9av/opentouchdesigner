@@ -61,6 +61,7 @@ impl CookContext {
             abs_time: self.abs_time,
             fps: self.fps,
             channels: None,
+            path: None,
         }
     }
 
@@ -247,6 +248,17 @@ impl CookEngine {
             param_sources.extend(graph.connector_ops(id, crate::graph::Connector::Out));
         }
 
+        // An operator reading `parent.speed` inherits its component's
+        // dependencies — but not the component itself, which would be a cycle
+        // (the component already depends on the Out operator inside it).
+        let mut parent_animated = false;
+        if node.references_parent() {
+            if let Some(parent) = node.parent.and_then(|p| graph.get(p)) {
+                parent_animated = parent.has_time_dependent_param();
+                param_sources.extend(parent.param_sources().filter_map(|p| graph.find(p)));
+            }
+        }
+
         // Non-wire dependencies (a Select TOP's target, a parameter's Export
         // source) are pulled and versioned exactly like wired inputs, so they
         // dirty and animate this node the same way.
@@ -267,7 +279,7 @@ impl CookEngine {
         }
 
         let self_time_dependent =
-            node.intrinsically_time_dependent || node.has_time_dependent_param();
+            node.intrinsically_time_dependent || node.has_time_dependent_param() || parent_animated;
         let time_dependent = self_time_dependent || inputs_time_dependent;
 
         // Every recursive pull for this node is done; it is no longer on the

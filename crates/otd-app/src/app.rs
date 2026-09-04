@@ -50,6 +50,9 @@ pub struct OtdApp {
 
     /// Mouse and keyboard, sampled each frame for the input CHOPs.
     pub input_state: otd_chop::InputState,
+    /// Draft state for the "add a component parameter" row.
+    pub new_param_name: String,
+    pub new_param_type: String,
 
     thumbs: HashMap<NodeId, (TextureId, u64)>,
     /// Nodes that were on screen last frame — the visible cook roots.
@@ -104,6 +107,8 @@ impl OtdApp {
             output_fullscreen: false,
             output_closed: Arc::new(AtomicBool::new(false)),
             input_state: otd_chop::InputState::default(),
+            new_param_name: String::new(),
+            new_param_type: "float".to_string(),
             thumbs: HashMap::new(),
             visible: Vec::new(),
             project_path: None,
