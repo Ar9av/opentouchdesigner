@@ -1,0 +1,236 @@
+(
+  format: "opentouchdesigner-project",
+  version: 1,
+  fps: 60.0,
+  nodes: [
+    (
+      path: "/audioin1",
+      op: "audiodeviceinCHOP",
+      pos: (-760.0, 120.0),
+    ),
+    (
+      path: "/bass",
+      op: "selectCHOP",
+      pos: (-220.0, 60.0),
+      inputs: [
+        "/lag1",
+      ],
+      params: {
+        "channels": (
+          value: Str("band1"),
+        ),
+        "rename": (
+          value: Str("bass"),
+        ),
+      },
+    ),
+    (
+      path: "/high",
+      op: "selectCHOP",
+      pos: (-220.0, 200.0),
+      inputs: [
+        "/lag1",
+      ],
+      params: {
+        "channels": (
+          value: Str("band4"),
+        ),
+        "rename": (
+          value: Str("high"),
+        ),
+      },
+    ),
+    (
+      path: "/kick",
+      op: "selectCHOP",
+      pos: (-580.0, 340.0),
+      inputs: [
+        "/midiin1",
+      ],
+      params: {
+        "channels": (
+          value: Str("n36"),
+        ),
+      },
+    ),
+    (
+      path: "/lag1",
+      op: "lagCHOP",
+      pos: (-400.0, 120.0),
+      inputs: [
+        "/spectrum1",
+      ],
+      params: {
+        "lagup": (
+          value: Float(0.01),
+        ),
+        "lagdown": (
+          value: Float(0.25),
+        ),
+      },
+    ),
+    (
+      path: "/level1",
+      op: "levelTOP",
+      pos: (-180.0, -180.0),
+      inputs: [
+        "/noise1",
+      ],
+      params: {
+        "brightness": (
+          value: Float(1.0),
+          mode: Export,
+          source: "/math_high:high",
+        ),
+      },
+    ),
+    (
+      path: "/math_bass",
+      op: "mathCHOP",
+      pos: (-40.0, 60.0),
+      inputs: [
+        "/bass",
+      ],
+      params: {
+        "gain": (
+          value: Float(-0.35),
+        ),
+        "offset": (
+          value: Float(0.45),
+        ),
+        "clamp": (
+          value: Bool(true),
+        ),
+        "clampmin": (
+          value: Float(0.05),
+        ),
+        "clampmax": (
+          value: Float(0.5),
+        ),
+      },
+    ),
+    (
+      path: "/math_high",
+      op: "mathCHOP",
+      pos: (-40.0, 200.0),
+      inputs: [
+        "/high",
+      ],
+      params: {
+        "gain": (
+          value: Float(3.0),
+        ),
+        "offset": (
+          value: Float(0.8),
+        ),
+        "clamp": (
+          value: Bool(true),
+        ),
+        "clampmin": (
+          value: Float(0.5),
+        ),
+        "clampmax": (
+          value: Float(4.0),
+        ),
+      },
+    ),
+    (
+      path: "/math_kick",
+      op: "mathCHOP",
+      pos: (-220.0, 340.0),
+      inputs: [
+        "/trigger1",
+      ],
+      params: {
+        "gain": (
+          value: Float(30.0),
+        ),
+      },
+    ),
+    (
+      path: "/midiin1",
+      op: "midiinCHOP",
+      pos: (-760.0, 340.0),
+      params: {
+        "notes": (
+          value: Str("36 38 42"),
+        ),
+      },
+    ),
+    (
+      path: "/noise1",
+      op: "noiseTOP",
+      pos: (-400.0, -180.0),
+      params: {
+        "period": (
+          value: Float(0.25),
+          mode: Export,
+          source: "/math_bass:bass",
+        ),
+        "translate": (
+          value: Vec3((0.0, 0.0, 0.0)),
+          mode: Expression,
+          expression: "absTime * 0.05",
+        ),
+        "monochrome": (
+          value: Bool(false),
+        ),
+      },
+    ),
+    (
+      path: "/out1",
+      op: "nullTOP",
+      pos: (260.0, -180.0),
+      inputs: [
+        "/transform1",
+      ],
+    ),
+    (
+      path: "/spectrum1",
+      op: "audiospectrumCHOP",
+      pos: (-580.0, 120.0),
+      inputs: [
+        "/audioin1",
+      ],
+      params: {
+        "gain": (
+          value: Float(24.0),
+        ),
+      },
+    ),
+    (
+      path: "/transform1",
+      op: "transformTOP",
+      pos: (40.0, -180.0),
+      inputs: [
+        "/level1",
+      ],
+      params: {
+        "rotate": (
+          value: Float(0.0),
+          mode: Export,
+          source: "/math_kick:n36",
+        ),
+      },
+    ),
+    (
+      path: "/trigger1",
+      op: "triggerCHOP",
+      pos: (-400.0, 340.0),
+      inputs: [
+        "/kick",
+      ],
+      params: {
+        "threshold": (
+          value: Float(0.05),
+        ),
+        "attack": (
+          value: Float(0.01),
+        ),
+        "release": (
+          value: Float(0.4),
+        ),
+      },
+    ),
+  ],
+)

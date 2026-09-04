@@ -70,6 +70,7 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
         }
     });
 
+    channel_list(app, ui, id);
     ui.separator();
 
     let keys: Vec<String> = app.graph.node(id).params.keys().cloned().collect();
@@ -104,67 +105,129 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
             )
         };
 
+        // A driven parameter's *displayed* value has to come from the network,
+        // not from `Param::eval` with an empty context — otherwise the panel
+        // shows the constant underneath while the render shows the channel.
+        let evaluated = match mode {
+            ParamMode::Export => app.graph.node(id).params[&key]
+                .source_parts()
+                .and_then(|(op, ch)| app.engines.channel_value(&app.graph, op, ch))
+                .map(|v| value.coerce_from_f64(v as f64))
+                .unwrap_or(evaluated),
+            ParamMode::Bind => app.graph.node(id).params[&key]
+                .source_parts()
+                .and_then(|(op, p)| app.engines.param_value(&app.graph, op, p))
+                .filter(|v| v.same_type_as(&value))
+                .unwrap_or(evaluated),
+            _ => evaluated,
+        };
+
         let mut changed = false;
         let mut new_mode = mode;
+        let mut clear_source = false;
 
-        ui.horizontal(|ui| {
-            ui.add_sized([120.0, 18.0], egui::Label::new(&label).truncate());
-
-            // Mode button — the whole point of the panel.
-            let (glyph, tint) = match mode {
-                ParamMode::Constant => ("=", Color32::from_rgb(140, 142, 150)),
-                ParamMode::Expression => ("ƒ", Color32::from_rgb(150, 200, 255)),
-                ParamMode::Export => ("→", Color32::from_rgb(150, 220, 150)),
-                ParamMode::Bind => ("↔", Color32::from_rgb(220, 180, 120)),
-            };
-            let btn = ui
-                .add(
-                    egui::Button::new(RichText::new(glyph).color(tint))
-                        .min_size([20.0, 18.0].into()),
-                )
-                .on_hover_text("Constant / Expression");
-            if btn.clicked() {
-                new_mode = match mode {
-                    ParamMode::Constant => ParamMode::Expression,
-                    _ => ParamMode::Constant,
-                };
-                changed = true;
-            }
-
-            if mode == ParamMode::Expression {
-                if ui.text_edit_singleline(&mut expression).changed() {
-                    changed = true;
-                    new_mode = ParamMode::Expression;
-                }
-            } else {
-                changed |= value_widget(ui, &key, &mut value, range, menu.as_deref());
-            }
-        });
-
-        if mode == ParamMode::Expression {
+        // The whole row is a drop zone: dragging a channel here exports it.
+        let (_, dropped) = ui.dnd_drop_zone::<ChannelDrag, _>(egui::Frame::NONE, |ui| {
             ui.horizontal(|ui| {
-                ui.add_space(126.0);
-                match &error {
-                    Some(e) => {
-                        ui.colored_label(
-                            Color32::from_rgb(230, 120, 120),
-                            RichText::new(e).small(),
+                ui.add_sized([120.0, 18.0], egui::Label::new(&label).truncate());
+
+                // Mode button — the whole point of the panel.
+                let (glyph, tint) = match mode {
+                    ParamMode::Constant => ("=", Color32::from_rgb(140, 142, 150)),
+                    ParamMode::Expression => ("ƒ", Color32::from_rgb(150, 200, 255)),
+                    ParamMode::Export => ("→", Color32::from_rgb(150, 220, 150)),
+                    ParamMode::Bind => ("↔", Color32::from_rgb(220, 180, 120)),
+                };
+                let btn = ui
+                    .add(
+                        egui::Button::new(RichText::new(glyph).color(tint))
+                            .min_size([20.0, 18.0].into()),
+                    )
+                    .on_hover_text(match mode {
+                        ParamMode::Export => "Exported from a CHOP channel — click to release",
+                        ParamMode::Bind => "Bound to another parameter — click to release",
+                        _ => "Constant / Expression",
+                    });
+                if btn.clicked() {
+                    new_mode = match mode {
+                        ParamMode::Constant => ParamMode::Expression,
+                        ParamMode::Expression => ParamMode::Constant,
+                        // Releasing a driven parameter keeps whatever value it
+                        // was showing, so the picture does not jump.
+                        _ => {
+                            clear_source = true;
+                            value = evaluated.clone();
+                            ParamMode::Constant
+                        }
+                    };
+                    changed = true;
+                }
+
+                match mode {
+                    ParamMode::Expression => {
+                        if ui.text_edit_singleline(&mut expression).changed() {
+                            changed = true;
+                            new_mode = ParamMode::Expression;
+                        }
+                    }
+                    ParamMode::Export | ParamMode::Bind => {
+                        ui.label(
+                            RichText::new(format_value(&evaluated))
+                                .monospace()
+                                .color(Color32::from_rgb(150, 220, 150)),
                         );
                     }
-                    None => {
-                        ui.label(
-                            RichText::new(format!("= {}", format_value(&evaluated)))
-                                .weak()
-                                .small(),
-                        );
+                    ParamMode::Constant => {
+                        changed |= value_widget(ui, &key, &mut value, range, menu.as_deref());
                     }
                 }
             });
+        });
+
+        if let Some(drag) = dropped {
+            let p = app.graph.node_mut(id).params.get_mut(&key).unwrap();
+            p.set_export(&drag.op_path, &drag.channel);
+            app.status = format!("{label} ← {}:{}", drag.op_path, drag.channel);
+            continue;
+        }
+
+        match mode {
+            ParamMode::Expression => {
+                ui.horizontal(|ui| {
+                    ui.add_space(126.0);
+                    match &error {
+                        Some(e) => {
+                            ui.colored_label(
+                                Color32::from_rgb(230, 120, 120),
+                                RichText::new(e).small(),
+                            );
+                        }
+                        None => {
+                            ui.label(
+                                RichText::new(format!("= {}", format_value(&evaluated)))
+                                    .weak()
+                                    .small(),
+                            );
+                        }
+                    }
+                });
+            }
+            ParamMode::Export | ParamMode::Bind => {
+                ui.horizontal(|ui| {
+                    ui.add_space(126.0);
+                    let source = app.graph.node(id).params[&key].source.clone();
+                    ui.label(RichText::new(source).weak().small().monospace());
+                });
+            }
+            ParamMode::Constant => {}
         }
 
         if changed {
             let node = app.graph.node_mut(id);
             let p = node.params.get_mut(&key).unwrap();
+            if clear_source {
+                p.source.clear();
+            }
             match new_mode {
                 ParamMode::Expression => {
                     p.expression = expression;
@@ -178,6 +241,74 @@ pub fn show(app: &mut OtdApp, ui: &mut egui::Ui) {
                 }
             }
         }
+    }
+}
+
+/// What a dragged channel carries. Dropping it on a parameter exports it.
+#[derive(Clone, Debug)]
+pub struct ChannelDrag {
+    pub op_path: String,
+    pub channel: String,
+}
+
+/// The selected CHOP's channels, with their current values. Each row is a
+/// drag source: drop one on a parameter to export it, which is the gesture
+/// PLAN.md §5 calls for in Phase 2.
+fn channel_list(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
+    if app.graph.node(id).family != otd_core::Family::Chop {
+        return;
+    }
+    let path = app.graph.path(id);
+    let Some(data) = app.engines.chop_data(id) else {
+        return;
+    };
+    let rows: Vec<(usize, String, f32, usize)> = data
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(i, ch)| (i, ch.name.clone(), ch.last(), ch.samples.len()))
+        .collect();
+    let rate = data.sample_rate;
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.strong("Channels");
+        ui.label(
+            RichText::new(format!("{} @ {rate:.0} Hz", rows.len()))
+                .weak()
+                .small(),
+        );
+    });
+    if rows.is_empty() {
+        ui.label(RichText::new("none").weak().small());
+        return;
+    }
+    ui.label(
+        RichText::new("drag a channel onto a parameter to export it")
+            .weak()
+            .small(),
+    );
+
+    for (i, name, value, samples) in rows {
+        let payload = ChannelDrag {
+            op_path: path.clone(),
+            channel: name.clone(),
+        };
+        ui.dnd_drag_source(egui::Id::new(("chan", id, i)), payload, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, 2.0, crate::canvas::channel_color(i));
+                ui.add_sized(
+                    [110.0, 16.0],
+                    egui::Label::new(RichText::new(&name).monospace()).truncate(),
+                );
+                ui.label(RichText::new(format!("{value:+.4}")).monospace());
+                if samples > 1 {
+                    ui.label(RichText::new(format!("×{samples}")).weak().small());
+                }
+            });
+        });
     }
 }
 
@@ -218,7 +349,7 @@ fn shader_editor(app: &mut OtdApp, ui: &mut egui::Ui, id: otd_core::NodeId) {
 
     // The compile error comes from the GPU engine, not the parameter, because
     // the shader is only compiled when the node cooks.
-    match app.top.shader_error(id) {
+    match app.engines.top.shader_error(id) {
         Some(err) => {
             ui.colored_label(
                 Color32::from_rgb(235, 120, 120),

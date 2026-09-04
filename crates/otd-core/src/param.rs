@@ -155,9 +155,48 @@ impl Param {
                 },
                 None => self.value.clone(),
             },
-            // Phase 2. Until CHOPs exist there is nothing to read from.
-            ParamMode::Export | ParamMode::Bind => self.value.clone(),
+            ParamMode::Export => self
+                .source_parts()
+                .and_then(|(path, channel)| ctx.channels?.channel(path, channel))
+                .map(|v| self.value.coerce_from_f64(v as f64))
+                .unwrap_or_else(|| self.value.clone()),
+            ParamMode::Bind => self
+                .source_parts()
+                .and_then(|(path, param)| ctx.channels?.param_value(path, param))
+                .filter(|v| v.same_type_as(&self.value))
+                .unwrap_or_else(|| self.value.clone()),
         }
+    }
+
+    /// Split `source` into the operator path and the channel or parameter
+    /// name after it: `/lfo1:chan1`.
+    pub fn source_parts(&self) -> Option<(&str, &str)> {
+        let (path, name) = self.source.rsplit_once(':')?;
+        if path.trim().is_empty() || name.trim().is_empty() {
+            return None;
+        }
+        Some((path.trim(), name.trim()))
+    }
+
+    /// The operator this parameter reads from, if it is in Export or Bind
+    /// mode. The cook engine turns these into dependencies.
+    pub fn source_op(&self) -> Option<&str> {
+        match self.mode {
+            ParamMode::Export | ParamMode::Bind => self.source_parts().map(|(p, _)| p),
+            _ => None,
+        }
+    }
+
+    /// Point this parameter at a CHOP channel.
+    pub fn set_export(&mut self, op_path: &str, channel: &str) {
+        self.source = format!("{op_path}:{channel}");
+        self.mode = ParamMode::Export;
+    }
+
+    /// Point this parameter at another operator's parameter.
+    pub fn set_bind(&mut self, op_path: &str, param: &str) {
+        self.source = format!("{op_path}:{param}");
+        self.mode = ParamMode::Bind;
     }
 
     /// Like [`Param::eval`] but reports evaluation failures, for the UI.
@@ -230,6 +269,55 @@ mod tests {
         assert!(p.error().is_some());
         assert_eq!(p.eval(&EvalContext::default()).as_f64(), 7.0);
         assert!(p.eval_checked(&EvalContext::default()).is_err());
+    }
+
+    struct FakeNetwork;
+    impl crate::expr::ChannelSource for FakeNetwork {
+        fn channel(&self, op_path: &str, channel: &str) -> Option<f32> {
+            (op_path == "/lfo1" && channel == "chan1").then_some(0.75)
+        }
+        fn param_value(&self, op_path: &str, param: &str) -> Option<Value> {
+            (op_path == "/other" && param == "size").then_some(Value::Float(12.0))
+        }
+    }
+
+    fn ctx_with_network() -> EvalContext<'static> {
+        EvalContext {
+            channels: Some(&FakeNetwork),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn export_mode_reads_a_chop_channel() {
+        let mut p = Param::float(0.1);
+        p.set_export("/lfo1", "chan1");
+        assert_eq!(p.mode, ParamMode::Export);
+        assert_eq!(p.source_op(), Some("/lfo1"));
+        assert_eq!(p.eval(&ctx_with_network()).as_f64(), 0.75);
+        // With no network to read from, the constant stands in.
+        assert_eq!(p.eval(&EvalContext::default()).as_f64(), 0.1);
+    }
+
+    #[test]
+    fn bind_mode_reads_another_parameter() {
+        let mut p = Param::float(1.0);
+        p.set_bind("/other", "size");
+        assert_eq!(p.eval(&ctx_with_network()).as_f64(), 12.0);
+    }
+
+    #[test]
+    fn a_bind_of_the_wrong_type_is_ignored() {
+        let mut p = Param::str("hello");
+        p.set_bind("/other", "size");
+        assert_eq!(p.eval(&ctx_with_network()).as_str(), "hello");
+    }
+
+    #[test]
+    fn a_dangling_export_falls_back_to_the_constant() {
+        let mut p = Param::float(0.4);
+        p.set_export("/gone", "chan1");
+        assert_eq!(p.eval(&ctx_with_network()).as_f64(), 0.4);
     }
 
     #[test]

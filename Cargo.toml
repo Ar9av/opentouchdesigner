@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app"]
+members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app", "crates/otd-chop", "crates/otd-engine"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,7 +11,9 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 otd-core = { path = "crates/otd-core" }
+otd-chop = { path = "crates/otd-chop" }
 otd-gpu = { path = "crates/otd-gpu" }
+otd-engine = { path = "crates/otd-engine" }
 
 [profile.dev]
 # The cook loop is unusably slow in a fully unoptimised build; dependencies

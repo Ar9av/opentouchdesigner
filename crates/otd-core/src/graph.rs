@@ -131,6 +131,13 @@ impl Node {
     pub fn has_time_dependent_param(&self) -> bool {
         self.params.values().any(|p| p.is_time_dependent())
     }
+
+    /// Operator paths this node's parameters read from — Export and Bind
+    /// sources. The cook engine turns these into dependencies so the source
+    /// cooks first and its animation propagates here.
+    pub fn param_sources(&self) -> impl Iterator<Item = &str> {
+        self.params.values().filter_map(|p| p.source_op())
+    }
 }
 
 /// A static description of an operator type. Registered once at startup;

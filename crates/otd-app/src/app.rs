@@ -14,7 +14,8 @@ use std::time::Instant;
 
 use egui::TextureId;
 use otd_core::{CookContext, CookEngine, Graph, NodeId, OpRegistry, Project};
-use otd_gpu::{GpuContext, TopEngine};
+use otd_engine::Engines;
+use otd_gpu::GpuContext;
 
 use crate::canvas::{CanvasView, DragState};
 
@@ -22,7 +23,7 @@ pub struct OtdApp {
     pub graph: Graph,
     pub registry: OpRegistry,
     pub cook: CookEngine,
-    pub top: TopEngine,
+    pub engines: Engines,
     pub render_state: eframe::egui_wgpu::RenderState,
 
     pub time: CookContext,
@@ -43,6 +44,9 @@ pub struct OtdApp {
     /// Set from inside the output viewport when the user closes it. The
     /// viewport callback is `'static` and cannot reach `self`.
     output_closed: Arc<AtomicBool>,
+
+    /// Mouse and keyboard, sampled each frame for the input CHOPs.
+    pub input_state: otd_chop::InputState,
 
     thumbs: HashMap<NodeId, (TextureId, u64)>,
     /// Nodes that were on screen last frame — the visible cook roots.
@@ -72,14 +76,14 @@ impl OtdApp {
         // The cook engine renders into the same device egui draws with, so a
         // node thumbnail is the operator's real texture — no copy, no readback.
         let gpu = GpuContext::new(render_state.device.clone(), render_state.queue.clone());
-        let top = TopEngine::new(gpu);
-        let registry = otd_gpu::ops::registry();
+        let engines = Engines::new(gpu);
+        let registry = otd_engine::registry();
 
         let mut app = OtdApp {
             graph: Graph::new(),
             registry,
             cook: CookEngine::new(),
-            top,
+            engines,
             render_state,
             time: CookContext::default(),
             playing: true,
@@ -95,6 +99,7 @@ impl OtdApp {
             output_window: false,
             output_fullscreen: false,
             output_closed: Arc::new(AtomicBool::new(false)),
+            input_state: otd_chop::InputState::default(),
             thumbs: HashMap::new(),
             visible: Vec::new(),
             project_path: None,
@@ -108,12 +113,12 @@ impl OtdApp {
     /// Load one of the built-in patches (see `otd_gpu::demo`). The editor
     /// opens on `starter`, which is the Phase 0 exit criterion made visible.
     pub fn load_demo(&mut self, name: &str) {
-        let Some((graph, out)) = otd_gpu::demo::by_name(name, &self.registry) else {
+        let Some((graph, out)) = otd_engine::demo::by_name(name, &self.registry) else {
             self.status = format!("no built-in patch called `{name}`");
             return;
         };
         self.graph = graph;
-        self.top.reset();
+        self.engines.top.reset();
         self.cook.reset();
         self.thumbs.clear();
         self.project_path = None;
@@ -154,11 +159,12 @@ impl OtdApp {
         }
 
         let roots = self.cook_roots();
-        self.top.begin_frame();
-        let result = self
-            .cook
-            .cook_frame(&self.graph, &roots, &self.time.clone(), &mut self.top);
-        self.top.end_frame();
+        self.engines.set_input_state(self.input_state.clone());
+        self.engines.begin_frame();
+        let result =
+            self.cook
+                .cook_frame(&self.graph, &roots, &self.time.clone(), &mut self.engines);
+        self.engines.end_frame();
 
         self.cook_error = result.err().map(|e| e.to_string());
         let ms = self.cook.stats.total_cook_us as f64 / 1000.0;
@@ -168,7 +174,7 @@ impl OtdApp {
     /// The egui texture handle for a node's current output, registering or
     /// refreshing it only when the underlying texture object changed.
     pub fn thumbnail(&mut self, id: NodeId) -> Option<(TextureId, [u32; 2])> {
-        let tex = self.top.output(&self.graph, id)?.clone();
+        let tex = self.engines.top.output(&self.graph, id)?.clone();
         let size = [tex.key.width, tex.key.height];
         let entry = self.thumbs.get(&id).copied();
         match entry {
@@ -225,7 +231,7 @@ impl OtdApp {
                 }
             }
         }
-        self.top.forget(id);
+        self.engines.top.forget(id);
         self.thumbs.remove(&id);
         self.cook.forget(id);
         let _ = self.graph.remove(id);
@@ -279,7 +285,7 @@ impl OtdApp {
         match Project::load(&path).and_then(|p| p.to_graph(&self.registry)) {
             Ok(graph) => {
                 self.graph = graph;
-                self.top.reset();
+                self.engines.top.reset();
                 self.cook.reset();
                 self.thumbs.clear();
                 self.selected = None;
@@ -341,7 +347,7 @@ impl OtdApp {
                     }
                     ui.separator();
                     ui.menu_button("Examples", |ui| {
-                        for name in otd_gpu::demo::NAMES {
+                        for name in otd_engine::demo::NAMES {
                             if ui.button(*name).clicked() {
                                 self.load_demo(name);
                                 ui.close();
@@ -380,8 +386,9 @@ impl OtdApp {
                 ));
                 ui.label(format!(
                     "{} passes  {:.0} MB",
-                    self.top.passes_this_frame,
-                    (self.top.resident_bytes() + self.top.pooled_bytes()) as f64 / 1.0e6
+                    self.engines.top.passes_this_frame,
+                    (self.engines.top.resident_bytes() + self.engines.top.pooled_bytes()) as f64
+                        / 1.0e6
                 ));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
