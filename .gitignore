@@ -5,3 +5,9 @@
 # Rendered output from the headless example
 *.png
 !docs/**/*.png
+
+# API keys. Never committed — this repo is public, and a key in a git
+# history is a key that has to be rotated, not deleted.
+.env
+.env.*
+!.env.example
