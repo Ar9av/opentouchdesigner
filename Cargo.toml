@@ -6,7 +6,7 @@ members = ["crates/otd-core", "crates/otd-gpu", "crates/otd-app", "crates/otd-ch
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/opentouchdesigner/opentouchdesigner"
+repository = "https://github.com/Ar9av/opentouchdesigner"
 rust-version = "1.85"
 
 [workspace.dependencies]
