@@ -63,6 +63,25 @@ const NOTES: &[(&str, &str)] = &[
          extrapolating.",
     ),
     (
+        "audiofileinCHOP",
+        "Plays RIFF/WAVE — PCM in 8, 16, 24 or 32 bits, or 32-bit float — \
+         which is what a DAW bounces. Compressed formats wait for the video \
+         layer and its real media stack.\n\n\
+         Playback is a function of the timeline, not a private play head: the \
+         sample at time `t` is always the file at `t × speed`. Scrubbing the \
+         timeline scrubs the audio, a loop range loops it, and a headless \
+         render reads exactly the samples the editor played.",
+    ),
+    (
+        "midioutCHOP",
+        "Channel names mirror MIDI In: `n60` is note 60, `cc74` is control \
+         74; anything else is ignored. A note fires when its value crosses \
+         zero, with the value at that moment as velocity — while it is held, \
+         changes of value are not new notes.\n\n\
+         Unlike DMX, MIDI is an event protocol, so only *changes* go on the \
+         wire; an unchanged control costs nothing per frame.",
+    ),
+    (
         "dmxoutCHOP",
         "Sends each channel as a DMX slot over Art-Net or sACN (E1.31). Values are \
          expected in 0..1 and are clamped rather than wrapped — a light jumping \
