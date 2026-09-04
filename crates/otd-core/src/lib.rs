@@ -5,6 +5,7 @@
 //! cook engine unit-testable and keeps a future headless/WASM target open
 //! (PLAN.md §3).
 
+pub mod component;
 pub mod cook;
 pub mod expr;
 pub mod graph;
@@ -15,6 +16,7 @@ pub mod value;
 #[cfg(test)]
 mod test_ops;
 
+pub use component::Component;
 pub use cook::{CookContext, CookEngine, CookError, Cooker, FrameStats};
 pub use expr::{ChannelSource, EvalContext, Expr};
 pub use graph::{Connector, Family, Graph, GraphError, Node, NodeFlags, NodeId, OpDef, OpRegistry};

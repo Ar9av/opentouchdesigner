@@ -36,6 +36,12 @@ pub enum ProjectError {
     DanglingInput { path: String, input: String },
     #[error("bad path `{0}`")]
     BadPath(String),
+    #[error("{path}: could not read component file `{file}`: {reason}")]
+    External {
+        path: String,
+        file: String,
+        reason: String,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("parse error: {0}")]
@@ -56,6 +62,14 @@ pub struct NodeEntry {
     pub params: IndexMap<String, Param>,
     #[serde(default, skip_serializing_if = "is_default_flags")]
     pub flags: NodeFlags,
+    /// This component's network lives in a `.otdc` file. When set, the
+    /// project stores the reference and the instance's settings; the file
+    /// stores everything inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<String>,
+    /// This component tracks another one in the same project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone: Option<String>,
 }
 
 fn is_origin(p: &(f32, f32)) -> bool {
@@ -90,53 +104,13 @@ impl Project {
             if id == graph.root() {
                 continue;
             }
-            let node = graph.node(id);
-            let path = graph.path(id);
-            let defaults = registry.get(&node.op_type).map(|d| (d.params)());
-
-            let mut params = IndexMap::new();
-            for (key, param) in &node.params {
-                let is_default = defaults
-                    .as_ref()
-                    .and_then(|d| d.get(key))
-                    .map(|d| param_matches_default(param, d))
-                    .unwrap_or(false);
-                // A custom parameter has no operator definition behind it, so
-                // it is written in full — it *is* the definition.
-                if param.custom {
-                    params.insert(key.clone(), param.clone());
-                } else if !is_default {
-                    // Labels, ranges and menus belong to the operator
-                    // definition, not to the project. Writing them would put
-                    // UI metadata in every diff and make an operator's
-                    // relabelling look like a project change.
-                    let mut param = param.clone();
-                    param.label = String::new();
-                    param.range = None;
-                    param.menu = None;
-                    params.insert(key.clone(), param);
-                }
+            // The contents of an external component live in its own file, so
+            // the project references it rather than duplicating it.
+            if graph.is_inside_external(id) {
+                continue;
             }
-
-            let inputs: Vec<String> = node
-                .inputs
-                .iter()
-                .map(|slot| slot.map(|s| graph.path(s)).unwrap_or_default())
-                .collect();
-            // Trailing unconnected inputs carry no information.
-            let inputs = trim_trailing_empty(inputs);
-
-            entries.insert(
-                path.clone(),
-                NodeEntry {
-                    path,
-                    op: node.op_type.clone(),
-                    pos: (node.pos[0], node.pos[1]),
-                    inputs,
-                    params,
-                    flags: node.flags,
-                },
-            );
+            let entry = node_entry(graph, id, registry);
+            entries.insert(entry.path.clone(), entry);
         }
 
         Project {
@@ -182,38 +156,19 @@ impl Project {
                 .create(parent, def, Some(&name))
                 .map_err(|_| ProjectError::BadPath(entry.path.clone()))?;
 
-            {
-                let node = graph.node_mut(id);
-                node.pos = [entry.pos.0, entry.pos.1];
-                node.flags = entry.flags;
-                for (key, saved) in &entry.params {
-                    // A custom parameter exists only in the file; restore it
-                    // whole, including its type, label and range.
-                    if saved.custom {
-                        let mut saved = saved.clone();
-                        saved.recompile();
-                        node.params.insert(key.clone(), saved);
-                        continue;
-                    }
-                    if let Some(slot) = node.params.get_mut(key) {
-                        let mut saved = saved.clone();
-                        // Keep the operator's declared type authoritative;
-                        // a hand-edited file can't turn a float into a string.
-                        if !slot.value.same_type_as(&saved.value) {
-                            saved.value = slot.value.clone();
-                        }
-                        saved.label = slot.label.clone();
-                        // Whether a parameter holds script source is part of
-                        // the operator definition, not of the project.
-                        if slot.is_script() {
-                            saved = saved.into_script();
-                        }
-                        saved.range = slot.range.or(saved.range);
-                        saved.menu = slot.menu.clone().or(saved.menu);
-                        saved.recompile();
-                        *slot = saved;
-                    }
-                }
+            restore_node(&mut graph, id, entry);
+
+            // An external component's network is not in this file: read it
+            // from the one it names. A missing file is an error rather than a
+            // silently empty component.
+            if let Some(file) = &entry.external {
+                graph
+                    .attach_external(id, file, registry)
+                    .map_err(|e| ProjectError::External {
+                        path: entry.path.clone(),
+                        file: file.clone(),
+                        reason: e.to_string(),
+                    })?;
             }
             by_path.insert(entry.path.clone(), id);
         }
@@ -239,6 +194,9 @@ impl Project {
                     })?;
             }
         }
+
+        // Clones can only be resolved once every node exists.
+        graph.sync_clones(registry);
 
         Ok(graph)
     }
@@ -267,6 +225,90 @@ impl Project {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Project, ProjectError> {
         Project::from_ron(&std::fs::read_to_string(path)?)
+    }
+}
+
+/// Build the file entry for one node.
+pub(crate) fn node_entry(graph: &Graph, id: NodeId, registry: &OpRegistry) -> NodeEntry {
+    let node = graph.node(id);
+    let path = graph.path(id);
+    let defaults = registry.get(&node.op_type).map(|d| (d.params)());
+
+    let mut params = IndexMap::new();
+    for (key, param) in &node.params {
+        let is_default = defaults
+            .as_ref()
+            .and_then(|d| d.get(key))
+            .map(|d| param_matches_default(param, d))
+            .unwrap_or(false);
+        // A custom parameter has no operator definition behind it, so it is
+        // written in full — it *is* the definition.
+        if param.custom {
+            params.insert(key.clone(), param.clone());
+        } else if !is_default {
+            // Labels, ranges and menus belong to the operator definition, not
+            // to the project. Writing them would put UI metadata in every
+            // diff and make an operator's relabelling look like a change.
+            let mut param = param.clone();
+            param.label = String::new();
+            param.range = None;
+            param.menu = None;
+            params.insert(key.clone(), param);
+        }
+    }
+
+    let inputs: Vec<String> = node
+        .inputs
+        .iter()
+        .map(|slot| slot.map(|s| graph.path(s)).unwrap_or_default())
+        .collect();
+
+    NodeEntry {
+        path,
+        op: node.op_type.clone(),
+        pos: (node.pos[0], node.pos[1]),
+        // Trailing unconnected inputs carry no information.
+        inputs: trim_trailing_empty(inputs),
+        params,
+        flags: node.flags,
+        external: node.external.clone(),
+        clone: node.clone_of.clone(),
+    }
+}
+
+/// Apply a file entry's settings to a node that has just been created.
+pub(crate) fn restore_node(graph: &mut Graph, id: NodeId, entry: &NodeEntry) {
+    let node = graph.node_mut(id);
+    node.pos = [entry.pos.0, entry.pos.1];
+    node.flags = entry.flags;
+    node.clone_of = entry.clone.clone();
+    for (key, saved) in &entry.params {
+        // A custom parameter exists only in the file; restore it whole,
+        // including its type, label and range.
+        if saved.custom {
+            let mut saved = saved.clone();
+            saved.recompile();
+            node.params.insert(key.clone(), saved);
+            continue;
+        }
+        if let Some(slot) = node.params.get_mut(key) {
+            let mut saved = saved.clone();
+            // Keep the operator's declared type authoritative; a hand-edited
+            // file cannot turn a float into a string.
+            if !slot.value.same_type_as(&saved.value) {
+                saved.value = slot.value.clone();
+            }
+            saved.label = slot.label.clone();
+            // Whether a parameter holds script source is part of the operator
+            // definition, not of the project.
+            if slot.is_script() {
+                saved = saved.into_script();
+            }
+            saved.range = slot.range.or(saved.range);
+            saved.menu = slot.menu.clone().or(saved.menu);
+            saved.recompile();
+            *slot = saved;
+        }
     }
 }
 

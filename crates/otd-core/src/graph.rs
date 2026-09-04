@@ -130,6 +130,16 @@ pub struct Node {
     /// Operators that must re-cook every frame regardless of parameter
     /// changes (a movie player, a device input).
     pub intrinsically_time_dependent: bool,
+    /// This component's contents come from a `.otdc` file rather than from
+    /// the project. The project stores the reference; the file stores the
+    /// network (PLAN.md §5, Phase 3).
+    pub external: Option<String>,
+    /// This component tracks another one in the same project: its contents
+    /// are replaced by copies of the master's whenever the master changes.
+    pub clone_of: Option<String>,
+    /// The master's subtree revision at the last sync, so an unchanged
+    /// master costs nothing.
+    pub clone_synced_at: u64,
     /// Bumped on every mutation. The cook engine compares against the value
     /// it last cooked at — a revision counter rather than a dirty bit, so a
     /// node edited twice between cooks still only cooks once (PLAN.md §3).
@@ -259,6 +269,9 @@ impl Graph {
             pos: [0.0, 0.0],
             flags: NodeFlags::default(),
             intrinsically_time_dependent: false,
+            external: None,
+            clone_of: None,
+            clone_synced_at: 0,
             revision: 0,
         });
         Graph { nodes, root }
@@ -295,6 +308,10 @@ impl Graph {
         let n = &mut self.nodes[id];
         n.revision += 1;
         n
+    }
+
+    pub(crate) fn get_mut_raw(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.nodes.get_mut(id)
     }
 
     /// Read-write access that does *not* dirty the node. For things the cook
@@ -357,6 +374,9 @@ impl Graph {
             pos: [0.0, 0.0],
             flags: NodeFlags::default(),
             intrinsically_time_dependent: def.time_dependent,
+            external: None,
+            clone_of: None,
+            clone_synced_at: 0,
             revision: 1,
         };
         let id = self.nodes.insert(node);
@@ -694,6 +714,22 @@ impl Graph {
             self.dirty_descendants(id);
         }
         Ok(())
+    }
+
+    /// True when some ancestor of this node is an external component, whose
+    /// contents belong to its own file rather than to the project.
+    pub fn is_inside_external(&self, id: NodeId) -> bool {
+        let mut cur = self.get(id).and_then(|n| n.parent);
+        while let Some(c) = cur {
+            let Some(node) = self.get(c) else {
+                return false;
+            };
+            if node.external.is_some() {
+                return true;
+            }
+            cur = node.parent;
+        }
+        false
     }
 
     /// Depth-first walk of the whole hierarchy, parents before children.
