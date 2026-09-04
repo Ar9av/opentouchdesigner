@@ -95,23 +95,75 @@ pub fn classify(path: &Path) -> DropKind {
     }
 }
 
-/// Effects offered as "add this on top of what is selected". A short list on
-/// purpose: the full 126 operators are a Tab away, and a menu of everything is
-/// a menu nobody reads.
-pub const EFFECTS: &[&str] = &[
-    "levelTOP",
-    "blurTOP",
-    "hsvadjustTOP",
-    "edgeTOP",
-    "thresholdTOP",
-    "mirrorTOP",
-    "transformTOP",
-    "flipTOP",
-    "chromakeyTOP",
-    "displaceTOP",
-    "lookupTOP",
-    "compositeTOP",
-    "feedbackTOP",
+/// Effects offered as "add this on top of what is selected", in submenus.
+///
+/// Still a curated list rather than the registry: all 163 operators are a Tab
+/// away in the create dialog, and a menu of everything is a menu nobody reads.
+/// But the flat thirteen stopped being enough once the operator set tripled —
+/// a Corner Pin or a Luma Blur is exactly an "add this on top of that" move,
+/// and one that was only findable by knowing its name to type. Grouping is
+/// what buys the room: eight headings a person can scan beats thirty-five
+/// rows they have to read.
+///
+/// What is deliberately NOT here: operators that are plumbing rather than a
+/// look (RGB to HSV and back, Reorder), and the blend modes past the common
+/// few, which are one Composite TOP and its Operation menu.
+pub const EFFECT_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Colour",
+        &[
+            "levelTOP",
+            "lumalevelTOP",
+            "hsvadjustTOP",
+            "monochromeTOP",
+            "channelmixTOP",
+            "functionTOP",
+            "limitTOP",
+            "lookupTOP",
+        ],
+    ),
+    (
+        "Blur & Sharpen",
+        &["blurTOP", "lumablurTOP", "convolveTOP", "antialiasTOP"],
+    ),
+    (
+        "Edges",
+        &[
+            "edgeTOP",
+            "embossTOP",
+            "slopeTOP",
+            "normalmapTOP",
+            "thresholdTOP",
+            "toonTOP",
+        ],
+    ),
+    ("Keying", &["chromakeyTOP", "rgbkeyTOP", "matteTOP"]),
+    (
+        "Shape",
+        &[
+            "transformTOP",
+            "cornerpinTOP",
+            "lensdistortTOP",
+            "cropTOP",
+            "fitTOP",
+            "tileTOP",
+            "mirrorTOP",
+            "flipTOP",
+        ],
+    ),
+    ("Warp", &["displaceTOP", "remapTOP", "flowTOP"]),
+    (
+        "Blend",
+        &[
+            "compositeTOP",
+            "overTOP",
+            "addTOP",
+            "multiplyTOP",
+            "screenTOP",
+            "differenceTOP",
+        ],
+    ),
+    ("Time", &["feedbackTOP", "cacheTOP"]),
 ];
 
 // ------------------------------------------------------------------ the loop
@@ -257,16 +309,32 @@ pub fn add_webcam(app: &mut OtdApp) {
 /// The effects list, as menu rows. Shared by the Media menu and the node's
 /// own right-click menu so the two cannot drift apart.
 pub fn effects_menu(app: &mut OtdApp, ui: &mut egui::Ui) {
-    let effects: Vec<(&'static str, &'static str, &'static str)> = EFFECTS
+    // Collected up front: the registry lookup borrows `app`, and the click
+    // handler needs it mutably.
+    let groups: Vec<(
+        &'static str,
+        Vec<(&'static str, &'static str, &'static str)>,
+    )> = EFFECT_GROUPS
         .iter()
-        .filter_map(|t| app.registry.get(t))
-        .map(|d| (d.type_name, d.label, d.summary))
+        .map(|(group, ops)| {
+            let rows = ops
+                .iter()
+                .filter_map(|t| app.registry.get(t))
+                .map(|d| (d.type_name, d.label, d.summary))
+                .collect();
+            (*group, rows)
+        })
         .collect();
-    for (type_name, label, summary) in effects {
-        if ui.button(label).on_hover_text(summary).clicked() {
-            add_effect(app, type_name);
-            ui.close();
-        }
+
+    for (group, rows) in groups {
+        ui.menu_button(group, |ui| {
+            for (type_name, label, summary) in rows {
+                if ui.button(label).on_hover_text(summary).clicked() {
+                    add_effect(app, type_name);
+                    ui.close();
+                }
+            }
+        });
     }
 }
 
@@ -325,6 +393,29 @@ pub fn add_effect(app: &mut OtdApp, type_name: &str) {
     let Some(id) = app.create_node(type_name, pos) else {
         return;
     };
+    // Feedback and Select reach their source through a parameter rather than
+    // a wire, and the engine special-cases them by these same constants.
+    // Neither is a `path_ref`, deliberately: a path ref is a cook dependency,
+    // and a Feedback TOP that depends on its own target is the cycle the
+    // previous-frame read exists to avoid. So the parameter is filled by name
+    // here rather than found by a flag.
+    //
+    // Without this, clicking Feedback in a menu whose whole promise is "after
+    // the selected node" created the node and an error message in the same
+    // click, and left the target blank.
+    let by_param = match type_name {
+        t if t == otd_gpu::ops::FEEDBACK => Some("target"),
+        t if t == otd_gpu::ops::SELECT => Some("top"),
+        _ => None,
+    };
+    if let Some(key) = by_param {
+        let source = app.graph.node(src).name.clone();
+        let _ = app.graph.set_param(id, key, Value::Str(source.clone()));
+        app.viewer = Some(id);
+        app.status = format!("{} {key} = {source}", app.graph.node(id).name);
+        return;
+    }
+
     // No checkpoint of its own: `create_node` took one, and the wire is part
     // of the same action — undoing the effect has to take its wire with it.
     match app.graph.connect(src, id, 0) {
@@ -780,11 +871,67 @@ mod tests {
     #[test]
     fn every_effect_in_the_menu_exists() {
         let registry = otd_engine::registry();
-        for type_name in EFFECTS {
-            assert!(
-                registry.get(type_name).is_some(),
-                "{type_name} is offered in the effects menu but is not registered"
-            );
+        for (group, ops) in EFFECT_GROUPS {
+            for type_name in *ops {
+                assert!(
+                    registry.get(type_name).is_some(),
+                    "{type_name} is offered under {group} but is not registered"
+                );
+            }
         }
+    }
+
+    /// A menu row that silently does nothing is worse than a missing one.
+    ///
+    /// `add_effect` puts the new operator downstream of what is selected, so
+    /// every entry needs somewhere for that source to go: an input to wire
+    /// into, or one of the two operators `add_effect` fills by parameter.
+    /// Anything else appears in the menu, gets clicked, and sits unconnected.
+    #[test]
+    fn every_effect_in_the_menu_can_be_given_the_selected_node() {
+        let registry = otd_engine::registry();
+        for (_, ops) in EFFECT_GROUPS {
+            for type_name in *ops {
+                let def = registry.get(type_name).unwrap();
+                let by_param =
+                    *type_name == otd_gpu::ops::FEEDBACK || *type_name == otd_gpu::ops::SELECT;
+                assert!(
+                    !def.inputs.is_empty() || by_param,
+                    "{type_name} has no input and is not filled by parameter, so \
+                     adding it after a node leaves it unconnected"
+                );
+            }
+        }
+    }
+
+    /// Filling Feedback's target must not make it a cook dependency.
+    ///
+    /// A `path_ref` parameter becomes an edge in the cook graph. On a Feedback
+    /// TOP that edge is a cycle — the whole reason it reads the *previous*
+    /// frame — so this pins the flag off rather than leaving the next person
+    /// to "tidy up" the inconsistency and break every feedback loop at once.
+    #[test]
+    fn feedbacks_target_is_not_a_cook_dependency() {
+        let registry = otd_engine::registry();
+        let def = registry.get(otd_gpu::ops::FEEDBACK).unwrap();
+        let params = (def.params)();
+        assert!(
+            !params["target"].is_path_ref(),
+            "feedbackTOP.target became a path ref, which makes the loop a cycle"
+        );
+    }
+
+    /// No operator offered twice, under two headings.
+    #[test]
+    fn the_effect_groups_do_not_overlap() {
+        let mut seen: Vec<&str> = EFFECT_GROUPS
+            .iter()
+            .flat_map(|(_, o)| *o)
+            .copied()
+            .collect();
+        let total = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(total, seen.len(), "an effect is listed under two groups");
     }
 }
