@@ -20,9 +20,40 @@ It is not a chatbot bolted to the side: the reply is a *plan*, checked against
 the real operator registry and built into the network you are looking at, as
 one undoable edit.
 
+## Working back from a picture
+
+Attach a still and the assistant builds a patch that produces that look.
+Click **📎** in the bar, or drop an image straight onto the bar — dropped
+anywhere else it is still material, and becomes a Movie File In, which is what
+dropping a picture on a node graph should do. The overlay says which one is
+about to happen while the file is still in the air.
+
+With a reference attached the prompt box becomes optional: pointing at a
+picture is a complete request. Anything you do type is a correction on top of
+it — *"like this but slower"*, *"these colours, no feedback"* — and wins where
+the two disagree.
+
+What comes back is the **recipe**, not the frame. The brief that goes with the
+image asks for structure before colour, for a feedback loop wherever the image
+smears or echoes, and for the interesting quantities to stay on separate nodes
+as parameters. The failure mode this is aimed at is one enormous glslTOP that
+hard-codes what it sees: a screenshot with extra steps, which cannot be turned
+and teaches you nothing about your own patch. Read the `notes` first — it says
+what it thought the image was made of, which is worth knowing even when the
+patch needs work.
+
+All five providers take an image. Anthropic and OpenAI take it inline, Codex
+takes a file, and Claude Code takes it as stream-json — none of which you have
+to care about, except that it is one more reason the CLI providers cost quota.
+
+Everything is shrunk to 1568 pixels on the long edge before it is sent, and
+re-encoded — JPEG normally, PNG when the image genuinely uses transparency,
+because flattening an alpha channel changes the question being asked. Past that
+size every provider resizes it themselves, having already charged for it.
+
 ## Setting it up
 
-Three providers, any one of which is enough:
+Five providers, any one of which is enough. Three want an API key:
 
 | Provider | Key from | Default model |
 |---|---|---|
@@ -38,6 +69,49 @@ text — the list will be out of date before you read it.
 
 OpenRouter is worth knowing about if you want one key for many models: it
 speaks OpenAI's wire format and fronts most of the others.
+
+## Using a subscription instead of a key
+
+The other two want nothing at all, because you are already paying for them:
+
+| Provider | Needs | Costs |
+|---|---|---|
+| Claude Code | the `claude` CLI, signed in | Claude Pro/Max quota |
+| Codex | the `codex` CLI, signed in | ChatGPT Plus/Pro quota |
+
+Pick one in the panel and it says which version it found instead of showing a
+key field. There is no key to paste and nothing is stored.
+
+These do not call an API. They run the CLI you already signed in with — `claude
+-p`, `codex exec` — as a subprocess, put the prompt on its stdin and read the
+reply off its stdout. That is the difference between using a subscription and
+misusing one: no token is lifted out of anybody's credential store, and no
+request is made to an API endpoint on a subscription's behalf.
+
+What this costs you instead of money:
+
+- **A second or two more per ask.** Process startup plus the CLI's own preamble
+  before any token moves.
+- **Quota, not credit.** Claude Code sends its tool schemas whether or not the
+  tools are allowed, so a patch costs around 28k input tokens against the same
+  weekly limit your editor session draws on.
+- **A machine, not a server.** It works where the CLI is installed and signed
+  in. For a show machine or CI, use a key.
+
+Both are run with the agent turned off — tools denied, sandbox read-only,
+`CLAUDE.md`/skills/plugins/MCP off, working directory a temp dir, no session
+written. It is asked for one JSON object and given nothing it could do anything
+else with.
+
+Neither CLI is usually on `PATH` for an application launched from Finder or the
+Start menu, so the usual install locations are searched too. If yours is
+somewhere unusual, set `OTD_CLAUDE_BIN` or `OTD_CODEX_BIN` to the binary.
+
+Codex's model box defaults to **(CLI default)** — an empty model, meaning
+whatever `~/.codex/config.toml` says. This is deliberate: Codex refuses outright
+on a model the signed-in account has no access to, and which those are depends
+on the plan, so there is no safe guess to make from here. Claude Code takes the
+aliases `sonnet`, `opus` and `haiku`, which always resolve to what is current.
 
 ## Where your key goes
 
@@ -141,6 +215,7 @@ you wanted anyway.
 ```bash
 cargo run -p otd-ai --example smoke        # call every provider that has a key
 cargo run -p otd-ai --example build -- openrouter "a slow blue tunnel" out.otd
+cargo run -p otd-ai --example build -- claude-code "a slow blue tunnel" out.otd
 otd render out.otd --node /out1 --frames 150 --out shots
 ```
 

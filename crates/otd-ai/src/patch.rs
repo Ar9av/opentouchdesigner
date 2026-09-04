@@ -199,6 +199,52 @@ OPERATOR CATALOGUE
     )
 }
 
+/// The extra brief for working from a reference image, appended to the user
+/// turn when there is one.
+///
+/// It is separate from [`system_prompt`] on purpose. The system prompt says
+/// what a patch is and never changes; this says what to do with the picture
+/// sitting immediately above it, and putting it next to the image is what
+/// keeps "reproduce this" attached to the thing being reproduced.
+///
+/// The whole content of it is: look before you build, and build the *recipe*
+/// rather than the picture. A model asked to match an image reaches for one
+/// enormous glslTOP that hard-codes what it sees, which is a screenshot with
+/// extra steps — it cannot be turned, it does not move, and it teaches the
+/// person nothing about their own patch.
+pub fn reverse_engineer_prompt() -> &'static str {
+    r#"WORKING FROM THE REFERENCE IMAGE ABOVE
+
+Build a patch that produces this look. Not a copy of this exact frame — the
+recipe that would generate it, and frames either side of it.
+
+Read it first, in `notes`, in one line: what is the base pattern (noise,
+ramp, shape, feedback trail), what has been done to its contrast, what are
+the two or three colours, and is there evidence of a feedback loop — smearing,
+echoes, concentric repeats, anything that looks like the frame before it is
+still visible underneath.
+
+Then build that, out of operators:
+
+- Match the STRUCTURE before the colour. Getting "radial, high contrast,
+  trailing" right and the hue wrong is close. The reverse is not.
+- Colour last, and with a rampTOP composited on `multiply` — pick the ramp
+  ends off the image. Two colours in one node beats three numbers in three.
+- If it smears, echoes or tunnels, that is a feedback loop, and it is the
+  first thing to build, not a garnish at the end.
+- Reach for a glslTOP for the base pattern when no operator chain gives it,
+  and keep it to the pattern. A single shader that draws the whole image is
+  the failure mode here: nothing downstream can adjust it and no parameter
+  does anything.
+- Leave it TURNABLE. Whoever asked for this wants to push it somewhere else
+  next, so the interesting quantities belong in parameters on separate nodes,
+  not baked into one shader's constants.
+
+Where the image shows something these operators genuinely cannot do, get as
+close as they do reach and say what you left out in `notes`. Do not invent an
+operator to cover the gap."#
+}
+
 // --------------------------------------------------------------- the reply
 
 /// Pull the JSON object out of a reply that may be wrapped in prose or fences.

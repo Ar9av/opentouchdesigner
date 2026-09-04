@@ -2840,6 +2840,7 @@ dependencies = [
 name = "otd-ai"
 version = "0.1.0"
 dependencies = [
+ "image",
  "log",
  "otd-core",
  "otd-engine",
@@ -2859,6 +2860,7 @@ dependencies = [
  "otd-ai",
  "otd-chop",
  "otd-core",
+ "otd-dat",
  "otd-engine",
  "otd-gpu",
  "rfd",

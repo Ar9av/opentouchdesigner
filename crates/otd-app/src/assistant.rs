@@ -14,11 +14,18 @@
 //! **The key field is not where the key lives.** It is typed here and saved
 //! to a `0600` file outside every project, or it comes from the environment
 //! and is never typed at all. It does not go into the `.otd`.
+//!
+//! Two of the five providers have no key at all: Claude Code and Codex run
+//! the CLI this machine is already signed in to, so "configured" means "the
+//! binary is there" rather than "a key is stored". [`Provider::needs_key`]
+//! decides which panel a provider gets, and [`Assistant::ready`] is the one
+//! question the picker asks either way.
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{Color32, RichText};
-use otd_ai::{Ask, Keys, Provider, patch};
+use otd_ai::{Ask, Keys, Provider, cli, patch};
 
 use crate::app::OtdApp;
 
@@ -40,7 +47,24 @@ pub struct Assistant {
     /// screenshot.
     pub key_input: String,
     pub prompt: String,
+    /// A still to work back from. With one attached the prompt is optional:
+    /// pointing at a picture is a complete request.
+    pub image: Option<otd_ai::Image>,
+    /// The thumbnail, uploaded once and dropped whenever the image changes.
+    /// Rebuilding a texture every frame is how a 96-pixel preview becomes a
+    /// performance problem.
+    image_tex: Option<egui::TextureHandle>,
+    /// Where the bar was last drawn, so a file dropped on it is attached
+    /// rather than turned into a Movie File In. See [`claim_drop`].
+    pub bar_rect: egui::Rect,
     keys: Keys,
+    /// Whether each CLI provider's binary was found. A filesystem lookup, so
+    /// cheap enough to do at startup — unlike asking it its version, which
+    /// spawns a process and waits for it.
+    cli_found: BTreeMap<Provider, bool>,
+    /// What `--version` said, filled in the first time the settings window
+    /// draws that provider and on demand after that.
+    cli_version: BTreeMap<Provider, Result<String, String>>,
     pending: Option<Receiver<Result<(String, bool), String>>>,
     /// Notes from the last plan that was applied.
     pub last: Option<String>,
@@ -52,12 +76,21 @@ pub struct Assistant {
 impl Default for Assistant {
     fn default() -> Self {
         let keys = Keys::load();
-        // Open on a provider that already has a key, so somebody with
-        // OPENAI_API_KEY set lands somewhere that works.
+        let cli_found: BTreeMap<Provider, bool> = Provider::ALL
+            .iter()
+            .filter(|p| !p.needs_key())
+            .map(|p| (*p, cli::binary(*p).is_some()))
+            .collect();
+        // Open on a provider that is already usable, so somebody with
+        // OPENAI_API_KEY set — or with Claude Code installed and nothing
+        // else — lands somewhere that works.
         let provider = Provider::ALL
             .iter()
             .copied()
-            .find(|p| keys.get(*p).is_some())
+            .find(|p| match p.needs_key() {
+                true => keys.get(*p).is_some(),
+                false => cli_found.get(p).copied().unwrap_or(false),
+            })
             .unwrap_or(Provider::Anthropic);
         Assistant {
             open: false,
@@ -68,7 +101,12 @@ impl Default for Assistant {
             model: provider.default_model().to_string(),
             key_input: String::new(),
             prompt: String::new(),
+            image: None,
+            image_tex: None,
+            bar_rect: egui::Rect::NOTHING,
             keys,
+            cli_found,
+            cli_version: BTreeMap::new(),
             pending: None,
             last: None,
             warnings: Vec::new(),
@@ -83,14 +121,189 @@ impl Assistant {
         self.pending.is_some()
     }
 
-    /// Which providers are ready to use, for the picker.
-    fn has_key(&self, provider: Provider) -> bool {
-        self.keys.get(provider).is_some()
+    /// Which providers are ready to use, for the picker. A key for the three
+    /// that take one, an installed CLI for the two that do not.
+    fn ready(&self, provider: Provider) -> bool {
+        match provider.needs_key() {
+            true => self.keys.get(provider).is_some(),
+            false => self.cli_found.get(&provider).copied().unwrap_or(false),
+        }
     }
 
-    /// Nothing configured for the provider currently selected.
-    fn keys_missing(&self) -> bool {
-        !self.has_key(self.provider) && self.key_input.trim().is_empty()
+    /// Nothing configured for the provider currently selected. A key typed
+    /// but not yet saved counts — it works for this request.
+    fn not_configured(&self) -> bool {
+        !self.ready(self.provider)
+            && (!self.provider.needs_key() || self.key_input.trim().is_empty())
+    }
+
+    /// Re-run the CLI lookup, for after somebody installs one without
+    /// restarting the editor.
+    fn recheck_cli(&mut self, provider: Provider) {
+        self.cli_found
+            .insert(provider, cli::binary(provider).is_some());
+        self.cli_version.insert(provider, cli::detect(provider));
+    }
+
+    /// There is enough here to ask with: a prompt, a picture, or both.
+    ///
+    /// An image on its own is a request — "make this" — which is why this is
+    /// not simply a check on the text box.
+    pub fn has_request(&self) -> bool {
+        !self.prompt.trim().is_empty() || self.image.is_some()
+    }
+
+    /// Load a file as the reference image, reporting failure where the user
+    /// is already looking rather than swallowing it.
+    ///
+    /// Decoding and shrinking a large still takes a moment; it happens here,
+    /// once, rather than on the worker at send time, so the size shown in the
+    /// bar is the size that will actually be sent.
+    pub fn attach(&mut self, path: &std::path::Path) {
+        match otd_ai::Image::load(path) {
+            Ok(image) => {
+                self.image = Some(image);
+                self.image_tex = None;
+                self.error = None;
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+
+    pub fn detach(&mut self) {
+        self.image = None;
+        self.image_tex = None;
+    }
+
+    /// The thumbnail as a texture, uploaded on first use.
+    fn thumbnail(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        let image = self.image.as_ref()?;
+        if self.image_tex.is_none() {
+            let thumb = &image.thumb;
+            let pixels = egui::ColorImage::from_rgba_unmultiplied(
+                [thumb.width as usize, thumb.height as usize],
+                &thumb.rgba,
+            );
+            self.image_tex =
+                Some(ctx.load_texture("assistant-reference", pixels, egui::TextureOptions::LINEAR));
+        }
+        self.image_tex.clone()
+    }
+}
+
+/// The extensions the attach dialog offers. Deliberately the decoders this
+/// build actually has rather than every format with a magic number.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "bmp", "tga", "tif", "tiff", "ico", "ppm", "pgm", "pnm",
+];
+
+fn looks_like_an_image(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| IMAGE_EXTENSIONS.iter().any(|k| e.eq_ignore_ascii_case(k)))
+        .unwrap_or(false)
+}
+
+/// Whether a drop at this position would be taken as the reference image.
+///
+/// Split out from [`claim_drop`] so the hover overlay can promise exactly
+/// what the drop will do. An overlay that says "Movie File In" over a bar
+/// that is about to attach a reference is worse than no overlay.
+pub fn would_claim(app: &OtdApp, paths: &[std::path::PathBuf], at: Option<egui::Pos2>) -> bool {
+    if !app.assistant.bar || app.assistant.collapsed || app.perform {
+        return false;
+    }
+    let Some(at) = at else { return false };
+    // A drop on the bar that is not an image is not ours; the media router
+    // should have it rather than us silently eating it.
+    app.assistant.bar_rect.contains(at) && paths.iter().any(|p| looks_like_an_image(p))
+}
+
+/// Take a dropped file as the reference image, if it is one and it landed on
+/// the bar.
+///
+/// Called before the media router, and returning `true` means "handled" —
+/// otherwise the same drop would also become a Movie File In on the canvas,
+/// which is the correct thing to do with an image dropped anywhere *else*.
+pub fn claim_drop(app: &mut OtdApp, paths: &[std::path::PathBuf], at: Option<egui::Pos2>) -> bool {
+    if !would_claim(app, paths, at) {
+        return false;
+    }
+    let Some(image) = paths.iter().find(|p| looks_like_an_image(p)).cloned() else {
+        return false;
+    };
+    app.assistant.attach(&image);
+    true
+}
+
+/// The attach button and the chip that replaces it once something is on.
+///
+/// Shared by the bar and the settings window, because there is one attachment
+/// and it should look the same wherever it is shown.
+fn attachment_row(app: &mut OtdApp, ui: &mut egui::Ui) {
+    let texture = app.assistant.thumbnail(ui.ctx());
+    let Some(image) = &app.assistant.image else {
+        if ui
+            .small_button("📎")
+            .on_hover_text("Attach a reference image to work back from — or drop one on the bar")
+            .clicked()
+        {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Images", IMAGE_EXTENSIONS)
+                .pick_file()
+            {
+                app.assistant.attach(&path);
+            }
+        }
+        return;
+    };
+
+    let name = image.name();
+    let detail = image.detail();
+    if let Some(texture) = texture {
+        ui.add(
+            egui::Image::new(&texture)
+                .max_height(20.0)
+                .corner_radius(3.0),
+        )
+        .on_hover_text(format!("{name} — {detail}"));
+    }
+    ui.label(RichText::new(short_name(&name)).small().weak())
+        .on_hover_text(format!(
+            "{name} — {detail}\nThe patch is built to match this."
+        ));
+    if ui
+        .small_button("×")
+        .on_hover_text("Remove the reference image")
+        .clicked()
+    {
+        app.assistant.detach();
+    }
+}
+
+/// A filename that fits in a bar that is also holding a model picker.
+fn short_name(name: &str) -> String {
+    if name.chars().count() <= 18 {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(10).collect();
+    let tail: String = name
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}…{tail}")
+}
+
+/// What to show for a model name, given that one of them is deliberately
+/// empty. See `Provider::models` for why Codex has no default.
+fn model_label(model: &str) -> &str {
+    match model.trim().is_empty() {
+        true => "(CLI default)",
+        false => model,
     }
 }
 
@@ -145,6 +358,9 @@ pub fn bar(app: &mut OtdApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     ui.set_width(560.0);
                     bar_contents(app, ui);
+                    // Remembered so a file dropped here is attached rather
+                    // than built into the network. See `claim_drop`.
+                    app.assistant.bar_rect = ui.min_rect().expand(12.0);
                 });
         });
 }
@@ -153,12 +369,20 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
     let busy = app.assistant.busy();
 
     // ---- the prompt line
+    //
+    // The hint changes when a picture is attached, because what the box is
+    // for changes: with a reference, typing nothing is a complete request and
+    // whatever you do type is a correction to it.
+    let hint = match app.assistant.image.is_some() {
+        true => "Enter to build this image — or say what to change about it…",
+        false => "Describe a patch, and it gets built here…",
+    };
     let edit = ui.add(
         egui::TextEdit::multiline(&mut app.assistant.prompt)
             .frame(egui::Frame::NONE)
             .desired_rows(1)
             .desired_width(f32::INFINITY)
-            .hint_text("Describe a patch, and it gets built here…"),
+            .hint_text(hint),
     );
     if std::mem::take(&mut app.assistant.focus_bar) {
         edit.request_focus();
@@ -185,6 +409,8 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
             app.assistant.open = true;
         }
 
+        attachment_row(app, ui);
+
         // The model chip, as in every chat UI: provider and model in one
         // place, because they are one decision.
         let provider = app.assistant.provider;
@@ -193,7 +419,7 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
             .selected_text(chip)
             .show_ui(ui, |ui| {
                 for p in Provider::ALL {
-                    let has = app.assistant.has_key(*p);
+                    let has = app.assistant.ready(*p);
                     ui.label(
                         RichText::new(format!("{} {}", if has { "●" } else { "○" }, p.label()))
                             .small()
@@ -201,7 +427,7 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
                     );
                     for model in p.models() {
                         let selected = provider == *p && app.assistant.model == *model;
-                        if ui.selectable_label(selected, *model).clicked() {
+                        if ui.selectable_label(selected, model_label(model)).clicked() {
                             app.assistant.provider = *p;
                             app.assistant.model = model.to_string();
                         }
@@ -213,13 +439,20 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
                 }
             });
 
-        if app.assistant.keys_missing() {
+        if app.assistant.not_configured() {
+            let (short, hint) = match app.assistant.provider.needs_key() {
+                true => ("no key", "Click ⚙ to paste an API key"),
+                false => (
+                    "not installed",
+                    "Click ⚙ — this provider runs a CLI that is not on this machine",
+                ),
+            };
             ui.label(
-                RichText::new("no key")
+                RichText::new(short)
                     .small()
                     .color(Color32::from_rgb(235, 170, 90)),
             )
-            .on_hover_text("Click ⚙ to paste an API key");
+            .on_hover_text(hint);
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -240,7 +473,7 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
             if busy {
                 ui.spinner();
             } else {
-                let ready = !app.assistant.prompt.trim().is_empty();
+                let ready = app.assistant.has_request();
                 if ui
                     .add_enabled(ready, egui::Button::new("▶"))
                     .on_hover_text("Build it (Enter)")
@@ -360,7 +593,7 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
             .selected_text(current.label())
             .show_ui(ui, |ui| {
                 for provider in Provider::ALL {
-                    let mark = if app.assistant.has_key(*provider) {
+                    let mark = if app.assistant.ready(*provider) {
                         "●"
                     } else {
                         "○"
@@ -380,18 +613,18 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
                     }
                 }
             });
-        ui.label(RichText::new("● has a key").weak().small());
+        ui.label(RichText::new("● ready to use").weak().small());
     });
 
     ui.horizontal(|ui| {
         ui.label("Model");
         let provider = app.assistant.provider;
         egui::ComboBox::from_id_salt("ai-model")
-            .selected_text(app.assistant.model.clone())
+            .selected_text(model_label(&app.assistant.model).to_string())
             .show_ui(ui, |ui| {
                 for model in provider.models() {
                     if ui
-                        .selectable_label(app.assistant.model == *model, *model)
+                        .selectable_label(app.assistant.model == *model, model_label(model))
                         .clicked()
                     {
                         app.assistant.model = model.to_string();
@@ -407,15 +640,21 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
         );
     });
 
-    // ---- key
+    // ---- key, or the CLI that stands in for one
     let provider = app.assistant.provider;
+    if !provider.needs_key() {
+        cli_status(app, ui, provider);
+        ui.separator();
+        prompt_section(app, ui);
+        return;
+    }
     ui.horizontal(|ui| {
         ui.label("API key");
         ui.add(
             egui::TextEdit::singleline(&mut app.assistant.key_input)
                 .password(true)
                 .desired_width(220.0)
-                .hint_text(provider.env_var()),
+                .hint_text(provider.env_var().unwrap_or_default()),
         );
         if ui
             .add_enabled(
@@ -447,7 +686,7 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
             None => ui.label(
                 RichText::new(format!(
                     "no key — paste one, or set {} in the environment",
-                    provider.env_var()
+                    provider.env_var().unwrap_or_default()
                 ))
                 .weak()
                 .small(),
@@ -457,8 +696,63 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
 
     ui.separator();
+    prompt_section(app, ui);
+}
 
-    // ---- the prompt
+/// What stands in for the key field on a provider that has no key: whether
+/// the CLI is there, which one, and how to fix it if it is not.
+///
+/// The version check spawns a process, so it happens once — the first time
+/// this draws for a provider — rather than every frame.
+fn cli_status(app: &mut OtdApp, ui: &mut egui::Ui, provider: Provider) {
+    if !app.assistant.cli_version.contains_key(&provider) {
+        app.assistant.recheck_cli(provider);
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Signed in via");
+        match app.assistant.cli_version.get(&provider) {
+            Some(Ok(version)) => {
+                ui.label(RichText::new(version).monospace().small());
+            }
+            Some(Err(e)) => {
+                ui.label(
+                    RichText::new(e)
+                        .small()
+                        .color(Color32::from_rgb(235, 170, 90)),
+                );
+            }
+            None => {
+                ui.label(RichText::new("checking…").weak().small());
+            }
+        }
+        if ui
+            .small_button("Re-check")
+            .on_hover_text("Look for the CLI again — after installing it, say")
+            .clicked()
+        {
+            app.assistant.recheck_cli(provider);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(
+                "Uses this machine's own login, so it costs subscription quota rather than \
+                 API credit. Nothing is billed per token and no key is stored.",
+            )
+            .weak()
+            .small(),
+        );
+    });
+    ui.hyperlink_to(
+        RichText::new("install and sign in").small(),
+        provider.console_url(),
+    );
+}
+
+/// The prompt box and everything under it. Shared by both halves of the
+/// settings window, which differ only in what sits above it.
+fn prompt_section(app: &mut OtdApp, ui: &mut egui::Ui) {
     ui.label(
         RichText::new(format!(
             "Builds into {} — the network you are looking at.",
@@ -471,8 +765,23 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
         egui::TextEdit::multiline(&mut app.assistant.prompt)
             .desired_rows(3)
             .desired_width(f32::INFINITY)
-            .hint_text("Describe what you want to see…"),
+            .hint_text(match app.assistant.image.is_some() {
+                true => "What to change about the reference — or nothing, to just build it…",
+                false => "Describe what you want to see…",
+            }),
     );
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Reference").weak().small());
+        attachment_row(app, ui);
+        if app.assistant.image.is_none() {
+            ui.label(
+                RichText::new("a still to work back from — the look is rebuilt as operators")
+                    .weak()
+                    .small(),
+            );
+        }
+    });
 
     ui.horizontal_wrapped(|ui| {
         for suggestion in SUGGESTIONS {
@@ -483,7 +792,7 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
 
     ui.horizontal(|ui| {
-        let ready = !app.assistant.busy() && !app.assistant.prompt.trim().is_empty();
+        let ready = !app.assistant.busy() && app.assistant.has_request();
         if ui
             .add_enabled(ready, egui::Button::new("Build it"))
             .clicked()
@@ -553,19 +862,27 @@ fn send(app: &mut OtdApp) {
             otd_ai::Key::new(app.assistant.key_input.clone()),
         );
     }
-    let Some(key) = keys.get(app.assistant.provider).cloned() else {
-        app.assistant.error = Some(format!(
-            "no API key for {} — paste one, or set {}",
-            app.assistant.provider.label(),
-            app.assistant.provider.env_var()
-        ));
-        return;
+    // A CLI provider has no key to be missing; `cli::complete` reports an
+    // absent or signed-out binary itself, in its own words.
+    let key = match app.assistant.provider.env_var() {
+        Some(var) => match keys.get(app.assistant.provider).cloned() {
+            Some(key) => key,
+            None => {
+                app.assistant.error = Some(format!(
+                    "no API key for {} — paste one, or set {var}",
+                    app.assistant.provider.label(),
+                ));
+                return;
+            }
+        },
+        None => otd_ai::Key::new(""),
     };
 
     let request = otd_ai::request_for(&Ask {
         provider: app.assistant.provider,
         model: app.assistant.model.clone(),
         prompt: app.assistant.prompt.clone(),
+        image: app.assistant.image.clone(),
         graph: &app.graph,
         parent: app.current,
         registry: &app.registry,
@@ -668,19 +985,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_opens_on_a_provider_that_has_a_key() {
+    fn it_opens_on_a_provider_that_is_usable() {
         // The default has to be useful on a machine where exactly one of the
-        // three is configured, which is the normal case.
+        // five is configured, which is the normal case — and "configured"
+        // means a key for three of them and an installed CLI for two.
         let assistant = Assistant::default();
-        if Provider::ALL.iter().any(|p| assistant.has_key(*p)) {
+        if Provider::ALL.iter().any(|p| assistant.ready(*p)) {
             assert!(
-                assistant.has_key(assistant.provider),
-                "opened on {:?} with no key",
+                assistant.ready(assistant.provider),
+                "opened on {:?}, which is not usable",
                 assistant.provider
             );
         }
-        assert!(!assistant.model.is_empty());
         assert!(!assistant.busy());
+        // Codex's default model is deliberately empty, so `model` may be too;
+        // what must hold is that it is one this provider offers.
+        assert!(
+            assistant
+                .provider
+                .models()
+                .contains(&assistant.model.as_str()),
+            "{:?} opened on a model it does not list: {:?}",
+            assistant.provider,
+            assistant.model
+        );
+    }
+
+    #[test]
+    fn a_cli_provider_never_asks_for_a_key() {
+        // The bar says "not installed" rather than "no key", and no amount of
+        // typing in a key field it does not have makes it configured.
+        let assistant = Assistant {
+            provider: Provider::ClaudeCode,
+            key_input: "sk-ant-whatever".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            assistant.not_configured(),
+            !assistant.ready(Provider::ClaudeCode)
+        );
+        assert!(Provider::ClaudeCode.env_var().is_none());
+    }
+
+    #[test]
+    fn a_picture_on_its_own_is_a_complete_request() {
+        // The send button is gated on this, and an attached reference with an
+        // empty box has to enable it — "build this" needs no words.
+        let mut assistant = Assistant::default();
+        assert!(!assistant.has_request(), "nothing typed, nothing attached");
+        assistant.prompt = "  ".into();
+        assert!(!assistant.has_request(), "whitespace is not a request");
+        assistant.prompt = "a blue tunnel".into();
+        assert!(assistant.has_request());
+    }
+
+    #[test]
+    fn only_images_are_taken_as_references() {
+        // Everything else dropped on the bar belongs to the media router, and
+        // eating it silently would lose the drop entirely.
+        for name in ["reference.png", "shot.JPG", "grab.webp"] {
+            assert!(looks_like_an_image(std::path::Path::new(name)), "{name}");
+        }
+        for name in ["clip.mov", "patch.otd", "shader.glsl", "notes", "a.png.txt"] {
+            assert!(!looks_like_an_image(std::path::Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_long_filename_is_shortened_from_the_middle() {
+        // Both ends carry meaning — the subject at the front, the extension at
+        // the back — so it is the middle that goes.
+        let short = short_name("ref.png");
+        assert_eq!(short, "ref.png");
+        let long = short_name("a-very-long-reference-screenshot-name.png");
+        assert!(long.chars().count() <= 18, "{long}");
+        assert!(long.starts_with("a-very-lon"), "{long}");
+        assert!(long.ends_with(".png"), "{long}");
+    }
+
+    #[test]
+    fn an_empty_model_reads_as_the_clis_own_default() {
+        assert_eq!(model_label(""), "(CLI default)");
+        assert_eq!(model_label("  "), "(CLI default)");
+        assert_eq!(model_label("sonnet"), "sonnet");
     }
 
     #[test]
