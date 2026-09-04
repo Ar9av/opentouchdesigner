@@ -321,6 +321,12 @@ doing the same job — a `delete` list, sometimes with a `set` to compensate.
 - `pos` must not land on an existing node. Their positions are listed —
   put new work in clear space, about 200 apart, and keep the flow left to
   right.
+- IF THE NETWORK ALREADY ENDS IN A nullTOP, THAT IS THE OUTPUT. Insert your
+  chain in FRONT of it — wire the last operator you add into that existing
+  null — and set `viewer` to it. Do not add a second nullTOP beside it. A
+  patch with `out1` still showing the raw clip and your work parked on an
+  `out2` nobody is looking at is the commonest way an answer that is
+  entirely correct still shows the user no change at all.
 - A node marked [SELECTED] is what "it", "this" and "that" refer to.
 
 OPERATORS NAMED BY PARAMETER, NOT BY WIRE
@@ -391,6 +397,36 @@ WHAT MAKES A GOOD-LOOKING PATCH
   feedbackTOP -> levelTOP (brightness ~0.96, the decay) -> transformTOP
   (scale ~1.03 or rotate ~1, the movement) -> compositeTOP with the source.
   Point the feedbackTOP's `target` parameter at the LAST node in the chain.
+
+- A LOOP THAT ADDS FULL-BRIGHTNESS VIDEO SATURATES TO WHITE. `add` and
+  `screen` accumulate, and a loop that keeps `brightness` of what it had
+  settles at roughly `source / (1 - brightness)` — so decay 0.95 with a
+  bright clip going in every frame is twenty times the clip, which is solid
+  white within a second. The wisps recipe above gets away with 0.96 because
+  what it feeds in is a few dim highlights, not a photograph.
+  Feeding a CAMERA or a MOVIE into an `add` loop, do one of these:
+  - put a levelTOP on the SOURCE before the composite, `brightness` 0.1-0.2,
+    so only a suggestion of each frame enters the loop; or
+  - decay much harder — `brightness` 0.80-0.88 on the loop's own levelTOP; or
+  - use `maximum`, which keeps the brightest of the two and cannot run away.
+  Pick ONE of those three. Doing two at once kills the loop instead of
+  taming it, and the arithmetic says exactly why: a source dimmed to 0.15
+  arrives below a `blacklevel` of 0.35, so the decay stage crushes it to
+  zero on its first lap and the loop starves. Whatever `blacklevel` the
+  loop's levelTOP has must be BELOW the brightness the source enters at, or
+  the source might as well not be wired in. If in doubt leave `blacklevel`
+  at 0 and simply dim the source — that always works.
+
+- THE COMPOSITE THAT CLOSES A FEEDBACK LOOP MUST NOT BE `over`. A
+  compositeTOP's inputs are `base` then `over`, and input 1 is drawn over
+  input 0. Video and most generators are fully opaque, so `over` means input
+  1 wins outright and input 0 contributes NOTHING. Wire the source to input 0
+  and the feedback to input 1 with the default operation and you have built a
+  loop the source cannot get into: it looks right for about a second, then
+  the decay eats what was already circulating and the whole thing fades to
+  black. Use `add`, `screen` or `maximum`, all of which let both sides
+  through. This is the single most common way a generated feedback patch
+  dies, and it dies slowly enough to look fine at first.
   A feedbackTOP has NO INPUTS — it reads through `target`, so never list a
   connection into one. Wiring `x -> feedback1` is rejected as an input index
   out of range and the loop silently does not close.
@@ -1044,11 +1080,87 @@ pub fn apply(
         let _ = graph.connect(src, consumer, slot);
     }
 
+    for name in starved_loops(graph, &made) {
+        applied.warnings.push(format!(
+            "{name} closes a feedback loop with `over`, which hides its other \
+             input — the picture will fade to black. Use add, screen or maximum."
+        ));
+    }
+
     let viewer = plan
         .viewer
         .as_ref()
         .and_then(|name| resolve(graph, &made, name));
     Ok((applied, viewer))
+}
+
+/// Composites that close a feedback loop in a way the source cannot survive.
+///
+/// A Composite TOP draws input 1 over input 0, and video is opaque, so `over`
+/// means input 1 wins outright. Wire the source to input 0 and the feedback
+/// to input 1 — the obvious way round, and the way a model writes it — and
+/// the loop is sealed against its own source: it looks correct for about a
+/// second, then the decay consumes what was already circulating and the whole
+/// patch fades to black.
+///
+/// Worth a warning rather than a silent fix, because `over` on a feedback
+/// branch is occasionally what somebody means — a matte with real alpha
+/// composites exactly this way. Found by rendering the frames: it passes
+/// every structural check there is.
+fn starved_loops(graph: &Graph, made: &BTreeMap<String, NodeId>) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in made.values().copied() {
+        let node = graph.node(id);
+        // Found by shape rather than by name: anything with two inputs and an
+        // `operation` menu offering `over` blends the same way and starves a
+        // loop the same way, and a check keyed on `compositeTOP` would stop
+        // being true the day a second such operator is added.
+        let Some(operation_param) = node.param("operation") else {
+            continue;
+        };
+        let offers_over = operation_param
+            .menu
+            .as_ref()
+            .map(|m| m.iter().any(|o| o.eq_ignore_ascii_case("over")))
+            .unwrap_or(false);
+        if !offers_over || node.inputs.len() < 2 {
+            continue;
+        }
+        let operation = operation_param.value.as_str();
+        // Empty means the default, which is `over`.
+        if !(operation.is_empty() || operation.eq_ignore_ascii_case("over")) {
+            continue;
+        }
+        // Input 0 has to be carrying something, or there is nothing to hide.
+        if node.inputs.first().copied().flatten().is_none() {
+            continue;
+        }
+        let Some(over) = node.inputs.get(1).copied().flatten() else {
+            continue;
+        };
+        if reaches_feedback(graph, over, 6) {
+            out.push(node.name.clone());
+        }
+    }
+    out
+}
+
+/// Whether a Feedback TOP is within `depth` hops upstream. The decay and the
+/// transform usually sit between the feedback and the composite, so this has
+/// to look further than one wire.
+fn reaches_feedback(graph: &Graph, from: NodeId, depth: usize) -> bool {
+    if graph.node(from).op_type.to_lowercase().contains("feedback") {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    graph
+        .node(from)
+        .inputs
+        .iter()
+        .flatten()
+        .any(|up| reaches_feedback(graph, *up, depth - 1))
 }
 
 /// The wires that keep a chain joined when a run of nodes is taken out of it.
@@ -1481,6 +1593,86 @@ mod tests {
         assert_eq!(split_export("/rack/lag1:chan1"), Some(("/rack/lag1", "chan1")));
         assert_eq!(split_export("  lag1 : r "), Some(("lag1", "r")));
         assert_eq!(split_export("lag1:"), None);
+    }
+
+    #[test]
+    fn a_feedback_loop_closed_with_over_is_warned_about() {
+        // The failure that rendering frames found and every structural check
+        // missed: source into input 0, feedback into input 1, default `over`.
+        // Opaque input 1 wins outright, the source never enters the loop, and
+        // the patch fades to black over about a second — long enough to look
+        // like it worked.
+        let reg = feedback_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "src1", "op": "pass" },
+                { "name": "fb1", "op": "feedback" },
+                { "name": "decay1", "op": "pass" },
+                { "name": "comp1", "op": "comp" }
+            ],
+            "connections": [
+                { "from": "src1", "to": "comp1", "input": 0 },
+                { "from": "fb1", "to": "decay1", "input": 0 },
+                { "from": "decay1", "to": "comp1", "input": 1 }
+            ]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("fade to black")),
+            "{:?}",
+            applied.warnings
+        );
+
+        // `add` lets both sides through, so it is not warned about.
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let mut ok = value.clone();
+        ok["nodes"][3]["params"] = serde_json::json!({ "operation": "add" });
+        let plan = parse_plan(&ok, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+        assert!(applied.warnings.is_empty(), "{:?}", applied.warnings);
+    }
+
+    /// `pass`, plus a two-input composite and a feedback to build a loop from.
+    fn feedback_registry() -> OpRegistry {
+        fn comp_params() -> IndexMap<String, Param> {
+            let mut m = IndexMap::new();
+            m.insert(
+                "operation".into(),
+                Param::menu("over", &["over", "add", "screen"]).with_label("Operation"),
+            );
+            m
+        }
+        fn none() -> IndexMap<String, Param> {
+            IndexMap::new()
+        }
+        let mut r = test_registry();
+        r.register(OpDef {
+            type_name: "comp",
+            input_families: &[],
+            label: "Comp",
+            family: Family::Top,
+            inputs: &["base", "over"],
+            summary: "",
+            time_dependent: false,
+            params: comp_params,
+            connector: Connector::None,
+        });
+        r.register(OpDef {
+            type_name: "feedback",
+            input_families: &[],
+            label: "Feedback",
+            family: Family::Top,
+            inputs: &[],
+            summary: "",
+            time_dependent: true,
+            params: none,
+            connector: Connector::None,
+        });
+        r
     }
 
     #[test]
