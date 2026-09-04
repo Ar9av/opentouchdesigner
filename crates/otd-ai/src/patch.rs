@@ -323,6 +323,29 @@ doing the same job — a `delete` list, sometimes with a `set` to compensate.
   right.
 - A node marked [SELECTED] is what "it", "this" and "that" refer to.
 
+OPERATORS NAMED BY PARAMETER, NOT BY WIRE
+Some operators reach another one through a parameter holding its name rather
+than through a connection. Write the plain node name; it is turned into a real
+path for you. These are easy to forget and the patch looks built without them:
+
+- `feedbackTOP.target` — the node whose last frame comes back round.
+- `selectTOP.top` — pull any TOP's output in from anywhere, no wire.
+- `renderTOP.geometry`, `.camera`, `.light` — a Render TOP has NO inputs.
+  It renders the Geometry COMP, Camera COMP and Light COMP you name here.
+  Leave any of them blank and you get an empty frame.
+- `geometryCOMP.sop` — which SOP it draws. `.material` — which MAT shades it.
+- `geometryCOMP.instancechop` — one instance per sample of that CHOP, with
+  `instancing` true. `tx`/`ty`/`tz` name which of its channels are position.
+- `replicatorCOMP.master` / `.template`.
+
+So the shape of a 3D patch is four nodes that reference each other and only
+one wire between them:
+
+  torus1 (torusSOP)                       geo1.sop        = torus1
+  geo1   (geometryCOMP)                   render1.geometry = geo1
+  cam1   (cameraCOMP), light1 (lightCOMP) render1.camera   = cam1
+  render1 (renderTOP) -> out1             render1.light    = light1
+
 MAKING A PATCH REACT TO SOMETHING
 `expressions` animates on a clock, and a clock is not a reaction — the patch
 does the same thing whether anybody is in front of it or not. Reacting is
@@ -801,18 +824,36 @@ pub fn apply(
         }
     }
 
-    // A Feedback TOP's target is a path, and the model wrote it before the
-    // nodes had paths. Rewrite bare names into real ones.
-    for (name, id) in &made {
-        let _ = name;
-        let target = graph.node(*id).param("target").map(|p| p.value.as_str());
-        if let Some(target) = target {
-            let bare = target.trim().trim_start_matches('/');
-            if !bare.is_empty() {
-                if let Some(node) = made.get(bare) {
-                    let path = graph.path(*node);
-                    let _ = graph.set_param(*id, "target", Value::Str(path));
-                }
+    // Parameters that name another operator hold a *path*, and the model
+    // wrote them before any node had one — and before the graph renamed
+    // anything that collided. Rewrite bare names into real paths.
+    //
+    // Every path-reference parameter, not just a Feedback TOP's `target`,
+    // which is all this used to cover. The others are `renderTOP.camera`,
+    // `.light` and `.geometry`, `geometryCOMP.sop`, `.material` and
+    // `.instancechop`, `selectTOP.top`, `replicatorCOMP.master` — which is
+    // to say the entire 3D and instancing half of the program. A plan that
+    // built a torus, a camera and a light wired nothing up wrong; it just
+    // pointed the Render TOP at `cam1` when the node had become `/cam1`, and
+    // rendered an empty frame. `is_path_ref` is the registry's own marker for
+    // these, so operators added later are covered without a list here.
+    let touched: Vec<NodeId> = made.values().copied().collect();
+    for id in touched {
+        let refs: Vec<(String, String)> = graph
+            .node(id)
+            .params
+            .iter()
+            .filter(|(_, p)| p.is_path_ref())
+            .map(|(key, p)| (key.clone(), p.value.as_str()))
+            .collect();
+        for (key, value) in refs {
+            let bare = value.trim().trim_start_matches('/');
+            if bare.is_empty() {
+                continue;
+            }
+            if let Some(node) = made.get(bare) {
+                let path = graph.path(*node);
+                let _ = graph.set_param(id, &key, Value::Str(path));
             }
         }
     }
@@ -1042,6 +1083,8 @@ mod tests {
                 Param::menu("over", &["over", "add"]).with_label("Mode"),
             );
             m.insert("size".into(), Param::new(Value::Vec2([1.0, 1.0])));
+            // A path reference, the marker `apply` rewrites bare names for.
+            m.insert("camera".into(), Param::str("").with_label("Camera").as_path_ref());
             m
         }
         let mut r = OpRegistry::new();
@@ -1307,6 +1350,41 @@ mod tests {
         assert!(parse_plan(&value, &reg).is_ok());
         let empty = serde_json::json!({ "notes": "nothing to do" });
         assert!(parse_plan(&empty, &reg).is_err());
+    }
+
+    #[test]
+    fn every_path_reference_is_rewritten_not_only_feedbacks_target() {
+        // The model names another operator before any node has a path, and
+        // before the graph has renamed anything that collided. Only `target`
+        // used to be rewritten, which left `renderTOP.camera` and friends
+        // pointing at a bare name — the entire 3D and instancing half of the
+        // program building correctly and rendering an empty frame.
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+
+        // Occupy the names first, so the plan's nodes get renamed and a
+        // rewrite that merely prepended a slash would point at the wrong one.
+        let squatter =
+            parse_plan(&serde_json::json!({"nodes":[{"name":"cam1","op":"beat"}]}), &reg).unwrap();
+        apply(&mut graph, root, &reg, &squatter).unwrap();
+
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "cam1", "op": "beat" },
+                { "name": "render1", "op": "pass", "params": { "camera": "cam1" } }
+            ]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        let render = graph.find_from(root, &applied.created[1]).unwrap();
+        let pointed = graph.node(render).param("camera").unwrap().value.as_str();
+        assert_eq!(
+            pointed,
+            format!("/{}", applied.created[0]),
+            "should point at the camera this plan made, renamed and all"
+        );
     }
 
     #[test]

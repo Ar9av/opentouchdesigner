@@ -209,6 +209,25 @@ It is still one undo. The checkpoint is taken before the first change of any
 kind, so `Cmd/Ctrl+Z` puts back everything a plan created, retuned *and*
 removed, in one go.
 
+## Operators named by parameter
+
+Not everything in a patch is joined by a wire. A Render TOP has no inputs at
+all — it renders the Geometry, Camera and Light COMPs named in its
+parameters. A Geometry COMP names the SOP it draws, the MAT that shades it
+and the CHOP that instances it. Select TOP names any TOP anywhere.
+
+The model writes those as plain names, before any node has a path and before
+the graph has renamed anything that collided, so `apply` rewrites them.
+It used to rewrite exactly one: a Feedback TOP's `target`. Everything else
+kept the bare name and quietly pointed at nothing — which is the whole 3D and
+instancing half of the program building perfectly and rendering an empty
+frame. It now rewrites every parameter the registry marks `is_path_ref`, so
+operators added later are covered without a list to maintain.
+
+The scenario harness prints `DANGLING REF` for any path parameter that does
+not resolve after a plan is applied, because no warning covers it and the
+symptom is a black texture.
+
 ## Reacting to something
 
 `expressions` animates on a clock, and a clock is not a reaction — the patch

@@ -388,6 +388,31 @@ fn main() {
                     if !applied.changed.is_empty() {
                         println!("            retuned: {}", applied.changed.join(" "));
                     }
+                    // A parameter naming another operator that is not there
+                    // is the quiet 3D failure: everything builds, nothing
+                    // renders. Worth printing, because no warning covers it.
+                    for name in &applied.created {
+                        let Some(id) = graph.find_from(root, name) else {
+                            continue;
+                        };
+                        let dangling: Vec<String> = graph
+                            .node(id)
+                            .params
+                            .iter()
+                            .filter(|(_, p)| p.is_path_ref())
+                            .filter(|(_, p)| !p.value.as_str().trim().is_empty())
+                            .filter(|(_, p)| {
+                                graph.find_from(id, p.value.as_str().trim()).is_none()
+                            })
+                            .map(|(k, p)| format!("{k}={}", p.value.as_str()))
+                            .collect();
+                        if !dangling.is_empty() {
+                            println!(
+                                "            DANGLING REF {name}: {}",
+                                dangling.join(" ")
+                            );
+                        }
+                    }
                     for warning in &applied.warnings {
                         println!("            warn: {warning}");
                     }
