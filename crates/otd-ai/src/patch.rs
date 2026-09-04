@@ -179,11 +179,19 @@ WHAT MAKES A GOOD-LOOKING PATCH
 - Colour a monochrome source by compositing it with a rampTOP on `multiply`.
   Two colours in one node beats three numbers in three.
 - Deep blacks are what make bright things look bright.
-- For anything a chain of operators cannot do, use a glslTOP and put WGSL in
-  its `source` parameter. A fragment body has `in.uv`, `U.time.x`, `U.res`
-  and `sample0(uv)` in scope; if you need helper functions, declare your own
-  `@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32>` and the source is
-  compiled as written instead of wrapped.
+- For anything a chain of operators cannot do, use a glslTOP. ALWAYS set its
+  `language` parameter to "glsl" and write the `source` as a Shadertoy-style
+  fragment shader:
+
+      void mainImage(out vec4 fragColor, in vec2 fragCoord) {{
+          vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+          fragColor = vec4(0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0,2,4)), 1.0);
+      }}
+
+  `iTime`, `iResolution` and `iFrame` are in scope, and helper functions are
+  allowed above `mainImage`. Write GLSL, not WGSL: this is the dialect with
+  a million worked examples, and a shader that does not compile is a black
+  node. Keep it short and make sure every identifier is one you declared.
 
 OPERATOR CATALOGUE
 {}"#,
@@ -659,5 +667,169 @@ mod tests {
         let text = describe(&graph, root);
         assert!(text.contains("a (pass)"), "{text}");
         assert!(text.contains("0<-a"), "{text}");
+    }
+}
+
+// ------------------------------------------------------------ shader checks
+
+/// A shader compiler, supplied by the caller.
+///
+/// `otd-ai` must not depend on the GPU crate — the whole point of it having
+/// no GPU dependency is that key handling and validation are testable without
+/// one — so the compiler arrives as a function pointer instead. The editor
+/// passes naga's front end, which is the same one that would reject the
+/// shader a moment later on the node.
+pub type ShaderCheck = fn(source: &str, is_glsl: bool) -> Result<(), String>;
+
+/// Every shader in a reply that will not compile, as `(node, error)`.
+///
+/// Worth doing *before* the nodes exist. A model that writes a shader
+/// referencing something it invented produces a node that outlines red and an
+/// output that is silently black — the patch looks built and is not.
+pub fn shader_problems(value: &serde_json::Value, check: ShaderCheck) -> Vec<(String, String)> {
+    let mut problems = Vec::new();
+    let Some(nodes) = value.get("nodes").and_then(|n| n.as_array()) else {
+        return problems;
+    };
+    for (i, node) in nodes.iter().enumerate() {
+        let Some(params) = node.get("params").and_then(|p| p.as_object()) else {
+            continue;
+        };
+        let Some(source) = params.get("source").and_then(|s| s.as_str()) else {
+            continue;
+        };
+        if source.trim().is_empty() {
+            continue;
+        }
+        let is_glsl = params
+            .get("language")
+            .and_then(|l| l.as_str())
+            .map(|l| l.eq_ignore_ascii_case("glsl"))
+            .unwrap_or(false);
+        if let Err(e) = check(source, is_glsl) {
+            let name = node
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("node{}", i + 1));
+            problems.push((name, e));
+        }
+    }
+    problems
+}
+
+/// Nodes a plan creates that nothing reads and nothing looks at.
+///
+/// A model asked to add to a patch will sometimes build a whole second chain
+/// and forget to join it on. The nodes are real, they cook, and they do
+/// nothing — worth saying so rather than leaving them to be found.
+pub fn dangling(plan: &Plan) -> Vec<String> {
+    plan.nodes
+        .iter()
+        .filter(|node| {
+            let read = plan.connections.iter().any(|w| w.from == node.name);
+            let viewed = plan.viewer.as_deref() == Some(node.name.as_str());
+            // A node that feeds nothing and is not the output. Feedback is
+            // exempt: it is read by its `target`, not by a wire.
+            !read && !viewed && !node.op.to_lowercase().contains("feedback")
+        })
+        .map(|node| node.name.clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod shader_tests {
+    use super::*;
+
+    /// Stands in for naga: anything mentioning `ghost` is undefined.
+    fn fake_check(source: &str, _is_glsl: bool) -> Result<(), String> {
+        if source.contains("ghost") {
+            Err("no definition in scope for `ghost`".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_shader_that_will_not_compile_is_found_before_the_node_exists() {
+        // The failure this catches is the nasty one: the patch looks built,
+        // the node outlines red, and the output is silently black.
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "zig1", "op": "glslTOP",
+                  "params": { "source": "return vec4f(ghost, 0.0, 0.0, 1.0);" } },
+                { "name": "ok1", "op": "glslTOP",
+                  "params": { "source": "return vec4f(1.0);" } }
+            ]
+        });
+        let problems = shader_problems(&value, fake_check);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].0, "zig1");
+        assert!(problems[0].1.contains("ghost"));
+    }
+
+    #[test]
+    fn nodes_without_shaders_are_not_checked() {
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "a", "op": "noiseTOP", "params": { "period": 0.3 } },
+                { "name": "b", "op": "glslTOP", "params": { "source": "  " } },
+                { "name": "c", "op": "textDAT", "params": { "text": "ghost" } }
+            ]
+        });
+        // `c` has a `text` parameter, not a `source` one — checking every
+        // string a model wrote would reject prose.
+        assert!(shader_problems(&value, fake_check).is_empty());
+    }
+
+    #[test]
+    fn a_chain_the_model_forgot_to_join_on_is_reported() {
+        // Exactly what a model does when asked to add to an existing patch:
+        // builds a whole second loop and never wires it in.
+        let plan = Plan {
+            nodes: vec![
+                node("a", "noiseTOP"),
+                node("b", "levelTOP"),
+                node("out1", "nullTOP"),
+                node("fb2", "feedbackTOP"),
+                node("decay2", "levelTOP"),
+            ],
+            connections: vec![wire("a", "b"), wire("b", "out1"), wire("fb2", "decay2")],
+            viewer: Some("out1".into()),
+            ..Default::default()
+        };
+        let loose = dangling(&plan);
+        // `decay2` feeds nothing and is not the output. `fb2` feeds decay2,
+        // and `out1` is the viewer, so neither is loose.
+        assert_eq!(loose, vec!["decay2"]);
+    }
+
+    #[test]
+    fn a_feedback_node_is_never_called_loose() {
+        // Feedback is read through its `target` parameter, not a wire, so
+        // the usual "nothing reads it" test would libel it.
+        let plan = Plan {
+            nodes: vec![node("fb1", "feedbackTOP")],
+            ..Default::default()
+        };
+        assert!(dangling(&plan).is_empty());
+    }
+
+    fn node(name: &str, op: &str) -> PlannedNode {
+        PlannedNode {
+            name: name.into(),
+            op: op.into(),
+            pos: [0.0, 0.0],
+            params: BTreeMap::new(),
+            expressions: BTreeMap::new(),
+        }
+    }
+
+    fn wire(from: &str, to: &str) -> PlannedWire {
+        PlannedWire {
+            from: from.into(),
+            to: to.into(),
+            input: 0,
+        }
     }
 }

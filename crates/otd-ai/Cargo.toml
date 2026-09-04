@@ -16,3 +16,4 @@ log = "0.4.33"
 [dev-dependencies]
 # The example wants the real operator set; the library must not depend on it.
 otd-engine = { version = "0.1.0", path = "../otd-engine" }
+otd-gpu = { version = "0.1.0", path = "../otd-gpu" }

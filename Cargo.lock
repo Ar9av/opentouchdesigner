@@ -2825,6 +2825,7 @@ dependencies = [
  "log",
  "otd-core",
  "otd-engine",
+ "otd-gpu",
  "serde_json",
  "ureq",
 ]

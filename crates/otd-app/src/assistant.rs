@@ -41,7 +41,7 @@ pub struct Assistant {
     pub key_input: String,
     pub prompt: String,
     keys: Keys,
-    pending: Option<Receiver<Result<String, String>>>,
+    pending: Option<Receiver<Result<(String, bool), String>>>,
     /// Notes from the last plan that was applied.
     pub last: Option<String>,
     pub warnings: Vec<String>,
@@ -224,14 +224,14 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .small_button("✕")
+                .small_button("×")
                 .on_hover_text("Hide the bar (Cmd/Ctrl+K brings it back)")
                 .clicked()
             {
                 app.assistant.bar = false;
             }
             if ui
-                .small_button("▾")
+                .small_button("–")
                 .on_hover_text("Collapse (Escape)")
                 .clicked()
             {
@@ -242,7 +242,7 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
             } else {
                 let ready = !app.assistant.prompt.trim().is_empty();
                 if ui
-                    .add_enabled(ready, egui::Button::new("➤"))
+                    .add_enabled(ready, egui::Button::new("▶"))
                     .on_hover_text("Build it (Enter)")
                     .clicked()
                     || (entered && ready)
@@ -526,6 +526,18 @@ fn body(app: &mut OtdApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The shader compiler, for the worker to check the model's work with.
+///
+/// Naga's front end — the same one that would reject the shader a moment
+/// later on the node, so a shader that passes here compiles there.
+fn check_shader(source: &str, is_glsl: bool) -> Result<(), String> {
+    if is_glsl {
+        otd_gpu::shader::validate_glsl(&otd_gpu::shader::wrap_glsl(source))
+    } else {
+        otd_gpu::shader::validate_wgsl(&otd_gpu::shader::wrap_wgsl(source))
+    }
+}
+
 /// Build the request here, where the graph is, and hand it to a worker.
 fn send(app: &mut OtdApp) {
     app.assistant.error = None;
@@ -563,8 +575,8 @@ fn send(app: &mut OtdApp) {
     let _ = std::thread::Builder::new()
         .name("otd-assistant".into())
         .spawn(move || {
-            let result = otd_ai::provider::complete(&request, &key, &keys);
-            let _ = tx.send(result);
+            let result = otd_ai::complete_with_repair(&request, &key, &keys, Some(check_shader));
+            let _ = tx.send(result.map(|r| (r.text, r.repaired)));
         });
     app.assistant.pending = Some(rx);
 }
@@ -585,8 +597,8 @@ fn poll(app: &mut OtdApp) {
     };
     app.assistant.pending = None;
 
-    let text = match reply {
-        Ok(text) => text,
+    let (text, repaired) = match reply {
+        Ok(pair) => pair,
         Err(e) => {
             app.assistant.error = Some(e);
             return;
@@ -619,6 +631,28 @@ fn poll(app: &mut OtdApp) {
                 applied.wired
             );
             app.assistant.warnings = applied.warnings;
+            // Anything the model built and then forgot to join on. The nodes
+            // are real and they cook; saying so beats leaving them to be
+            // found.
+            let loose = patch::dangling(&plan);
+            if !loose.is_empty() {
+                app.assistant.warnings.push(format!(
+                    "created but wired to nothing: {}",
+                    loose.join(", ")
+                ));
+            }
+            // A shader that survived the repair round still broken would
+            // otherwise be a red node and a silently black output.
+            if let Ok(json) = patch::extract_json(&text) {
+                for (node, error) in patch::shader_problems(&json, check_shader) {
+                    app.assistant
+                        .warnings
+                        .push(format!("{node}: shader still does not compile — {error}"));
+                }
+            }
+            if repaired {
+                app.assistant.status.push_str(" · shader fixed on retry");
+            }
             app.assistant.last = Some(if plan.notes.trim().is_empty() {
                 "Built.".to_string()
             } else {
