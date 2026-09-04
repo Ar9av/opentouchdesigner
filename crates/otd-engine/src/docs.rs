@@ -99,8 +99,11 @@ const NOTES: &[(&str, &str)] = &[
     (
         "audiofileinCHOP",
         "Plays RIFF/WAVE — PCM in 8, 16, 24 or 32 bits, or 32-bit float — \
-         which is what a DAW bounces. Compressed formats wait for the video \
-         layer and its real media stack.\n\n\
+         which is what a DAW bounces, decoded in-process with no external \
+         tool. Anything else — m4a, mp3, ogg, flac, or the soundtrack of a \
+         movie file — is decoded by `ffmpeg`, the same one Movie File In \
+         uses, so it plays if ffmpeg is installed and the node says so \
+         plainly if it is not.\n\n\
          Playback is a function of the timeline, not a private play head: the \
          sample at time `t` is always the file at `t × speed`. Scrubbing the \
          timeline scrubs the audio, a loop range loops it, and a headless \

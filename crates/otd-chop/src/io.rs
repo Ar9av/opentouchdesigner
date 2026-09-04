@@ -287,10 +287,7 @@ fn cook_audio_file(c: &mut ChopCtx) -> ChopData {
             Some(dir) if !std::path::Path::new(&file).is_absolute() => dir.join(&file),
             _ => std::path::PathBuf::from(&file),
         };
-        let loaded = std::fs::read(&resolved)
-            .map_err(|e| format!("{}: {e}", resolved.display()))
-            .and_then(|bytes| crate::wav::parse(&bytes));
-        match loaded {
+        match crate::wav::load(&resolved) {
             Ok(wav) => {
                 c.io.clear_note(&path);
                 c.io.files.insert(
@@ -1395,7 +1392,7 @@ pub(crate) fn specs() -> Vec<ChopSpec> {
             AUDIO_FILE,
             "Audio File In",
             &[],
-            "Plays a WAV file, following the timeline.",
+            "Plays an audio file, following the timeline.",
             params_audio_file,
             cook_audio_file,
         ),
