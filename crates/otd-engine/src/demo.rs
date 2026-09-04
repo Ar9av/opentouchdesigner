@@ -317,6 +317,187 @@ pub fn two_visualisers(registry: &OpRegistry) -> (Graph, NodeId) {
     (graph, out)
 }
 
+/// The Phase 4 exit criterion: instanced geometry driven by audio, post-
+/// processed through a TOP chain.
+///
+/// ```text
+///   audioin1 ─► spectrum1 ─► lag1 ═► (instance scale)
+///   pattern_x ─┬─► merge1 ─────────► geo1 instances ─► render1 ─► bloom ─► out1
+///   pattern_z ─┘
+/// ```
+///
+/// One sphere, drawn a few hundred times. The positions come from Pattern
+/// CHOPs — each *sample* is an instance — and the size from an audio band, so
+/// the whole grid breathes with the music. The render is then a texture like
+/// any other, which is the point of the family system: the blur and level
+/// after it neither know nor care that a camera was involved.
+pub fn instanced_audio(registry: &OpRegistry) -> (Graph, NodeId) {
+    let mut graph = Graph::new();
+    let root = graph.root();
+    let add = |graph: &mut Graph, op: &str, name: &str, pos: [f32; 2]| {
+        let def = registry.get(op).unwrap().clone();
+        let id = graph.create(root, &def, Some(name)).unwrap();
+        graph.node_mut_quiet(id).pos = pos;
+        id
+    };
+
+    // ---- listening
+    let audio = add(&mut graph, "audiodeviceinCHOP", "audioin1", [-900.0, 320.0]);
+    let spectrum = add(
+        &mut graph,
+        "audiospectrumCHOP",
+        "spectrum1",
+        [-720.0, 320.0],
+    );
+    let lag = add(&mut graph, "lagCHOP", "lag1", [-540.0, 320.0]);
+    let bass = add(&mut graph, "selectCHOP", "bass", [-360.0, 320.0]);
+    let size = add(&mut graph, "mathCHOP", "size", [-180.0, 320.0]);
+    graph.connect(audio, spectrum, 0).unwrap();
+    graph.connect(spectrum, lag, 0).unwrap();
+    graph.connect(lag, bass, 0).unwrap();
+    graph.connect(bass, size, 0).unwrap();
+
+    graph.set_param(spectrum, "bands", Value::Int(4)).unwrap();
+    graph
+        .set_param(spectrum, "gain", Value::Float(30.0))
+        .unwrap();
+    graph.set_param(lag, "lagup", Value::Float(0.01)).unwrap();
+    graph.set_param(lag, "lagdown", Value::Float(0.2)).unwrap();
+    graph
+        .set_param(bass, "channels", Value::Str("band1".into()))
+        .unwrap();
+    graph
+        .set_param(bass, "rename", Value::Str("sx".into()))
+        .unwrap();
+    // Even in silence the grid should be visible, so the band adds to a base.
+    graph.set_param(size, "gain", Value::Float(1.4)).unwrap();
+    graph.set_param(size, "offset", Value::Float(0.45)).unwrap();
+    graph.set_param(size, "clamp", Value::Bool(true)).unwrap();
+    graph
+        .set_param(size, "clampmin", Value::Float(0.2))
+        .unwrap();
+    graph
+        .set_param(size, "clampmax", Value::Float(1.6))
+        .unwrap();
+
+    // ---- instance positions: a 16x16 grid laid out by two Pattern CHOPs.
+    let px = add(&mut graph, "patternCHOP", "pattern_x", [-900.0, 520.0]);
+    let pz = add(&mut graph, "patternCHOP", "pattern_z", [-900.0, 640.0]);
+    let merge = add(&mut graph, "mergeCHOP", "grid_pos", [-700.0, 580.0]);
+    let with_size = add(&mut graph, "mergeCHOP", "instances", [-500.0, 520.0]);
+    graph.connect(px, merge, 0).unwrap();
+    graph.connect(pz, merge, 1).unwrap();
+    graph.connect(merge, with_size, 0).unwrap();
+    graph.connect(size, with_size, 1).unwrap();
+
+    const COUNT: i64 = 256;
+    for (id, name, kind, periods) in [(px, "tx", "triangle", 16.0), (pz, "tz", "ramp", 1.0)] {
+        graph.set_param(id, "length", Value::Int(COUNT)).unwrap();
+        graph
+            .set_param(id, "name", Value::Str(name.into()))
+            .unwrap();
+        graph
+            .set_param(id, "type", Value::Str(kind.into()))
+            .unwrap();
+        graph
+            .set_param(id, "periods", Value::Float(periods))
+            .unwrap();
+        graph.set_param(id, "amplitude", Value::Float(6.0)).unwrap();
+        graph.set_param(id, "offset", Value::Float(-3.0)).unwrap();
+    }
+
+    // ---- the scene
+    let sphere = add(&mut graph, "sphereSOP", "sphere1", [-900.0, 60.0]);
+    let mat = add(&mut graph, "pbrMAT", "mat1", [-900.0, -60.0]);
+    let geo = add(&mut graph, "geometryCOMP", "geo1", [-700.0, 0.0]);
+    let cam = add(&mut graph, "cameraCOMP", "cam1", [-700.0, 140.0]);
+    let light = add(&mut graph, "lightCOMP", "light1", [-700.0, 260.0]);
+    let render = add(&mut graph, "renderTOP", "render1", [-480.0, 0.0]);
+
+    graph
+        .set_param(sphere, "radius", Value::Float(0.16))
+        .unwrap();
+    graph.set_param(sphere, "rows", Value::Int(10)).unwrap();
+    graph.set_param(sphere, "columns", Value::Int(14)).unwrap();
+    graph
+        .set_param(mat, "basecolor", Value::Vec4([0.35, 0.75, 1.0, 1.0]))
+        .unwrap();
+    graph
+        .set_param(mat, "roughness", Value::Float(0.25))
+        .unwrap();
+    graph.set_param(mat, "metallic", Value::Float(0.6)).unwrap();
+
+    graph
+        .set_param(geo, "sop", Value::Str("/sphere1".into()))
+        .unwrap();
+    graph
+        .set_param(geo, "material", Value::Str("/mat1".into()))
+        .unwrap();
+    graph
+        .set_param(geo, "instancing", Value::Bool(true))
+        .unwrap();
+    graph
+        .set_param(geo, "instancechop", Value::Str("/instances".into()))
+        .unwrap();
+    graph.set_param(geo, "ty", Value::Str("".into())).unwrap();
+    // One channel of scale drives every instance — the "all of them breathe
+    // together" case.
+    graph.set_param(geo, "sx", Value::Str("sx".into())).unwrap();
+    graph.set_param(geo, "sy", Value::Str("sx".into())).unwrap();
+    graph.set_param(geo, "sz", Value::Str("sx".into())).unwrap();
+
+    graph
+        .set_param(cam, "translate", Value::Vec3([0.0, 3.5, 7.0]))
+        .unwrap();
+    graph
+        .set_param(cam, "lookat", Value::Str("/geo1".into()))
+        .unwrap();
+    graph
+        .set_param(light, "translate", Value::Vec3([4.0, 6.0, 3.0]))
+        .unwrap();
+    graph
+        .set_param(light, "intensity", Value::Float(1.3))
+        .unwrap();
+
+    graph.set_param(render, "resw", Value::Int(1280)).unwrap();
+    graph.set_param(render, "resh", Value::Int(720)).unwrap();
+    graph
+        .set_param(render, "camera", Value::Str("/cam1".into()))
+        .unwrap();
+    graph
+        .set_param(render, "light", Value::Str("/light1".into()))
+        .unwrap();
+    graph
+        .set_param(render, "background", Value::Vec4([0.02, 0.02, 0.04, 1.0]))
+        .unwrap();
+
+    // Slowly orbit, so the depth in the grid reads.
+    graph
+        .set_expression(geo, "rotate", "[0.0, absTime * 12.0, 0.0]")
+        .unwrap();
+
+    // ---- post: the render is just a texture from here on.
+    let bloom = add(&mut graph, "blurTOP", "bloom", [-260.0, 100.0]);
+    let bright = add(&mut graph, "levelTOP", "bright", [-260.0, -20.0]);
+    let comp = add(&mut graph, "compositeTOP", "comp1", [-40.0, 0.0]);
+    let out = add(&mut graph, "nullTOP", "out1", [180.0, 0.0]);
+    graph.connect(render, bright, 0).unwrap();
+    graph.connect(bright, bloom, 0).unwrap();
+    graph.connect(render, comp, 0).unwrap();
+    graph.connect(bloom, comp, 1).unwrap();
+    graph.connect(comp, out, 0).unwrap();
+
+    graph
+        .set_param(bright, "blacklevel", Value::Float(0.55))
+        .unwrap();
+    graph.set_param(bloom, "size", Value::Float(26.0)).unwrap();
+    graph
+        .set_param(comp, "operation", Value::Str("add".into()))
+        .unwrap();
+
+    (graph, out)
+}
+
 pub fn by_name(name: &str, registry: &OpRegistry) -> Option<(Graph, NodeId)> {
     match name {
         "starter" => Some(starter(registry)),
@@ -324,8 +505,16 @@ pub fn by_name(name: &str, registry: &OpRegistry) -> Option<(Graph, NodeId)> {
         "audioreactive" => Some(audio_reactive(registry)),
         "lfo" => Some(lfo_driven(registry)),
         "components" => Some(two_visualisers(registry)),
+        "instances3d" => Some(instanced_audio(registry)),
         _ => None,
     }
 }
 
-pub const NAMES: &[&str] = &["starter", "feedback", "audioreactive", "lfo", "components"];
+pub const NAMES: &[&str] = &[
+    "starter",
+    "feedback",
+    "audioreactive",
+    "lfo",
+    "components",
+    "instances3d",
+];

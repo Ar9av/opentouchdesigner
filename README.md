@@ -4,12 +4,13 @@ An open-source, cross-platform, node-based realtime visual programming
 environment in the spirit of TouchDesigner. Written in Rust on wgpu, so
 `cargo run` works on macOS, Windows and Linux.
 
-**Status: Phases 0–3 complete apart from video I/O.** See [PLAN.md](PLAN.md)
+**Status: Phases 0–4 complete apart from video I/O.** See [PLAN.md](PLAN.md)
 for the research and the full roadmap. What exists today is a working graph,
 cook engine, GPU texture pipeline with live shader compilation, a channel
 pipeline with audio, MIDI and OSC input, the four-mode parameter system, a
-text project format, component encapsulation with embedded Python, a node
-editor and projector output — not yet a tool you would take to a show.
+text project format, component encapsulation with embedded Python, an
+instanced 3D pipeline, a node editor and projector output — not yet a tool
+you would take to a show.
 
 ## Try it
 
@@ -30,6 +31,7 @@ a CHOP shows its waveform.
 | `audioreactive` | audio spectrum and MIDI notes driving a visual through Exports |
 | `lfo` | the smallest thing that shows a channel driving a parameter |
 | `components` | one visualiser component used twice, listening to different bands |
+| `instances3d` | 256 instanced spheres driven by audio, rendered and bloomed |
 
 Render a frame with no window at all — something TouchDesigner cannot do on a
 Linux server:
@@ -107,6 +109,22 @@ A failing expression keeps its constant and reports one line.
 table's contents live in the project file, so a cue list is versioned with the
 patch that uses it. Script DATs run Python and return rows.
 
+**3D** (`otd-sop`, `otd-gpu`) — Box, Sphere, Grid, Line, Transform, Noise,
+Color, Merge, Copy and Null SOPs; Geometry, Camera and Light components; a
+PBR material with an optional colour map; and a Render TOP with a depth
+buffer whose output is an ordinary texture, so a TOP chain after it neither
+knows nor cares that a camera was involved.
+
+Geometry is a flat interleaved buffer shaped exactly like the vertex buffer
+the renderer wants, and filters are per-point functions rather than mesh
+surgery — the form that ports to a compute shader unchanged, which is what
+PLAN.md means by GPU-first.
+
+**Instancing** — each *sample* of a CHOP is an instance, so a Pattern CHOP of
+256 samples is 256 objects in one draw call, with position, scale, rotation
+and colour each named by parameter. A single-sample channel broadcasts to all
+of them, which is how one audio band makes the whole grid breathe.
+
 **CHOPs** (`otd-chop`) — Constant, LFO, Noise, Pattern, Math, Lag, Filter,
 Logic, Trigger, Timer, Speed, Count, Select, Merge, Switch, Null, plus Audio
 Device In, Audio Spectrum, MIDI In, OSC In, OSC Out, Mouse In and Keyboard In.
@@ -151,8 +169,9 @@ copy, no readback.
 Phase 1 not built. They need GStreamer, which is a system dependency rather
 than a crate, and none of it can be verified without it installed.
 
-Everything else is Phases 4–6 of [PLAN.md](PLAN.md): SOPs, MATs, 3D
-rendering, Spout/Syphon/NDI, timeline, undo.
+Everything else is Phases 5–6 of [PLAN.md](PLAN.md): Spout/Syphon/NDI,
+DMX/Art-Net, Ableton Link, a headless CLI runtime, perform mode, a timeline
+and undo.
 
 ## Layout
 
@@ -160,8 +179,9 @@ rendering, Spout/Syphon/NDI, timeline, undo.
 crates/otd-core     graph, cook engine, parameters, project format  (no GPU, no UI)
 crates/otd-chop     channels, time slicing, audio/MIDI/OSC          (no GPU, no UI)
 crates/otd-dat      text and tables                                 (no GPU, no UI)
+crates/otd-sop      geometry                                        (no GPU, no UI)
 crates/otd-py       embedded CPython for expressions and scripts
-crates/otd-gpu      wgpu TOP engine, shaders
+crates/otd-gpu      wgpu TOP engine, shaders, the 3D pipeline
 crates/otd-engine   the cross-family cook, demo patches, headless renderer
 crates/otd-app      egui editor shell
 ```
@@ -197,6 +217,9 @@ criterion is asserted rather than claimed:
 - [`otd-engine/tests/external.rs`](crates/otd-engine/tests/external.rs) — two
   projects share one `.otdc`, an edit to it reaches both, and neither project
   file contains the shared network
+- [`otd-engine/tests/phase4.rs`](crates/otd-engine/tests/phase4.rs) — 256
+  instanced spheres are one draw call, an audio band scales all of them, the
+  render feeds a TOP chain, and the whole thing runs at 2.3 ms/frame
 
 The OSC test is a real UDP loopback and the spectrum test is a real FFT, so
 those paths are exercised rather than mocked.

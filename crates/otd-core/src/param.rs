@@ -69,6 +69,11 @@ pub struct Param {
     /// Set by the operator definition, not by the project file.
     #[serde(skip)]
     script: bool,
+    /// This parameter's whole value is an operator path — a Render TOP's
+    /// camera, a Geometry COMP's SOP. Those have to cook first, so the path
+    /// is a dependency exactly like a wire.
+    #[serde(skip)]
+    path_ref: bool,
 }
 
 /// Pull operator paths out of an expression.
@@ -111,6 +116,16 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// A path parameter's whole value, when it looks like one.
+fn own_path(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.starts_with('/') {
+        vec![trimmed.to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Keep the parameter's declared type: a Python expression returning a float
 /// for an int parameter should round, not change the parameter's type.
 fn coerce_like(declared: &Value, produced: Value) -> Value {
@@ -137,7 +152,21 @@ impl Param {
             needs_python: false,
             refs: Vec::new(),
             script: false,
+            path_ref: false,
         }
+    }
+
+    /// Mark this parameter as naming an operator. The path it holds becomes a
+    /// cook dependency, so a Render TOP's camera and geometry are guaranteed
+    /// to be up to date before it draws.
+    pub fn as_path_ref(mut self) -> Self {
+        self.path_ref = true;
+        self.refs = own_path(&self.value.as_str());
+        self
+    }
+
+    pub fn is_path_ref(&self) -> bool {
+        self.path_ref
     }
 
     /// Mark this parameter as holding script source. Operator paths quoted
@@ -156,6 +185,11 @@ impl Param {
     /// Same as [`Param::as_script`], for a parameter already built.
     pub fn into_script(self) -> Self {
         self.as_script()
+    }
+
+    /// Same as [`Param::as_path_ref`], for a parameter already built.
+    pub fn into_path_ref(self) -> Self {
+        self.as_path_ref()
     }
 
     /// Mark this as an author-defined parameter on a component.
@@ -190,8 +224,15 @@ impl Param {
     pub fn set_constant(&mut self, value: Value) {
         self.value = value;
         self.mode = ParamMode::Constant;
+        self.refresh_refs();
+    }
+
+    /// Recompute what this parameter references from its current value.
+    fn refresh_refs(&mut self) {
         if self.script {
             self.refs = extract_paths(&self.value.as_str());
+        } else if self.path_ref {
+            self.refs = own_path(&self.value.as_str());
         }
     }
 
@@ -199,8 +240,8 @@ impl Param {
     /// compiled AST is not part of the project file.
     pub fn recompile(&mut self) {
         self.needs_python = false;
-        if self.script {
-            self.refs = extract_paths(&self.value.as_str());
+        if self.script || self.path_ref {
+            self.refresh_refs();
         } else {
             self.refs.clear();
         }

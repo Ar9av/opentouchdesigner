@@ -20,9 +20,11 @@ use otd_core::{ChannelSource, CookContext, CookError, Cooker, Family, Graph, Nod
 use otd_dat::{DatEngine, DatStore, ScriptHost};
 use otd_gpu::{GpuContext, TopEngine};
 use otd_py::PyEngine;
+use otd_sop::{Geometry, GeometryStore, SopEngine};
 
 pub use otd_chop::{Channel, ChopData};
 pub use otd_dat::DatData;
+pub use otd_sop::Geometry as SopGeometry;
 
 /// Every operator this build knows about, across all families.
 pub fn registry() -> OpRegistry {
@@ -33,6 +35,11 @@ pub fn registry() -> OpRegistry {
     for spec in otd_dat::ops::all() {
         r.register(spec.def.clone());
     }
+    for spec in otd_sop::ops::all() {
+        r.register(spec.def.clone());
+    }
+    // The scene components and materials live with the renderer.
+    otd_gpu::scene::register(&mut r);
     r
 }
 
@@ -90,11 +97,40 @@ impl ScriptHost for PythonScripts<'_> {
     }
 }
 
+/// What the renderer is allowed to ask the rest of the network for.
+struct SceneView<'a> {
+    graph: &'a Graph,
+    geometry: &'a GeometryStore,
+    channels: &'a ChannelStore,
+}
+
+impl otd_gpu::scene::Scene for SceneView<'_> {
+    fn geometry(&self, path: &str) -> Option<&Geometry> {
+        // Resolving means a path can name a component and get the geometry
+        // its Out operator produces.
+        let id = self.graph.resolve_output(self.graph.find(path)?)?;
+        self.geometry.get(id)
+    }
+
+    fn channels(&self, path: &str) -> Option<Vec<(String, Vec<f32>)>> {
+        let id = self.graph.resolve_output(self.graph.find(path)?)?;
+        let data = self.channels.get(id)?;
+        Some(
+            data.channels
+                .iter()
+                .map(|c| (c.name.clone(), c.samples.clone()))
+                .collect(),
+        )
+    }
+}
+
 pub struct Engines {
     pub top: TopEngine,
     pub chop: ChopEngine,
     pub dat: DatEngine,
     pub dats: DatStore,
+    pub sop: SopEngine,
+    pub geometry: GeometryStore,
     /// Cooked channels, owned here — see the module docs.
     pub channels: ChannelStore,
     /// The embedded interpreter. Started once; a machine where it cannot
@@ -109,6 +145,8 @@ impl Engines {
             chop: ChopEngine::new(),
             dat: DatEngine::new(),
             dats: DatStore::new(),
+            sop: SopEngine::new(),
+            geometry: GeometryStore::new(),
             channels: ChannelStore::new(),
             python: RefCell::new(PyEngine::new()),
         }
@@ -193,11 +231,16 @@ impl Engines {
         self.dats.get(id)
     }
 
+    pub fn geometry_of(&self, id: NodeId) -> Option<&Geometry> {
+        self.geometry.get(id)
+    }
+
     pub fn forget(&mut self, id: NodeId) {
         self.top.forget(id);
         self.chop.forget(id);
         self.channels.remove(id);
         self.dats.remove(id);
+        self.geometry.remove(id);
     }
 
     pub fn reset(&mut self) {
@@ -205,6 +248,7 @@ impl Engines {
         self.chop.reset();
         self.dat.reset();
         self.dats.clear();
+        self.geometry.clear();
         self.channels.clear();
     }
 }
@@ -223,6 +267,8 @@ impl Cooker for Engines {
             chop,
             dat,
             dats,
+            sop,
+            geometry,
             channels,
             python,
         } = self;
@@ -243,6 +289,21 @@ impl Cooker for Engines {
                 channels.insert(id, data);
                 Ok(())
             }
+            Family::Sop => {
+                let data = {
+                    let net = FullNetwork {
+                        chops: Network {
+                            graph,
+                            chops: channels,
+                        },
+                        python,
+                    };
+                    let eval = ctx.eval_ctx_with(&net);
+                    sop.cook_node(graph, id, ctx, &eval, geometry)?
+                };
+                geometry.insert(id, data);
+                Ok(())
+            }
             Family::Top => {
                 let net = FullNetwork {
                     chops: Network {
@@ -252,7 +313,12 @@ impl Cooker for Engines {
                     python,
                 };
                 let eval = ctx.eval_ctx_with(&net);
-                top.cook_node(graph, id, ctx, &eval)
+                let view = SceneView {
+                    graph,
+                    geometry,
+                    channels,
+                };
+                top.cook_node(graph, id, ctx, &eval, Some(&view))
             }
             Family::Dat => {
                 let data = {

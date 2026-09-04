@@ -230,6 +230,50 @@ fn a_static_geometry_chain_cooks_once() {
     assert_eq!(p.cook.cook_count(n), 1);
 }
 
+/// Every triangle must wind counter-clockwise as seen from the side its
+/// normals face, or back-face culling removes exactly the wrong half — which
+/// shows up as unlit geometry rather than as an error.
+fn winding_agrees_with_normals(g: &Geometry) -> bool {
+    let idx: Vec<u32> = if g.indices.is_empty() {
+        (0..g.num_points() as u32).collect()
+    } else {
+        g.indices.clone()
+    };
+    idx.chunks(3).all(|tri| {
+        if tri.len() < 3 {
+            return true;
+        }
+        let p: Vec<[f32; 3]> = tri.iter().map(|i| g.points[*i as usize].position).collect();
+        let n = g.points[tri[0] as usize].normal;
+        let u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+        let v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+        let face = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        // A sphere's pole triangles collapse to zero area and have no
+        // winding to check; skip them rather than reading floating-point
+        // noise as an inversion.
+        let area = (face[0] * face[0] + face[1] * face[1] + face[2] * face[2]).sqrt();
+        if area < 1e-6 {
+            return true;
+        }
+        let dot = face[0] * n[0] + face[1] * n[1] + face[2] * n[2];
+        dot > 0.0
+    })
+}
+
+#[test]
+fn generators_wind_their_triangles_to_match_their_normals() {
+    for op in ["boxSOP", "sphereSOP", "gridSOP"] {
+        let mut p = Patch::new();
+        let id = p.add(op, "gen");
+        p.run(id);
+        assert!(winding_agrees_with_normals(p.geo(id)), "{op} is inside out");
+    }
+}
+
 #[test]
 fn every_sop_cooks_without_panicking() {
     let mut p = Patch::new();

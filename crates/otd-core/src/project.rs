@@ -304,6 +304,9 @@ pub(crate) fn restore_node(graph: &mut Graph, id: NodeId, entry: &NodeEntry) {
             if slot.is_script() {
                 saved = saved.into_script();
             }
+            if slot.is_path_ref() {
+                saved = saved.into_path_ref();
+            }
             saved.range = slot.range.or(saved.range);
             saved.menu = slot.menu.clone().or(saved.menu);
             saved.recompile();

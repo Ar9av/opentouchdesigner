@@ -12,6 +12,7 @@ otd-core = { version = "0.1.0", path = "../otd-core" }
 otd-dat = { version = "0.1.0", path = "../otd-dat" }
 otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
 otd-py = { version = "0.1.0", path = "../otd-py" }
+otd-sop = { version = "0.1.0", path = "../otd-sop" }
 
 [dev-dependencies]
 image = { version = "0.25.9", default-features = false, features = ["png"] }
