@@ -498,3 +498,52 @@ fn a_round_point_sprite_cuts_the_corners_off_its_quad() {
         "a disc should be ~79% of the quad, got {ratio}"
     );
 }
+
+#[test]
+fn the_depth_output_reads_distance_rather_than_shading() {
+    // Depth is only worth anything if it is a measurement, so this checks the
+    // one property that makes it one: move the camera back and the same
+    // object must read as further away. Near maps to 1, so further is darker.
+    //
+    // It is also the check that catches the tempting wrong implementation.
+    // Handing back the depth *buffer* would pass a "did anything change"
+    // test and fail this one honestly, because `1/z` puts almost all of its
+    // precision in the first few units — everything past arm's length reads
+    // the same white, and a Displace or a fog ramp downstream sees a flat
+    // card where it wanted a scene.
+    let gpu = gpu_or_skip!();
+    let mut rig = Rig::new(gpu);
+    let render = basic_scene(&mut rig);
+    rig.set(render, "output", Value::Str("depth".into()));
+    rig.set(render, "depthnear", Value::Float(1.0));
+    rig.set(render, "depthfar", Value::Float(20.0));
+
+    let centre = |rig: &Rig| {
+        let (w, _, px) = rig.pixels(render);
+        px[((w as usize / 2) * w as usize + w as usize / 2) * 4]
+    };
+
+    let cam = rig.graph.find("/cam1").unwrap();
+    rig.set(cam, "translate", Value::Vec3([0.0, 0.0, 4.0]));
+    rig.run(render);
+    let near = centre(&rig);
+
+    rig.set(cam, "translate", Value::Vec3([0.0, 0.0, 14.0]));
+    rig.run(render);
+    let far = centre(&rig);
+
+    assert!(
+        near > far + 20,
+        "backing the camera off should darken the depth: {near} then {far}"
+    );
+    assert!(
+        near > 0 && near < 255,
+        "a depth of {near} means the near/far range is not being applied"
+    );
+
+    // And the colour output must be unaffected by having a depth mode at all.
+    rig.set(render, "output", Value::Str("color".into()));
+    rig.set(cam, "translate", Value::Vec3([0.0, 0.0, 4.0]));
+    rig.run(render);
+    assert!(rig.lit(render) > 100, "colour rendering still works");
+}

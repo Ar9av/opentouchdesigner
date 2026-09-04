@@ -2,7 +2,7 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-126 operators.
+131 operators.
 
 **CHOP** (46)
 
@@ -94,8 +94,9 @@ Generated from the operator registry — the same table the editor builds its me
 - [pointspriteMAT](#point-sprite--pointspritemat) — Draws every point as a camera-facing quad.
 - [wireframeMAT](#wireframe--wireframemat) — Draws the edges rather than the faces.
 
-**SOP** (15)
+**SOP** (16)
 
+- [blendSOP](#blend--blendsop) — Morph between two shapes by interpolating point positions.
 - [boxSOP](#box--boxsop) — A box with flat-shaded faces.
 - [circleSOP](#circle--circlesop) — A disc, ring or arc — filled, or a line to copy along.
 - [colorSOP](#color--colorsop) — Set the colour carried by every point.
@@ -112,7 +113,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [transformSOP](#transform--transformsop) — Translate, rotate and scale points.
 - [tubeSOP](#tube--tubesop) — A cylinder, cone or tapered tube, with optional caps.
 
-**TOP** (33)
+**TOP** (37)
 
 - [blurTOP](#blur--blurtop) — Separable Gaussian blur.
 - [cacheTOP](#cache--cachetop) — Holds the last frame it saw when Active is off.
@@ -122,9 +123,11 @@ Generated from the operator registry — the same table the editor builds its me
 - [compositeTOP](#composite--compositetop) — Blend two inputs. Input 2 is composited over input 1.
 - [constantTOP](#constant--constanttop) — A flat colour at a chosen resolution.
 - [displaceTOP](#displace--displacetop) — Offsets input 1's lookup by channels of input 2.
+- [ditherTOP](#dither--dithertop) — Quantise to few levels, with an ordered or noise dither.
 - [edgeTOP](#edge--edgetop) — Sobel edge detection.
 - [feedbackTOP](#feedback--feedbacktop) — Last frame's output of the Target TOP.
 - [flipTOP](#flip--fliptop) — Mirror the image about an axis, or transpose it.
+- [flowTOP](#flow--flowtop) — Advect the picture along a curl-noise field. Loop it for smoke.
 - [glslTOP](#glsl--glsltop) — Your own shader, compiled live. WGSL or Shadertoy-style GLSL.
 - [hsvadjustTOP](#hsv-adjust--hsvadjusttop) — Hue, saturation and value, optionally over one band of the wheel.
 - [inTOP](#in--intop) — A texture input on this component's node.
@@ -145,8 +148,10 @@ Generated from the operator registry — the same table the editor builds its me
 - [switchTOP](#switch--switchtop) — Select one of two inputs, optionally blending between them.
 - [textTOP](#text--texttop) — Draws text, using a font file or the system's.
 - [thresholdTOP](#threshold--thresholdtop) — Split the image in two at a level, with a soft edge.
+- [toonTOP](#toon--toontop) — Cel shading: flatten the luminance into bands and ink the edges.
 - [transformTOP](#transform--transformtop) — Translate, rotate and scale, with an extend mode.
 - [videodeviceinTOP](#video-device-in--videodeviceintop) — Frames from a camera or capture device.
+- [voronoiTOP](#voronoi--voronoitop) — Cellular noise, as flat cells, edges or a distance field.
 
 ---
 
@@ -1168,6 +1173,24 @@ Draws the edges rather than the faces.
 
 ## SOP
 
+### Blend — `blendSOP`
+
+Morph between two shapes by interpolating point positions.
+
+Interpolating point positions is the whole trick, and it only works when the two shapes agree about which point is which. They almost never do, so the interesting parameter is Match Points, which is how the correspondence gets invented.
+
+`stretch` walks input B proportionally — point 0 of a 100-point shape pairs with point 0 of a 500-point one, point 50 with point 250 — so both surfaces are traversed end to end and a morph between two different primitives moves every point. `index` pairs point *n* with point *n*, which is right when the two are the same topology deformed two ways, and wrong otherwise.
+
+The output keeps input A's topology and point count. Blend is a deformation of A towards B, so at 1 you have A's connectivity holding B's shape; geometry whose triangles rewired themselves halfway through would be a cut, not a morph.
+
+**Inputs:** a, b
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Blend | `blend` | `0` | 0 … 1 |
+| Match Points | `match` | `stretch` | `stretch` · `index` |
+| Blend Normals and Color | `attributes` | `true` |  |
+
 ### Box — `boxSOP`
 
 A box with flat-shaded faces.
@@ -1440,6 +1463,24 @@ Offsets input 1's lookup by channels of input 2.
 | Offset | `offset` | `-0.5` | -1 … 1 |
 | Extend | `extend` | `hold` | `zero` · `hold` · `repeat` · `mirror` |
 
+### Dither — `ditherTOP`
+
+Quantise to few levels, with an ordered or noise dither.
+
+Quantising alone gives flat bands. Dithering adds a pattern *before* the quantiser so the rounding error alternates between neighbouring pixels and the eye averages it back into the tone that was there — which is how two colours can look like a gradient.
+
+Which pattern is the whole look: `bayer4` and `bayer8` are the ordered crosshatch of early games and newsprint, `noise` is closer to film grain, and `none` is hard posterisation with no dither at all. Pixel Size above 1 enlarges the matrix, which is what makes it read as chunky rather than as texture.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Levels | `levels` | `4` | 2 … 64 |
+| Pattern | `pattern` | `bayer4` | `bayer4` · `bayer8` · `noise` · `none` |
+| Strength | `strength` | `1` | 0 … 1 |
+| Pixel Size | `scale` | `1` | 1 … 32 |
+| Monochrome | `monochrome` | `false` |  |
+
 ### Edge — `edgeTOP`
 
 Sobel edge detection.
@@ -1481,6 +1522,28 @@ Mirror the image about an axis, or transpose it.
 | Flip Horizontally | `flipx` | `true` |  |
 | Flip Vertically | `flipy` | `false` |  |
 | Transpose | `transpose` | `false` |  |
+
+### Flow — `flowTOP`
+
+Advect the picture along a curl-noise field. Loop it for smoke.
+
+One Flow TOP is a warp: every pixel reads from upstream of a curl-noise field, so the picture leans. The look people mean by *flow* — smoke, ink in water, drifting abstraction — is that warp **in a loop**, where each frame advects the last one a little further:
+
+`source -> flow1 -> compositeTOP` with a Feedback TOP targeting the composite and wired back into it.
+
+The field is the curl of a noise field rather than the noise itself, and that is not a detail. A curl is divergence-free: it swirls without compressing the image into a point or tearing a hole in it, which a plain noise vector field does within a second of being looped. Wire a TOP into the second input and turn on Steer From Input 2 to drive the flow with a picture — a Ramp for a wind direction, a camera difference for something that follows you.
+
+**Inputs:** in, field
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Amount (px) | `amount` | `6` | 0 … 128 |
+| Field Scale | `scale` | `3` | 0.1 … 32 |
+| Field Speed | `speed` | `0.3` | 0 … 8 |
+| Steer From Input 2 | `usefield` | `false` |  |
+| Field Mix | `fieldmix` | `1` | 0 … 1 |
 
 ### GLSL — `glslTOP`
 
@@ -1687,9 +1750,9 @@ A rectangle, with rounded corners and an optional border.
 
 Draws Geometry components through a Camera.
 
-Draws the 3D scene into an ordinary texture, so everything after it is a normal TOP chain that neither knows nor cares a camera was involved.
+Depth output is the same draw with the shading skipped, writing distance from the camera as grey — near white, far black, so an unwritten background is black and the result multiplies straight into a composite as a mask.
 
-It finds its Geometry, Camera and Light COMPs by parameter rather than by wire, and those references are real cook dependencies: they cook first, and their animation propagates here.
+It is metric distance between Depth Near and Depth Far, not the depth buffer's own value. That one is `1/z` shaped by the projection and puts almost all of its precision in the first few units, so everything past arm's length reads the same white and anything downstream sees a flat card. Set the near and far to the part of the scene you care about; they are what decide whether the pass looks like anything.
 
 *No inputs — this is a generator.*
 
@@ -1704,6 +1767,9 @@ It finds its Geometry, Camera and Light COMPs by parameter rather than by wire, 
 | Ambient | `ambient` | `0.12` | 0 … 1 |
 | Wireframe | `wireframe` | `false` |  |
 | Cull | `cull` | `back` | `back` · `front` · `none` |
+| Output | `output` | `color` | `color` · `depth` |
+| Depth Near | `depthnear` | `0.1` | 0 … 1000 |
+| Depth Far | `depthfar` | `20` | 0.01 … 10000 |
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
@@ -1777,6 +1843,24 @@ Split the image in two at a level, with a soft edge.
 | Below Colour | `below` | `[0.0, 0.0, 0.0, 1.0]` |  |
 | Above Colour | `above` | `[1.0, 1.0, 1.0, 1.0]` |  |
 
+### Toon — `toonTOP`
+
+Cel shading: flatten the luminance into bands and ink the edges.
+
+Cel shading is two ideas that only look like one, and this operator is both because they want to share a threshold — ink drawn where the bands already change is invisible, and ink drawn anywhere else is a mess.
+
+Posterising the *luminance*, and only the luminance, collapses a smooth gradient into flat steps while leaving hue alone, which is what keeps the result looking painted rather than colour-crushed. Flattening luminance washes colour out, so Saturation defaults above 1 to put it back. The ink is a Sobel edge multiplied over the top: multiplied rather than added, because added lines glow, which is the opposite of a drawn line.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Bands | `bands` | `4` | 2 … 32 |
+| Ink Strength | `edge` | `2` | 0 … 16 |
+| Ink Width (px) | `edgewidth` | `1` | 0 … 8 |
+| Saturation | `saturation` | `1.3` | 0 … 4 |
+| Ink Color | `inkcolor` | `[0.0, 0.0, 0.0, 1.0]` |  |
+
 ### Transform — `transformTOP`
 
 Translate, rotate and scale, with an extend mode.
@@ -1809,4 +1893,27 @@ On macOS the first use raises the system camera-permission prompt, and nothing a
 | Requested H | `resh` | `720` | 1 … 16384 |
 | Requested Frame Rate | `fps` | `30` | 1 … 240 |
 | Active | `active` | `true` |  |
+
+### Voronoi — `voronoiTOP`
+
+Cellular noise, as flat cells, edges or a distance field.
+
+Every pixel finds the nearest of a set of points scattered one per cell. What you do with that answer is `output`: `cells` flat-fills each region, which is stained glass; `edges` draws where two regions meet, which is cracked glass and antialiases for free because it is the *difference* between the two nearest distances; `distance` is the raw field, and is what you want when this feeds a Displace TOP rather than being looked at.
+
+A generator, so nothing is wired in. Jitter at 0 is a regular grid and at 1 the points wander on their own phases, so the pattern boils rather than sliding as one sheet.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Cells | `scale` | `8` | 1 … 128 |
+| Speed | `speed` | `0.4` | 0 … 8 |
+| Jitter | `jitter` | `1` | 0 … 1 |
+| Output | `output` | `cells` | `cells` · `edges` · `distance` |
+| Color 1 | `color1` | `[0.0, 0.0, 0.0, 1.0]` |  |
+| Color 2 | `color2` | `[1.0, 1.0, 1.0, 1.0]` |  |
+| Resolution W | `resw` | `1280` | 1 … 4096 |
+| Resolution H | `resh` | `720` | 1 … 4096 |
 

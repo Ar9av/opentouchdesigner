@@ -25,8 +25,10 @@ struct Scene {
   //   Phong    x = specular,  y = shininess,  z = emit, w = use texture
   //   Sprite   x = size,      y = round,      z = emit, w = use texture
   material: vec4<f32>,
-  // x = ambient, y = point scale, z = shading model, w unused
+  // x = ambient, y = point scale, z = shading model, w = depth pass
   render: vec4<f32>,
+  // x = depth near, y = depth far, zw unused
+  depth_range: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> S: Scene;
@@ -96,6 +98,24 @@ fn vs_main(in: VIn) -> VOut {
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+  // Depth pass: distance from the camera, written as grey, before any
+  // shading is computed. Metric distance rather than the depth buffer's own
+  // value, because that one is `1/z` shaped by the projection — almost all of
+  // its precision sits in the first few units, so a Displace or a fog ramp
+  // reading it gets a picture that is pure white past arm's length. This is
+  // linear between Depth Near and Depth Far and behaves like a measurement.
+  //
+  // Near maps to 1 and far to 0: the convention that makes an unwritten
+  // background black and lets the result be multiplied straight into a
+  // composite as a mask without inverting it first.
+  if (S.render.w > 0.5) {
+    let dist = length(in.world - S.camera.xyz);
+    let near = S.depth_range.x;
+    let far = max(S.depth_range.y, near + 0.0001);
+    let d = 1.0 - clamp((dist - near) / (far - near), 0.0, 1.0);
+    return vec4<f32>(d, d, d, 1.0);
+  }
+
   var albedo = S.base_color * in.color;
   if (S.material.w > 0.5) {
     albedo = albedo * textureSample(tex, samp, in.uv);
