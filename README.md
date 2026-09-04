@@ -79,7 +79,13 @@ up looking like grey mud.
 A floating bar over the canvas. Type a sentence, press Enter, get operators —
 wired, positioned, parameters set, as **one undo**.
 
-Bring your own key: **Anthropic**, **OpenAI** or **OpenRouter**.
+Or drop a picture on it and get the look back as operators: attach a reference
+still and it works out what the thing is made of — the pattern, the contrast,
+the feedback loop, the two colours — and builds that, as a patch you can turn.
+
+Bring your own key — **Anthropic**, **OpenAI**, **OpenRouter** — or bring no key
+at all and use the **Claude Code** or **Codex** CLI you are already signed in
+to, which spends subscription quota rather than API credit.
 
 It is not a chatbot bolted on the side:
 
@@ -166,6 +172,19 @@ budget  16.67 ms   1 frame(s) over
 | `F1` | perform mode — the editor disappears and the window is the output. `F1` or `Escape` to come back |
 | drag background | pan · scroll to zoom |
 | drag output port → input port | wire · click an input port to unwire |
+| right-click a node | view · replace its file · add an effect after it · bypass · delete |
+| drop a file on the network | the operator that plays it, already viewing |
+
+**Your own material.** Drag a movie, an image, a WAV, a `.fs` ISF shader, a
+`.csv`, a font or a `.otd` onto the network and you get the operator that
+reads it, named after the file and already on the viewer. Drop onto an
+existing node instead of onto empty canvas and the file lands there — swapping
+the clip in a Movie File In, or making the player upstream of the Blur you
+dropped it on. **Media → Import Media…** is the same thing through a file
+dialog, **Media → Use Webcam** for a camera, and **Media → Add Effect** puts a
+Level, Blur, Kaleidoscope or Chroma Key after whatever is selected and views
+the result. Movies decode through `ffmpeg` (`brew install ffmpeg`); stills do
+not need it.
 
 The **Output** button in the top bar opens a second window showing only the
 viewer, letterboxed — drag it to a projector and toggle Fullscreen.
@@ -252,8 +271,13 @@ yours and is left alone.
 **Assistant** — a floating bar over the canvas: describe a patch and have it
 built into the network you are looking at. `Cmd/Ctrl+K` from anywhere, Enter
 to build, `Escape` to collapse it to a pill, `✕` to hide it, and gone entirely
-in perform mode. Anthropic, OpenAI or OpenRouter; paste a key or
-set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`.
+in perform mode. **📎** attaches a reference still — or drop one on the bar —
+and the look in it is rebuilt as operators, with anything you type treated as a
+correction to the picture rather than a description on its own. Anthropic, OpenAI or OpenRouter; paste a key or
+set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`. Or pick
+Claude Code or Codex, which need no key: they run the CLI this machine is
+signed in to, so a patch costs subscription quota instead of API credit. See
+[docs/AI.md](docs/AI.md).
 
 It is not a chatbot bolted on the side. The model is told about the operators
 **by the registry** — the same table the editor builds its menus and

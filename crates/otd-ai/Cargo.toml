@@ -8,6 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 otd-core = { version = "0.1.0", path = "../otd-core" }
+# Reference images are decoded and shrunk before they are sent. Already in the
+# workspace for the renderer, so this costs a feature flag and not a build.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "bmp", "tga", "tiff", "ico", "pnm"] }
 serde_json = "1.0.151"
 # rustls rather than native-tls: no OpenSSL, nothing to install to build.
 ureq = { version = "3.3.0", default-features = false, features = ["rustls", "json"] }
