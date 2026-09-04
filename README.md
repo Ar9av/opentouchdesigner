@@ -33,11 +33,31 @@ a CHOP shows its waveform.
 | `components` | one visualiser component used twice, listening to different bands |
 | `instances3d` | 256 instanced spheres driven by audio, rendered and bloomed |
 
-Render a frame with no window at all — something TouchDesigner cannot do on a
-Linux server:
+### Headless
+
+`otd` runs a project with no window at all — something TouchDesigner cannot do
+on a Linux server.
 
 ```bash
-cargo run -p otd-engine --example render_png -- frame.png examples/feedback.otd 300
+cargo run -p otd-cli -- stats examples/feedback.otd --frames 60 --node /out1
+cargo run -p otd-cli -- render examples/instances3d.otd --node /out1 --frames 120 --out shots
+cargo run -p otd-cli -- run showfile.otd
+```
+
+`run` is the show-machine mode: it cooks in realtime, paced to the frame rate,
+with the output operators — DMX, OSC — sending every frame. `stats` reports
+median, p95 and worst frame times against the frame budget, keeping the first
+frame separate because compilation is not steady state. `render` writes a
+numbered PNG sequence.
+
+The 1080p feedback patch, headless on an M-series Mac:
+
+```
+frames        60 at 60 fps target
+first frame   453.59 ms  (compilation and allocation)
+cook    ms    median 0.14   p95 1.43   max 4.06
+frame   ms    median 1.22   p95 8.73   max 17.88
+budget  16.67 ms   1 frame(s) over
 ```
 
 ### Keys
@@ -127,7 +147,13 @@ of them, which is how one audio band makes the whole grid breathe.
 
 **CHOPs** (`otd-chop`) — Constant, LFO, Noise, Pattern, Math, Lag, Filter,
 Logic, Trigger, Timer, Speed, Count, Select, Merge, Switch, Null, plus Audio
-Device In, Audio Spectrum, MIDI In, OSC In, OSC Out, Mouse In and Keyboard In.
+Device In, Audio Spectrum, MIDI In, OSC In, OSC Out, DMX Out, Mouse In and
+Keyboard In.
+
+**DMX** — the DMX Out CHOP speaks Art-Net and sACN (E1.31), each channel a
+slot in a universe. Neither protocol needs a vendor SDK — they are documented
+UDP packet layouts — so the packet builders are unit-tested against real byte
+offsets and a loopback test puts one on the wire.
 
 Channels are **time sliced** the way TD does it: a generator emits however
 many samples cover the frame interval that *actually* elapsed, so an LFO stays
@@ -152,6 +178,15 @@ are validated through naga *before* wgpu sees them, so a typo gives you a
 message with a line number, the node outlines red, and the last shader that
 compiled keeps running — a patch never goes black mid-edit.
 
+**ISF import** — *Import ISF…* on a GLSL TOP loads an
+[Interactive Shader Format](https://isf.video) shader. Its JSON header becomes
+custom parameters on the node — floats with their ranges, colours, points,
+`long`s as menus — and its `image` inputs become the node's texture inputs.
+Afterwards it is an ordinary GLSL TOP: the imported dials can be exported to,
+bound and animated like any others. Scalars share a `vec4` rather than each
+taking one, and a shader that wants more uniform space than exists is refused
+with a message instead of quietly aliasing onto the last slot.
+
 **Project format** — text, path-sorted, defaults omitted. Adding a node
 appends one block; rewiring changes one line. Multi-line shader sources
 survive the round trip unchanged. See
@@ -169,9 +204,11 @@ copy, no readback.
 Phase 1 not built. They need GStreamer, which is a system dependency rather
 than a crate, and none of it can be verified without it installed.
 
-Everything else is Phases 5–6 of [PLAN.md](PLAN.md): Spout/Syphon/NDI,
-DMX/Art-Net, Ableton Link, a headless CLI runtime, perform mode, a timeline
-and undo.
+**Texture sharing** — Spout, Syphon and NDI all need platform SDKs that cannot
+be built or verified here, so none of them is written.
+
+Everything else is Phases 5–6 of [PLAN.md](PLAN.md): Ableton Link, perform
+mode, a timeline, undo.
 
 ## Layout
 
@@ -184,6 +221,7 @@ crates/otd-py       embedded CPython for expressions and scripts
 crates/otd-gpu      wgpu TOP engine, shaders, the 3D pipeline
 crates/otd-engine   the cross-family cook, demo patches, headless renderer
 crates/otd-app      egui editor shell
+crates/otd-cli      `otd` — the same engine with no window
 ```
 
 `otd-gpu` and `otd-chop` know nothing about each other. `otd-engine` is the

@@ -2774,6 +2774,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "otd-cli"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "otd-core",
+ "otd-engine",
+ "otd-gpu",
+]
+
+[[package]]
 name = "otd-core"
 version = "0.1.0"
 dependencies = [
