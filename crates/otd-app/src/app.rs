@@ -626,6 +626,7 @@ impl eframe::App for OtdApp {
             self.side_panel(ui);
             crate::canvas::show(self, ui);
         }
+        crate::assistant::bar(self, ui.ctx());
         crate::assistant::window(self, ui.ctx());
         self.output_viewport(ui.ctx());
 
@@ -784,8 +785,8 @@ impl OtdApp {
                 {
                     self.perform = true;
                 }
-                ui.toggle_value(&mut self.assistant.open, "✨ Assistant")
-                    .on_hover_text("Describe a patch and have it built into this network");
+                ui.toggle_value(&mut self.assistant.bar, "✨ Assistant")
+                    .on_hover_text("Describe a patch and have it built here — Cmd/Ctrl+K");
                 ui.toggle_value(&mut self.show_monitor, "Perf")
                     .on_hover_text("Per-node cook cost and GPU memory");
                 ui.toggle_value(&mut self.output_window, "Output")

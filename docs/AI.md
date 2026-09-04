@@ -1,6 +1,20 @@
 # The assistant
 
-Describe a patch, get operators. **✨ Assistant** in the top bar.
+Describe a patch, get operators.
+
+A floating bar sits over the canvas — type into it and press Enter. It takes
+no layout space, and it goes away:
+
+| | |
+|---|---|
+| `Cmd/Ctrl+K` | show it and put the caret in it, from anywhere |
+| `Enter` · `Shift+Enter` | build it · newline |
+| `Escape` or `▾` | collapse to a pill; what you typed survives |
+| `✕` | hide it entirely (`Cmd/Ctrl+K` brings it back) |
+| `✨ Assistant` in the top bar | toggle it |
+| `⚙` on the bar | providers, keys, and what was skipped |
+
+It is hidden in perform mode (`F1`), where the window is the show.
 
 It is not a chatbot bolted to the side: the reply is a *plan*, checked against
 the real operator registry and built into the network you are looking at, as
