@@ -65,7 +65,7 @@ pub struct Assistant {
     /// What `--version` said, filled in the first time the settings window
     /// draws that provider and on demand after that.
     cli_version: BTreeMap<Provider, Result<String, String>>,
-    pending: Option<Receiver<Result<(String, bool), String>>>,
+    pending: Option<Receiver<Result<(String, Option<otd_ai::Repair>), String>>>,
     /// Notes from the last plan that was applied.
     pub last: Option<String>,
     pub warnings: Vec<String>,
@@ -968,8 +968,10 @@ fn poll(app: &mut OtdApp) {
                         .push(format!("{node}: shader still does not compile — {error}"));
                 }
             }
-            if repaired {
-                app.assistant.status.push_str(" · shader fixed on retry");
+            if let Some(repair) = repaired {
+                app.assistant
+                    .status
+                    .push_str(&format!(" · {}", repair.label()));
             }
             app.assistant.last = Some(if plan.notes.trim().is_empty() {
                 "Built.".to_string()

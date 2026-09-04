@@ -844,6 +844,27 @@ mod tests {
     }
 
     #[test]
+    fn a_shader_that_broke_the_json_is_reported_rather_than_swallowed() {
+        // Both ways a model mangles JSON do it in the same place: a long
+        // shader source, where an escape gets dropped. These have to come
+        // back as errors, because the error is what gets handed to the model
+        // to fix — see `complete_with_repair`. A parse that quietly returned
+        // something half-read would skip the retry entirely.
+        let unescaped_quote = "{\"nodes\":[{\"params\":{\"source\":\"// uses \"iTime\"\"}}]}";
+        let err = extract_json(unescaped_quote).unwrap_err();
+        assert!(err.contains("not valid JSON"), "{err}");
+
+        let literal_newline = "{\"nodes\":[{\"params\":{\"source\":\"void main() {\nreturn;\n}\"}}]}";
+        let err = extract_json(literal_newline).unwrap_err();
+        assert!(err.contains("not valid JSON"), "{err}");
+
+        // Properly escaped, the same shader is fine — the brace scanner must
+        // not be fooled by the braces inside the string.
+        let good = "{\"nodes\":[{\"params\":{\"source\":\"void main() {\\n  return;\\n}\"}}]}";
+        assert!(extract_json(good).is_ok());
+    }
+
+    #[test]
     fn long_text_is_clipped_rather_than_dropped() {
         // Knowing a node already has a shader is what stops the model
         // writing a second one — but the whole body would crowd out the
