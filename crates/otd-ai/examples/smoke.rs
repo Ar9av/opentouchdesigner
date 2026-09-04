@@ -57,6 +57,7 @@ fn main() {
             image: None,
             graph: &graph,
             parent: root,
+            selected: None,
             registry: &registry,
         };
         let started = std::time::Instant::now();

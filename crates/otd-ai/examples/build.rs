@@ -69,6 +69,7 @@ fn main() {
         image,
         graph: &graph,
         parent: root,
+        selected: None,
         registry: &registry,
     };
 

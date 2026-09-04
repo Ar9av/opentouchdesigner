@@ -116,27 +116,112 @@ fn short_value(v: &Value) -> String {
 
 /// What the network being edited currently looks like, so the model can
 /// extend it rather than talk past it.
-pub fn describe(graph: &Graph, parent: NodeId) -> String {
+///
+/// The node list alone is not enough to build *on top of* a patch, which is
+/// the usual request once there is anything on the canvas at all. Three
+/// things are here because leaving them out produced a specific bad answer:
+///
+///  * **The parameters that were changed.** A model that cannot see the
+///    feedback loop is already tuned to `scale 1.035` proposes its own
+///    numbers over the top of the ones the user spent the session dialling
+///    in. Only the settings that differ from the operator's defaults are
+///    listed — the catalogue above already gives the defaults, so repeating
+///    them costs prompt and says nothing.
+///  * **Where the nodes are.** Without positions every plan lays out from
+///    the same origin and the new chain lands on top of the old one.
+///  * **What is selected.** "Make *it* run" is the common phrasing, and the
+///    referent is whatever the user has clicked on.
+pub fn describe(
+    graph: &Graph,
+    parent: NodeId,
+    selected: Option<NodeId>,
+    registry: &OpRegistry,
+) -> String {
     let children = graph.node(parent).children.clone();
     if children.is_empty() {
         return "The network is empty.".into();
     }
-    let mut out = String::from("Existing nodes in this network:\n");
+    let mut out = String::from(
+        "THE NETWORK AS IT STANDS\n\
+         These operators already exist and are cooking. Build on them: wire \
+         into them, add after them, and change their parameters. Do not \
+         rebuild what is already here.\n",
+    );
     for id in children {
         let node = graph.node(id);
+        out.push_str(&format!(
+            "- {} ({}) at [{:.0},{:.0}]",
+            node.name, node.op_type, node.pos[0], node.pos[1]
+        ));
+
         let wired: Vec<String> = node
             .inputs
             .iter()
             .enumerate()
             .filter_map(|(i, slot)| slot.map(|src| format!("{}<-{}", i, graph.node(src).name)))
             .collect();
-        out.push_str(&format!("- {} ({})", node.name, node.op_type));
         if !wired.is_empty() {
             out.push_str(&format!(" inputs: {}", wired.join(" ")));
+        }
+
+        // Only what was changed. Everything else is in the catalogue.
+        let defaults = registry.get(&node.op_type).map(|def| (def.params)());
+        for (key, param) in &node.params {
+            if !param.expression.is_empty() {
+                out.push_str(&format!(" {key}=expr({})", clip(&param.expression)));
+                continue;
+            }
+            let unchanged = defaults
+                .as_ref()
+                .and_then(|d| d.get(key))
+                .map(|d| d.value == param.value)
+                .unwrap_or(false);
+            if !unchanged {
+                out.push_str(&format!(" {key}={}", context_value(&param.value)));
+            }
+        }
+
+        if let Some(file) = &node.external {
+            out.push_str(&format!(" component={}", clip(file)));
+        }
+        if node.flags.bypass {
+            out.push_str(" [bypassed]");
+        }
+        if node.flags.render {
+            out.push_str(" [output]");
+        }
+        if Some(id) == selected {
+            out.push_str(" [SELECTED — \"it\" in the request means this node]");
         }
         out.push('\n');
     }
     out
+}
+
+/// A value as the model needs to read it back.
+///
+/// Unlike [`short_value`], which writes a catalogue of defaults, this is
+/// reporting what the user actually set — so a file path or a menu choice is
+/// worth its characters where a whole shader is not.
+fn context_value(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("\"{}\"", clip(s)),
+        other => short_value(other),
+    }
+}
+
+/// Long text — a shader body, a path — kept to a line.
+///
+/// Truncated rather than dropped: knowing a glslTOP already has a shader is
+/// what stops the model writing a second one, and the first line is usually
+/// enough to say what it is.
+fn clip(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut cut = flat.char_indices().map(|(i, _)| i);
+    match cut.nth(96) {
+        Some(end) => format!("{}… ({} chars)", &flat[..end], flat.chars().count()),
+        None => flat,
+    }
 }
 
 /// The instructions the model works to.
@@ -167,6 +252,22 @@ RULES
   since start; `sin`, `cos`, `fit`, `clamp` and arithmetic are available.
 - End a TOP chain with a nullTOP and set "viewer" to it.
 - "connections" may name a node you created or one that already exists.
+
+BUILDING ON A NETWORK THAT ALREADY EXISTS
+The network as it stands is listed below the catalogue. When it is not empty,
+the request is almost always "add this to what I have", not "start again".
+- Wire into what is there. Name an existing node in "connections" and it is
+  found; the nodes you list are only the NEW ones. Never re-create an
+  operator that is already in the list to get at its output.
+- Leave existing parameters alone unless the request is about them. Numbers
+  already set are ones somebody dialled in.
+- Read the source off the network, not out of thin air: if there is a
+  moviefileinTOP, that clip is what the user means by "it", and the new
+  chain hangs off that node rather than off a fresh noiseTOP.
+- `pos` must not land on an existing node. Their positions are listed —
+  put new work in clear space, about 200 apart, and keep the flow left to
+  right.
+- A node marked [SELECTED] is what "it", "this" and "that" refer to.
 
 WHAT MAKES A GOOD-LOOKING PATCH
 - Motion comes from a feedback loop, not from one operator. The shape is:
@@ -707,13 +808,52 @@ mod tests {
         let reg = test_registry();
         let mut graph = Graph::new();
         let root = graph.root();
-        assert!(describe(&graph, root).contains("empty"));
+        assert!(describe(&graph, root, None, &reg).contains("empty"));
 
         let plan = parse_plan(&plan_json(), &reg).unwrap();
         apply(&mut graph, root, &reg, &plan).unwrap();
-        let text = describe(&graph, root);
+        let text = describe(&graph, root, None, &reg);
         assert!(text.contains("a (pass)"), "{text}");
         assert!(text.contains("0<-a"), "{text}");
+    }
+
+    #[test]
+    fn a_description_carries_what_was_tuned_and_what_is_selected() {
+        // Building on a patch means seeing it. A model that cannot read the
+        // numbers already dialled in proposes its own over the top of them,
+        // and one that cannot tell which node is selected has nothing to
+        // attach "make it move" to.
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let plan = parse_plan(&plan_json(), &reg).unwrap();
+        apply(&mut graph, root, &reg, &plan).unwrap();
+
+        let tuned = graph.find_from(root, "a").unwrap();
+        graph.set_param(tuned, "gain", Value::Float(0.35)).unwrap();
+        let text = describe(&graph, root, Some(tuned), &reg);
+
+        assert!(text.contains("gain=0.35"), "{text}");
+        assert!(text.contains("[SELECTED"), "{text}");
+        // Positions are what keep a new chain off the top of an old one.
+        assert!(text.contains(" at ["), "{text}");
+        // A default is in the catalogue already; repeating it is prompt
+        // spent to say nothing.
+        let untouched = describe(&graph, root, None, &reg);
+        assert!(!untouched.contains("gain=1"), "{untouched}");
+    }
+
+    #[test]
+    fn long_text_is_clipped_rather_than_dropped() {
+        // Knowing a node already has a shader is what stops the model
+        // writing a second one — but the whole body would crowd out the
+        // patch it is meant to be extending.
+        let long = "x".repeat(400);
+        let out = clip(&long);
+        assert!(out.contains("400 chars"), "{out}");
+        assert!(out.chars().count() < 140, "{out}");
+        // Short values pass through untouched.
+        assert_eq!(clip("noise1"), "noise1");
     }
 }
 
