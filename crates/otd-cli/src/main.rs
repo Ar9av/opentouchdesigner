@@ -22,6 +22,7 @@ USAGE:
     otd run <project.otd> [--frames N] [--fps N] [--node PATH]
     otd render <project.otd> --node <path> [--frames N] [--out DIR] [--fps N]
     otd stats <project.otd> [--frames N] [--fps N] [--node PATH]
+    otd bundle <project.otd> --out <dir>
 
 COMMANDS:
     run       Cook the project in realtime. Output CHOPs (DMX, OSC) keep
@@ -29,6 +30,8 @@ COMMANDS:
               --frames is given.
     render    Write a node's output to a numbered PNG sequence.
     stats     Cook a fixed number of frames and report the timings.
+    bundle    Copy the project and every component it references into one
+              folder, with the references rewritten to be relative to it.
 
 OPTIONS:
     --frames N   How many frames to run. `run` defaults to forever.
@@ -82,12 +85,13 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
     if command == "-h" || command == "--help" || command == "help" {
         return Err(Fail::Help);
     }
-    if !["run", "render", "stats"].contains(&command.as_str()) {
+    if !["run", "render", "stats", "bundle"].contains(&command.as_str()) {
         return Err(format!("unknown command `{command}`\n\n{USAGE}").into());
     }
-    let project = PathBuf::from(it.next().ok_or_else(|| {
-        Fail::Err(format!("`{command}` needs a project file\n\n{USAGE}"))
-    })?);
+    let project = PathBuf::from(
+        it.next()
+            .ok_or_else(|| Fail::Err(format!("`{command}` needs a project file\n\n{USAGE}")))?,
+    );
 
     let mut args = Args {
         command,
@@ -97,6 +101,7 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
         node: None,
         out: PathBuf::from("frames"),
     };
+    let mut saw_out = false;
     while let Some(flag) = it.next() {
         let mut value = || -> Result<String, Fail> {
             it.next()
@@ -121,18 +126,34 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
                 args.fps = Some(fps);
             }
             "--node" => args.node = Some(value()?),
-            "--out" => args.out = PathBuf::from(value()?),
+            "--out" => {
+                args.out = PathBuf::from(value()?);
+                saw_out = true;
+            }
             other => return Err(format!("unknown option `{other}`\n\n{USAGE}").into()),
         }
     }
     if args.command == "render" && args.node.is_none() {
         return Err(Fail::Err("`render` needs --node, e.g. --node /out1".into()));
     }
+    if args.command == "bundle" && !saw_out {
+        return Err(Fail::Err(
+            "`bundle` needs --out <dir>, the folder to write the bundle into".into(),
+        ));
+    }
     Ok(args)
 }
 
 fn run() -> Result<(), Fail> {
     let args = parse(std::env::args().collect())?;
+
+    // Bundling is a file operation. Going through the runtime would demand a
+    // GPU, and packaging a show on a build server is exactly the case that
+    // does not have one.
+    if args.command == "bundle" {
+        return Ok(bundle(&args)?);
+    }
+
     let mut rt = Runtime::open(&args.project)?;
     if let Some(fps) = args.fps {
         rt.time.fps = fps;
@@ -141,7 +162,12 @@ fn run() -> Result<(), Fail> {
 
     match args.command.as_str() {
         "render" => render(&mut rt, &args, dt),
-        "stats" => stats(&mut rt, args.frames.unwrap_or(120), args.node.as_deref(), dt),
+        "stats" => stats(
+            &mut rt,
+            args.frames.unwrap_or(120),
+            args.node.as_deref(),
+            dt,
+        ),
         _ => realtime(&mut rt, args.frames, args.node.as_deref(), dt),
     }?;
     Ok(())
@@ -208,7 +234,10 @@ fn realtime(
         if let Some(slack) = target.checked_sub(started.elapsed()) {
             std::thread::sleep(slack);
         } else if timing.wall_ms > dt * 1000.0 * 2.0 {
-            eprintln!("frame {n}: {:.1} ms — behind the frame rate", timing.wall_ms);
+            eprintln!(
+                "frame {n}: {:.1} ms — behind the frame rate",
+                timing.wall_ms
+            );
         }
     }
     Ok(())
@@ -238,6 +267,42 @@ fn render(rt: &mut Runtime, args: &Args, dt: f64) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy the project and everything it references into one folder.
+fn bundle(args: &Args) -> Result<(), String> {
+    let registry = otd_engine::registry();
+    let fps = otd_core::Project::load(&args.project)
+        .map_err(|e| format!("{}: {e}", args.project.display()))?
+        .fps;
+    let graph = otd_core::Project::open(&args.project, &registry)
+        .map_err(|e| format!("{}: {e}", args.project.display()))?;
+    let name = args
+        .project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "show".into());
+
+    let out = otd_core::bundle::export(&graph, &registry, fps, &args.out, &name)
+        .map_err(|e| format!("{}: {e}", args.out.display()))?;
+    println!(
+        "{}  ({} component(s))",
+        out.project.display(),
+        out.components.len()
+    );
+    for (path, file, reason) in &out.missing {
+        eprintln!("missing component — {path} refers to `{file}`: {reason}");
+    }
+    // A bundle with a missing component will fail on the show machine. Better
+    // to fail here, where somebody is watching.
+    if out.missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} component(s) could not be copied",
+            out.missing.len()
+        ))
+    }
+}
+
 /// Cook a fixed number of frames as fast as possible and report what it cost.
 fn stats(rt: &mut Runtime, frames: u64, node: Option<&str>, dt: f64) -> Result<(), String> {
     let roots = roots(rt, node)?;
@@ -260,8 +325,14 @@ fn stats(rt: &mut Runtime, frames: u64, node: Option<&str>, dt: f64) -> Result<(
     let (cook_med, cook_p95, cook_max) = summarize(cook);
     let (wall_med, wall_p95, wall_max) = summarize(wall.clone());
     println!("frames        {frames} at {:.0} fps target", rt.time.fps);
-    println!("nodes         {} cooked, {} cached (last frame)", last.cooked, last.cached);
-    println!("first frame   {:.2} ms  (compilation and allocation)", warmup.wall_ms);
+    println!(
+        "nodes         {} cooked, {} cached (last frame)",
+        last.cooked, last.cached
+    );
+    println!(
+        "first frame   {:.2} ms  (compilation and allocation)",
+        warmup.wall_ms
+    );
     println!("cook    ms    median {cook_med:.2}   p95 {cook_p95:.2}   max {cook_max:.2}");
     println!("frame   ms    median {wall_med:.2}   p95 {wall_p95:.2}   max {wall_max:.2}");
 

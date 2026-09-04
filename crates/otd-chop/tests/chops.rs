@@ -446,7 +446,9 @@ fn dmx_goes_out_over_the_wire() {
     );
 
     let mut buf = [0u8; 1024];
-    let (len, _) = listener.recv_from(&mut buf).expect("a packet should arrive");
+    let (len, _) = listener
+        .recv_from(&mut buf)
+        .expect("a packet should arrive");
     assert!(len > 20);
     assert_eq!(&buf[0..8], b"Art-Net\0");
     assert_eq!(&buf[14..16], &[2, 0], "universe 2");

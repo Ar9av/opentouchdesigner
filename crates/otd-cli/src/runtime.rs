@@ -38,11 +38,14 @@ pub struct FrameTiming {
 impl Runtime {
     pub fn open(path: &Path) -> Result<Runtime, String> {
         let registry = otd_engine::registry();
-        let project = Project::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let fps = project.fps;
-        let graph = project
-            .to_graph(&registry)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        // `open` rather than `load` + `to_graph`: a bundle's component
+        // references are relative to the project file, and a show machine
+        // runs from whatever directory a service manager chose.
+        let fps = Project::load(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .fps;
+        let graph =
+            Project::open(path, &registry).map_err(|e| format!("{}: {e}", path.display()))?;
         let gpu = GpuContext::headless().map_err(|e| format!("no GPU: {e}"))?;
 
         let time = CookContext {
@@ -91,9 +94,9 @@ impl Runtime {
         self.graph.sync_clones(&self.registry);
 
         self.engines.begin_frame();
-        let result = self
-            .cook
-            .cook_frame(&self.graph, roots, &self.time.clone(), &mut self.engines);
+        let result =
+            self.cook
+                .cook_frame(&self.graph, roots, &self.time.clone(), &mut self.engines);
         self.engines.end_frame();
         result.map_err(|e| e.to_string())?;
 

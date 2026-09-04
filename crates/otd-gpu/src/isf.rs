@@ -112,7 +112,10 @@ pub fn import(source: &str) -> Result<Isf, IsfError> {
             let Some(name) = entry.get("NAME").and_then(|n| n.as_str()) else {
                 continue;
             };
-            let kind = entry.get("TYPE").and_then(|t| t.as_str()).unwrap_or("float");
+            let kind = entry
+                .get("TYPE")
+                .and_then(|t| t.as_str())
+                .unwrap_or("float");
             let label = entry
                 .get("LABEL")
                 .and_then(|l| l.as_str())
@@ -440,7 +443,11 @@ void main() {
         // Inputs map to uniform slots in declaration order. `level` takes one
         // component; `tint` is a vec4 so it starts a fresh vector; `flip`
         // follows it.
-        assert!(isf.source.contains("#define level U.p0.x"), "{}", isf.source);
+        assert!(
+            isf.source.contains("#define level U.p0.x"),
+            "{}",
+            isf.source
+        );
         assert!(isf.source.contains("#define tint U.p1\n"), "{}", isf.source);
         assert!(
             isf.source.contains("#define flip (U.p2.x > 0.5)"),
@@ -483,10 +490,38 @@ void main() {}"#;
         // x, then a point2D: the point cannot start at component 1, so it
         // aligns to 2 and leaves a hole.
         let slots = layout([1, 2, 4, 1]).unwrap();
-        assert_eq!(slots[0], Slot { vec: 0, component: 0, width: 1 });
-        assert_eq!(slots[1], Slot { vec: 0, component: 2, width: 2 });
-        assert_eq!(slots[2], Slot { vec: 1, component: 0, width: 4 });
-        assert_eq!(slots[3], Slot { vec: 2, component: 0, width: 1 });
+        assert_eq!(
+            slots[0],
+            Slot {
+                vec: 0,
+                component: 0,
+                width: 1
+            }
+        );
+        assert_eq!(
+            slots[1],
+            Slot {
+                vec: 0,
+                component: 2,
+                width: 2
+            }
+        );
+        assert_eq!(
+            slots[2],
+            Slot {
+                vec: 1,
+                component: 0,
+                width: 4
+            }
+        );
+        assert_eq!(
+            slots[3],
+            Slot {
+                vec: 2,
+                component: 0,
+                width: 1
+            }
+        );
         assert_eq!(slots[1].swizzle(), ".zw");
         assert_eq!(slots[2].swizzle(), "");
     }

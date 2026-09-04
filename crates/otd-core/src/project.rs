@@ -124,6 +124,29 @@ impl Project {
     /// Rebuild a graph. Fails loudly on unknown operators and dangling wires
     /// rather than silently dropping a patch's connections.
     pub fn to_graph(&self, registry: &OpRegistry) -> Result<Graph, ProjectError> {
+        self.to_graph_relative_to(registry, None)
+    }
+
+    /// Load a project file, resolving its component references against the
+    /// directory the file is in.
+    ///
+    /// This is what `to_graph` alone cannot do: a project holding
+    /// `components/meter.otdc` has to find that file next to *itself*, not
+    /// next to whatever directory the process happens to be running in. Get
+    /// that wrong and a project bundle works when you double-click it and
+    /// fails when a show machine runs it from a service.
+    pub fn open(path: impl AsRef<Path>, registry: &OpRegistry) -> Result<Graph, ProjectError> {
+        let path = path.as_ref();
+        Project::load(path)?.to_graph_relative_to(registry, path.parent())
+    }
+
+    /// Rebuild a graph, resolving relative external component paths against
+    /// `base`. Absolute paths are used as they are.
+    pub fn to_graph_relative_to(
+        &self,
+        registry: &OpRegistry,
+        base: Option<&Path>,
+    ) -> Result<Graph, ProjectError> {
         if self.format != FORMAT_ID {
             return Err(ProjectError::NotAProject);
         }
@@ -132,6 +155,7 @@ impl Project {
         }
 
         let mut graph = Graph::new();
+        graph.set_base_dir(base.map(|p| p.to_path_buf()));
         let mut by_path: BTreeMap<String, NodeId> = BTreeMap::new();
 
         // Pass 1 — create every node. Entries are path-sorted, so a parent

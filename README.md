@@ -72,11 +72,22 @@ budget  16.67 ms   1 frame(s) over
 | `Delete` | delete the selection (reconnecting the chain around it) |
 | `I` / double-click a COMP | step inside a component |
 | `U` | step back out (or click the breadcrumb) |
+| `F1` | perform mode — the editor disappears and the window is the output. `F1` or `Escape` to come back |
 | drag background | pan · scroll to zoom |
 | drag output port → input port | wire · click an input port to unwire |
 
 The **Output** button in the top bar opens a second window showing only the
 viewer, letterboxed — drag it to a projector and toggle Fullscreen.
+
+**Perform mode** (`F1`) hides the editor in the main window instead. It is
+cheaper as well as darker: with nothing on the canvas, every node that was
+cooking only because it was visible stops, and what is left is the output
+chain and anything explicitly flagged for render.
+
+**File → Export Bundle…** copies the project and every `.otdc` component it
+uses into one folder, with the references rewritten relative to it, so the
+folder can be moved to a show machine and still open. `otd bundle` does the
+same from the command line and needs no GPU.
 
 ## What works
 

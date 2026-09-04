@@ -73,10 +73,7 @@ fn an_imported_shader_reads_the_values_the_engine_writes() {
     let mut cook = CookEngine::new();
     let mut time = CookContext::default();
 
-    let run = |graph: &Graph,
-               engine: &mut TopEngine,
-               cook: &mut CookEngine,
-               time: &CookContext| {
+    let run = |graph: &Graph, engine: &mut TopEngine, cook: &mut CookEngine, time: &CookContext| {
         engine.begin_frame();
         cook.cook_frame(graph, &[node], time, engine).unwrap();
         engine.end_frame();
@@ -95,14 +92,21 @@ fn an_imported_shader_reads_the_values_the_engine_writes() {
     // with a different parameter.
     let p = run(&graph, &mut engine, &mut cook, &time);
     assert_eq!(p[0], 255, "red: {p:?}");
-    assert!((p[1] as i32 - 128).abs() <= 2, "green should be halved: {p:?}");
+    assert!(
+        (p[1] as i32 - 128).abs() <= 2,
+        "green should be halved: {p:?}"
+    );
     assert_eq!(p[2], 0, "blue: {p:?}");
 
     // And the bool, packed as a component of the same vector as the scalars.
     graph.set_param(node, "on", Value::Bool(false)).unwrap();
     time.advance(1.0 / 60.0);
     let p = run(&graph, &mut engine, &mut cook, &time);
-    assert_eq!([p[0], p[1], p[2]], [0, 0, 0], "the bool gates the output: {p:?}");
+    assert_eq!(
+        [p[0], p[1], p[2]],
+        [0, 0, 0],
+        "the bool gates the output: {p:?}"
+    );
 }
 
 /// The commonest ISF shape by far: a filter that reads its input image.
@@ -146,7 +150,8 @@ fn an_imported_filter_reads_the_top_wired_to_it() {
     let mut cook = CookEngine::new();
     let time = CookContext::default();
     engine.begin_frame();
-    cook.cook_frame(&graph, &[node], &time, &mut engine).unwrap();
+    cook.cook_frame(&graph, &[node], &time, &mut engine)
+        .unwrap();
     engine.end_frame();
     assert!(
         engine.shader_error(node).is_none(),
@@ -159,7 +164,11 @@ fn an_imported_filter_reads_the_top_wired_to_it() {
     let tex = engine.output(&graph, node).unwrap();
     let (w, _, pixels) = read_pixels_rgba8(&ctx, tex).unwrap();
     let p = px(&pixels, w, 10, 10);
-    assert_eq!([p[0], p[1], p[2]], [0, 255, 255], "red inverted is cyan: {p:?}");
+    assert_eq!(
+        [p[0], p[1], p[2]],
+        [0, 255, 255],
+        "red inverted is cyan: {p:?}"
+    );
 }
 
 #[test]
@@ -191,7 +200,11 @@ fn an_imported_shader_survives_a_save_and_load() {
         Value::Vec4([0.0, 1.0, 0.0, 1.0])
     );
     assert!(
-        n.param("source").unwrap().value.as_str().contains("#define red U.p0.x"),
+        n.param("source")
+            .unwrap()
+            .value
+            .as_str()
+            .contains("#define red U.p0.x"),
         "the shader body travels with the node"
     );
 }
