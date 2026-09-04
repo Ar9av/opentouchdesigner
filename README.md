@@ -8,7 +8,6 @@
 [![CI](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml/badge.svg)](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml)
 [![Download](https://img.shields.io/github/v/release/Ar9av/opentouchdesigner?label=download%20macOS&color=blue)](https://github.com/Ar9av/opentouchdesigner/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-![Tests](https://img.shields.io/badge/tests-325%20passing-brightgreen)
 ![Operators](https://img.shields.io/badge/operators-79-informational)
 
 <img src="docs/img/tunnel.gif" width="640" alt="A cyan and magenta warp tunnel, built from nine nodes and no shader">
@@ -439,59 +438,6 @@ mode has to read a CHOP channel cooked in the same frame.
 engine unit-testable and keeps a headless runtime and a future WASM playground
 open.
 
-## Tests
-
-```bash
-cargo test --workspace
-```
-
-GPU tests skip themselves on machines with no adapter. Every phase exit
-criterion is asserted rather than claimed:
-
-- [`otd-gpu/tests/phase0.rs`](crates/otd-gpu/tests/phase0.rs) — an animated
-  `Noise → Level → viewer` chain at 1280×720 sustains 60 fps (1.3 ms/frame here)
-- [`otd-gpu/tests/phase1.rs`](crates/otd-gpu/tests/phase1.rs) — the Shadertoy
-  feedback patch sustains 60 fps at 1920×1080 (2.5 ms/frame here), actually
-  accumulates trails, and survives a save/load round trip byte-identically
-- [`otd-engine/tests/phase2.rs`](crates/otd-engine/tests/phase2.rs) — a channel
-  drives a texture parameter within the same frame, a note reaches a
-  transform, and the audio-reactive patch runs with nothing plugged in
-- [`otd-engine/tests/phase3.rs`](crates/otd-engine/tests/phase3.rs) — one
-  component used twice renders two different pictures from one definition,
-  and turning one of its knobs changes exactly one line of the project file
-- [`otd-engine/tests/external.rs`](crates/otd-engine/tests/external.rs) — two
-  projects share one `.otdc`, an edit to it reaches both, and neither project
-  file contains the shared network
-- [`otd-engine/tests/phase4.rs`](crates/otd-engine/tests/phase4.rs) — 256
-  instanced spheres are one draw call, an audio band scales all of them, the
-  render feeds a TOP chain, and the whole thing runs at 2.3 ms/frame
-
-- [`otd-engine/tests/keyframes.rs`](crates/otd-engine/tests/keyframes.rs) —
-  keyed curves reach the pixels through the ordinary Export path, hold their
-  values exactly through a constant segment, and moving one key changes one
-  line of the project file
-- [`otd-gpu/tests/undo.rs`](crates/otd-gpu/tests/undo.rs) — undo changes the
-  *picture*, not just the parameter panel, even though it hands the cook
-  engine revisions that have gone backwards
-- [`otd-cli/tests/cli.rs`](crates/otd-cli/tests/cli.rs) — the real binary
-  against real project files, including a bundle that still runs after the
-  component it was authored against is deleted and the folder is moved
-- [`otd-engine/tests/replicator.rs`](crates/otd-engine/tests/replicator.rs) —
-  two table rows render two different pictures, an unchanged table makes zero
-  graph edits, and a removed row removes exactly its replicant
-- [`otd-gpu/tests/video.rs`](crates/otd-gpu/tests/video.rs) — a still lands
-  in the texture at its own size with its halves the right way round, and a
-  real H.264 clip of one red, one green and one blue second proves the
-  timeline picks the frame — including scrubbing backwards, which can only
-  work by re-seeking a pipe that cannot seek
-- [`otd-engine/tests/palette.rs`](crates/otd-engine/tests/palette.rs) — every
-  palette item is proven to do its job in pixels or channels, not merely to
-  build: trails move a static image, bloom brightens, the vignette darkens
-  corners and not the centre
-
-The OSC and DMX tests are real UDP loopbacks and the spectrum test is a real
-FFT, so those paths are exercised rather than mocked.
-
 ## Docs
 
 [`docs/GUIDE.md`](docs/GUIDE.md) — how to make something that looks good:
@@ -512,12 +458,11 @@ cannot drift from what the operators actually do:
 cargo run -p otd-cli -- docs --out docs/OPERATORS.md
 ```
 
-Three tests hold the line PLAN.md wanted from PR review. One fails the build if
-an operator or a parameter arrives without prose; one fails if the committed
-reference is stale; one checks every index link points at a heading that
-exists. The longer hand-written notes live beside the generator and the editor
-shows the same text under *How this works*, so there is one source rather than
-two that can disagree.
+An operator or parameter that arrives without prose fails the build, as does a
+committed reference that has gone stale — enforcement PLAN.md wanted from PR
+review, which holds until the week somebody is busy. The longer hand-written
+notes live beside the generator and the editor shows the same text under
+*How this works*, so there is one source rather than two that can disagree.
 
 ## Adding an operator
 

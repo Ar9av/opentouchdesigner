@@ -170,6 +170,41 @@ fn a_still_image_reaches_the_texture_at_its_own_size() {
 }
 
 #[test]
+fn pixel_values_survive_the_trip_unchanged() {
+    let gpu = gpu_or_skip!();
+    let dir = scratch("levels");
+    let path = dir.join("grey.png");
+
+    // Mid-grey and a few known steps. There is exactly one right answer for
+    // each, and getting it wrong is not subtle: uploading through an sRGB
+    // texture converts to linear on sample, and since nothing else in this
+    // pipeline is linear, 128 came out as 55 — every movie 2.33x too dark
+    // against every other operator.
+    let steps = [0u8, 64, 128, 192, 255];
+    let mut buffer = image::RgbaImage::new(steps.len() as u32, 1);
+    for (i, v) in steps.iter().enumerate() {
+        buffer.put_pixel(i as u32, 0, image::Rgba([*v, *v, *v, 255]));
+    }
+    buffer.save(&path).unwrap();
+
+    let mut rig = Rig::new(gpu);
+    let movie = rig.add(ops::MOVIE_IN, "movie1");
+    rig.graph
+        .set_param(movie, "file", Value::Str(path.display().to_string()))
+        .unwrap();
+    assert!(rig.run_until_picture(movie));
+
+    for (i, want) in steps.iter().enumerate() {
+        let got = rig.at(movie, i as u32, 0)[0];
+        assert!(
+            (got as i32 - *want as i32).abs() <= 2,
+            "step {i}: put {want} in and got {got} out"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_missing_file_reports_itself_and_still_produces_a_texture() {
     let gpu = gpu_or_skip!();
     let mut rig = Rig::new(gpu);

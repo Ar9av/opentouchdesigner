@@ -827,9 +827,15 @@ impl TopEngine {
 
     /// Copy a decoded frame into this node's upload texture.
     ///
-    /// The texture is sRGB, so the hardware does the colour conversion on
-    /// sample: an 8-bit JPEG lands in the 16-bit float pipeline linearised,
-    /// which is what makes compositing it behave.
+    /// `Rgba8Unorm`, deliberately **not** the sRGB variant. The sRGB format
+    /// would have the hardware convert to linear on sample, which sounds
+    /// right and is wrong here: nothing else in this pipeline is linear. A
+    /// Constant TOP set to 0.5 stores 0.5 and reads back 128, and every
+    /// shader does its arithmetic on display-referred values. Converting one
+    /// operator and not the others made video — and only video — come out
+    /// 2.33× dark: mid-grey 128 went in and 55 came out, which is exactly
+    /// the linear value of sRGB 0.5. Consistency with the rest of the engine
+    /// beats being right in isolation.
     fn upload_frame(&mut self, id: NodeId, frame: &crate::video::Frame, revision: u64) {
         let entry = self.nodes.entry(id).unwrap().or_default();
         let reusable = entry
@@ -851,7 +857,7 @@ impl TopEngine {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
