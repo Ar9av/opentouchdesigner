@@ -22,11 +22,14 @@
 
 ## Get it
 
-**macOS** — [**download the .dmg**](https://github.com/Ar9av/opentouchdesigner/releases/latest) · Apple Silicon and Intel
+**macOS** — [**download the .dmg**](https://github.com/Ar9av/opentouchdesigner/releases/latest) · Apple Silicon
 
 It is unsigned, so the first launch is refused. Right-click → Open, or
 `xattr -dr com.apple.quarantine /Applications/OpenTouchDesigner.app`. Signing
 needs a paid Apple Developer account; saying so beats pretending otherwise.
+
+Intel Macs build from source — a universal binary needs a universal Python for
+PyO3 to link against, which a stock Homebrew install is not.
 
 **Anywhere** — one command, nothing to install but Rust:
 

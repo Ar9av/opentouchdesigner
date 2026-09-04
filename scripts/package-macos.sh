@@ -21,13 +21,38 @@ rm -rf "$DIST"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> building"
-cargo build --release -p otd-app -p otd-cli
+# Native by default. A universal binary needs a universal *Python* to link
+# PyO3 against, and a stock Homebrew Python is one architecture — so
+# cross-linking fails on most machines with a linker error that has nothing
+# to do with this code. Opt in with OTD_UNIVERSAL=1 when you have both, and
+# get a clear message rather than a mystery when you do not.
+HOST="$(rustc -vV | awk '/^host:/ {print $2}')"
+BIN_APP=()
+BIN_CLI=()
+build() {
+    local t="$1"
+    cargo build --release --target "$t" -p otd-app -p otd-cli
+    BIN_APP+=("target/$t/release/otd-app")
+    BIN_CLI+=("target/$t/release/otd")
+}
+build "$HOST"
+if [ "${OTD_UNIVERSAL:-0}" = "1" ]; then
+    OTHER=x86_64-apple-darwin
+    [ "$HOST" = "$OTHER" ] && OTHER=aarch64-apple-darwin
+    if build "$OTHER"; then
+        echo "==> universal ($HOST + $OTHER)"
+    else
+        echo "!! $OTHER failed to build — shipping $HOST only."
+        echo "!! Usually PyO3: linking it for another architecture needs a"
+        echo "!! Python for that architecture as well."
+    fi
+fi
 
 echo "==> bundling"
-cp target/release/otd-app "$APP/Contents/MacOS/OpenTouchDesigner"
 # The headless runtime rides along: a show machine that has the editor should
 # have the thing that runs a patch without one.
-cp target/release/otd "$APP/Contents/MacOS/otd"
+lipo -create "${BIN_APP[@]}" -output "$APP/Contents/MacOS/OpenTouchDesigner"
+lipo -create "${BIN_CLI[@]}" -output "$APP/Contents/MacOS/otd"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
