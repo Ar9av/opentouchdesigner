@@ -34,6 +34,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::time::{Duration, Instant};
 
 /// One decoded frame, RGBA8, tightly packed.
 pub struct Frame {
@@ -314,7 +315,23 @@ pub struct Source {
     awaiting_seek: bool,
     /// Set by a worker that could not do its job, and read by the cook.
     problem: Arc<std::sync::Mutex<Option<String>>>,
+    /// When a live source was opened, and whether it has ever delivered.
+    ///
+    /// A camera that is refused does not fail: on macOS a denied
+    /// `kTCCServiceCamera` leaves AVFoundation with a session that opens
+    /// happily, writes nothing to stderr, and never produces a sample. ffmpeg
+    /// sits there. So does the node — cooking every frame, reporting nothing,
+    /// black. The only evidence available is the absence of a first frame, so
+    /// that is what gets timed.
+    opened: Option<Instant>,
 }
+
+/// How long a camera gets to produce its first frame before the node says so.
+///
+/// Generous on purpose: a capture device negotiating a mode can take a couple
+/// of seconds, and crying wolf on a camera that was merely slow is worse than
+/// waiting. Nothing after this is a device that is not going to answer.
+const FIRST_FRAME_GRACE: Duration = Duration::from_secs(5);
 
 impl Source {
     /// Open a still image: one frame, decoded once, on its own thread.
@@ -355,6 +372,7 @@ impl Source {
             revision: 0,
             awaiting_seek: false,
             problem,
+            opened: None,
         }
     }
 
@@ -370,6 +388,7 @@ impl Source {
             revision: 0,
             awaiting_seek: false,
             problem: Default::default(),
+            opened: None,
         };
         source.reader = Some(source.spawn_file(path, start_index)?);
         source.current = start_index - 1;
@@ -432,6 +451,7 @@ impl Source {
             revision: 0,
             awaiting_seek: false,
             problem,
+            opened: Some(Instant::now()),
         })
     }
 
@@ -490,6 +510,11 @@ impl Source {
         if adopted {
             // Whatever we were waiting for has arrived.
             self.awaiting_seek = false;
+            // It delivered, so it is not the silent case. Stopping the clock
+            // rather than checking `frame.is_some()` keeps a camera that
+            // produced one frame and then stalled from being accused of a
+            // permission problem it does not have.
+            self.opened = None;
             self.revision += 1;
             if self.info.width == 0 {
                 if let Some(f) = &self.frame {
@@ -530,8 +555,42 @@ impl Source {
     }
 
     /// What went wrong on the decode thread, if anything did.
+    ///
+    /// ffmpeg's own words first — when it has any, they are better than
+    /// anything guessed from the outside. A camera that was refused has none:
+    /// see [`silent_camera`].
     pub fn problem(&self) -> Option<String> {
-        self.problem.lock().ok().and_then(|p| p.clone())
+        let said = self.problem.lock().ok().and_then(|p| p.clone());
+        said.or_else(|| self.silent_camera())
+    }
+
+    /// A live source that has produced nothing for too long.
+    ///
+    /// This exists because the failure it names is otherwise invisible. On
+    /// macOS a denied camera is not an error anywhere: ffmpeg starts, opens
+    /// the AVFoundation session, writes nothing to stderr and never exits,
+    /// and the node cooks a black texture every frame for as long as you care
+    /// to watch it. Somebody looking at that has no way to learn that the
+    /// answer is one checkbox in System Settings.
+    ///
+    /// Worded as a suspicion rather than a diagnosis. Access is only the
+    /// likeliest cause — a camera held by another app, or one that has been
+    /// unplugged since the mode probe, look identical from here — so it says
+    /// what it observed first and what to try second.
+    fn silent_camera(&self) -> Option<String> {
+        let opened = self.opened?;
+        if !self.live || opened.elapsed() < FIRST_FRAME_GRACE {
+            return None;
+        }
+        Some(if cfg!(target_os = "macos") {
+            "the camera has not produced a frame — check System Settings ▸ \
+             Privacy & Security ▸ Camera, and that nothing else is using it"
+                .to_string()
+        } else {
+            "the camera has not produced a frame — check that it is connected \
+             and that nothing else is using it"
+                .to_string()
+        })
     }
 }
 

@@ -807,6 +807,23 @@ fn pack_glsl(n: &Node, c: &EvalContext) -> PackedParams {
     out
 }
 
+/// Whether a video node has been given nothing to open.
+///
+/// A blank `file` means no clip and nothing to do. A blank `device` means the
+/// *default* camera — which is what that parameter's own label says, "blank =
+/// default", and what `video::Source::camera` resolves against the platform's
+/// first capture input.
+///
+/// The two were treated the same once, and the result was that a Video Device
+/// In produced black for ever the moment you created one. No status on the
+/// node, no ffmpeg started, nothing to find: the failure came *before* any
+/// question of camera permissions, so every investigation went to the wrong
+/// place. Its own function so the distinction can be tested without a camera,
+/// a GPU or a cook.
+pub fn nothing_to_open(is_camera: bool, source: &str) -> bool {
+    !is_camera && source.trim().is_empty()
+}
+
 /// The shader source and language a GLSL TOP is currently set to.
 pub fn shader_source(node: &Node, ctx: &EvalContext) -> (String, bool) {
     let source = val(node, ctx, "source").as_str();
@@ -1470,4 +1487,26 @@ pub fn registry() -> OpRegistry {
     }
     r.register(CONTAINER);
     r
+}
+
+#[cfg(test)]
+mod video_source_tests {
+    use super::nothing_to_open;
+
+    #[test]
+    fn a_blank_device_means_the_default_camera_not_nothing() {
+        // The regression this pins: a Video Device In is created with `device`
+        // blank, because its label says blank is the default. Reading that as
+        // "no source" made the node the user had just added the one node that
+        // could never produce a picture — black, silent, and with no ffmpeg
+        // started, so nothing downstream of it and nothing in any log said why.
+        assert!(!nothing_to_open(true, ""), "blank device = default camera");
+        assert!(!nothing_to_open(true, "   "));
+        assert!(!nothing_to_open(true, "1"), "a named device, obviously");
+
+        // A movie with no file really is nothing to open.
+        assert!(nothing_to_open(false, ""));
+        assert!(nothing_to_open(false, "  \t "));
+        assert!(!nothing_to_open(false, "/clips/a.mov"));
+    }
 }
