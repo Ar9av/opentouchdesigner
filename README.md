@@ -8,7 +8,7 @@
 [![CI](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml/badge.svg)](https://github.com/Ar9av/opentouchdesigner/actions/workflows/ci.yml)
 [![Download](https://img.shields.io/github/v/release/Ar9av/opentouchdesigner?label=download%20macOS&color=blue)](https://github.com/Ar9av/opentouchdesigner/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-![Operators](https://img.shields.io/badge/operators-126-informational)
+![Operators](https://img.shields.io/badge/operators-163-informational)
 
 <img src="docs/img/tunnel.gif" width="640" alt="A cyan and magenta warp tunnel, built from nine nodes and no shader">
 

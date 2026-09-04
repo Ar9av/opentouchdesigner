@@ -95,6 +95,14 @@ pub struct Applied {
 /// for a human; this is the same facts at a tenth of the size, which is the
 /// difference between a prompt that fits alongside the user's patch and one
 /// that does not.
+///
+/// Each line ends with the operator's one-line summary. That was not always
+/// here, and leaving it out is a mistake that hides well: a model reading
+/// `slopeTOP in[in] mode={xy|magnitude|direction}` can spell the operator and
+/// its parameters correctly and still have no idea the `xy` output is what a
+/// Displace TOP wants in its second input. Names carry meaning for the twenty
+/// operators everybody already knows and none for the rest, so the summary
+/// the registry already holds is worth its few hundred tokens.
 pub fn catalogue(registry: &OpRegistry) -> String {
     let mut by_family: BTreeMap<&'static str, Vec<&otd_core::OpDef>> = BTreeMap::new();
     for def in registry.iter() {
@@ -121,6 +129,9 @@ pub fn catalogue(registry: &OpRegistry) -> String {
                     out.push_str(&format!("={}", short_value(&p.value)));
                 }
             }
+            // Last, so the parameter list stays a single unbroken run of
+            // `key=value` and the prose cannot be mistaken for one.
+            out.push_str(&format!(" — {}", def.summary));
             out.push('\n');
         }
     }
@@ -980,7 +991,9 @@ pub fn apply(
         }
         let path = graph.path(source_id);
         match graph.set_export(id, &key, &path, channel) {
-            Ok(()) => applied.changed.push(format!("{}.{key}", graph.node(id).name)),
+            Ok(()) => applied
+                .changed
+                .push(format!("{}.{key}", graph.node(id).name)),
             Err(e) => applied
                 .warnings
                 .push(format!("{}.{key}: {e}", graph.node(id).name)),
@@ -1009,16 +1022,15 @@ pub fn apply(
                 continue;
             };
             let Some(value) = json_to_value(raw, &declared) else {
-                applied
-                    .warnings
-                    .push(format!("{}.{key}: {raw} is not a {declared:?}", change.node));
+                applied.warnings.push(format!(
+                    "{}.{key}: {raw} is not a {declared:?}",
+                    change.node
+                ));
                 continue;
             };
             match graph.set_param(id, key, value) {
                 Ok(()) => applied.changed.push(format!("{}.{key}", change.node)),
-                Err(e) => applied
-                    .warnings
-                    .push(format!("{}.{key}: {e}", change.node)),
+                Err(e) => applied.warnings.push(format!("{}.{key}: {e}", change.node)),
             }
         }
         for (key, source) in &change.expressions {
@@ -1030,9 +1042,7 @@ pub fn apply(
             }
             match graph.set_expression(id, key, source) {
                 Ok(()) => applied.changed.push(format!("{}.{key}", change.node)),
-                Err(e) => applied
-                    .warnings
-                    .push(format!("{}.{key}: {e}", change.node)),
+                Err(e) => applied.warnings.push(format!("{}.{key}: {e}", change.node)),
             }
         }
     }
@@ -1233,7 +1243,10 @@ mod tests {
             );
             m.insert("size".into(), Param::new(Value::Vec2([1.0, 1.0])));
             // A path reference, the marker `apply` rewrites bare names for.
-            m.insert("camera".into(), Param::str("").with_label("Camera").as_path_ref());
+            m.insert(
+                "camera".into(),
+                Param::str("").with_label("Camera").as_path_ref(),
+            );
             m
         }
         let mut r = OpRegistry::new();
@@ -1424,7 +1437,10 @@ mod tests {
         assert!(applied.created.is_empty(), "set creates nothing");
         assert_eq!(applied.changed.len(), 2, "{:?}", applied.warnings);
         let b = graph.find("/b").unwrap();
-        assert_eq!(graph.node(b).param("gain").unwrap().value, Value::Float(0.25));
+        assert_eq!(
+            graph.node(b).param("gain").unwrap().value,
+            Value::Float(0.25)
+        );
         // Still three nodes: no duplicate got made.
         assert_eq!(graph.node(root).children.len(), 3);
     }
@@ -1441,7 +1457,10 @@ mod tests {
         let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
 
         let b = graph.find("/b").unwrap();
-        assert_eq!(graph.node(b).param("gain").unwrap().value, Value::Float(2.0));
+        assert_eq!(
+            graph.node(b).param("gain").unwrap().value,
+            Value::Float(2.0)
+        );
         assert!(
             applied.warnings.iter().any(|w| w.contains("warp_factor")),
             "{:?}",
@@ -1514,8 +1533,11 @@ mod tests {
 
         // Occupy the names first, so the plan's nodes get renamed and a
         // rewrite that merely prepended a slash would point at the wrong one.
-        let squatter =
-            parse_plan(&serde_json::json!({"nodes":[{"name":"cam1","op":"beat"}]}), &reg).unwrap();
+        let squatter = parse_plan(
+            &serde_json::json!({"nodes":[{"name":"cam1","op":"beat"}]}),
+            &reg,
+        )
+        .unwrap();
         apply(&mut graph, root, &reg, &squatter).unwrap();
 
         let value = serde_json::json!({
@@ -1606,7 +1628,10 @@ mod tests {
             applied.warnings
         );
         // A path with its own colon still splits on the last one.
-        assert_eq!(split_export("/rack/lag1:chan1"), Some(("/rack/lag1", "chan1")));
+        assert_eq!(
+            split_export("/rack/lag1:chan1"),
+            Some(("/rack/lag1", "chan1"))
+        );
         assert_eq!(split_export("  lag1 : r "), Some(("lag1", "r")));
         assert_eq!(split_export("lag1:"), None);
     }
@@ -1767,6 +1792,15 @@ mod tests {
         }
         // And it lists parameters, or the model has to guess them.
         assert!(text.contains("gain"), "{text}");
+        // And what each operator is FOR. A catalogue of names and parameters
+        // tells a model how to spell an operator, not when to reach for it.
+        for def in reg.iter() {
+            assert!(
+                def.summary.is_empty() || text.contains(def.summary),
+                "{} has no summary in the catalogue",
+                def.type_name
+            );
+        }
     }
 
     #[test]
@@ -1820,7 +1854,8 @@ mod tests {
         let err = extract_json(unescaped_quote).unwrap_err();
         assert!(err.contains("not valid JSON"), "{err}");
 
-        let literal_newline = "{\"nodes\":[{\"params\":{\"source\":\"void main() {\nreturn;\n}\"}}]}";
+        let literal_newline =
+            "{\"nodes\":[{\"params\":{\"source\":\"void main() {\nreturn;\n}\"}}]}";
         let err = extract_json(literal_newline).unwrap_err();
         assert!(err.contains("not valid JSON"), "{err}");
 

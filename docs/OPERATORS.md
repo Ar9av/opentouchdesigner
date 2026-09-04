@@ -2,7 +2,7 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-131 operators.
+163 operators.
 
 **CHOP** (46)
 
@@ -113,43 +113,75 @@ Generated from the operator registry — the same table the editor builds its me
 - [transformSOP](#transform--transformsop) — Translate, rotate and scale points.
 - [tubeSOP](#tube--tubesop) — A cylinder, cone or tapered tube, with optional caps.
 
-**TOP** (37)
+**TOP** (69)
 
+- [addTOP](#add--addtop) — The two inputs summed.
+- [antialiasTOP](#anti-alias--antialiastop) — Softens luminance edges in place — FXAA as a post pass.
 - [blurTOP](#blur--blurtop) — Separable Gaussian blur.
 - [cacheTOP](#cache--cachetop) — Holds the last frame it saw when Active is off.
+- [channelmixTOP](#channel-mix--channelmixtop) — Each output channel is a weighted sum of the input's four.
 - [choptotopTOP](#chop-to-top--choptotoptop) — Channels as pixels: a row per channel, a column per sample.
 - [chromakeyTOP](#chroma-key--chromakeytop) — Key out one colour, matching on hue rather than brightness.
 - [circleTOP](#circle--circletop) — An antialiased disc or ellipse.
 - [compositeTOP](#composite--compositetop) — Blend two inputs. Input 2 is composited over input 1.
 - [constantTOP](#constant--constanttop) — A flat colour at a chosen resolution.
+- [convolveTOP](#convolve--convolvetop) — An arbitrary 3x3 kernel: sharpen, blur, edge detect.
+- [cornerpinTOP](#corner-pin--cornerpintop) — Drag the image's four corners anywhere — a perspective warp.
+- [cropTOP](#crop--croptop) — Keep a rectangle of the source, at an explicit output size.
+- [crossTOP](#cross--crosstop) — Each input survives where the other is not.
+- [differenceTOP](#difference--differencetop) — The absolute difference between the inputs.
 - [displaceTOP](#displace--displacetop) — Offsets input 1's lookup by channels of input 2.
 - [ditherTOP](#dither--dithertop) — Quantise to few levels, with an ordered or noise dither.
 - [edgeTOP](#edge--edgetop) — Sobel edge detection.
+- [embossTOP](#emboss--embosstop) — A directional difference, sat at mid grey.
 - [feedbackTOP](#feedback--feedbacktop) — Last frame's output of the Target TOP.
+- [fitTOP](#fit--fittop) — Resample into a new resolution: fill, fit, stretch or native.
 - [flipTOP](#flip--fliptop) — Mirror the image about an axis, or transpose it.
 - [flowTOP](#flow--flowtop) — Advect the picture along a curl-noise field. Loop it for smoke.
+- [functionTOP](#function--functiontop) — One unary function per pixel, with a scale and offset either side.
 - [glslTOP](#glsl--glsltop) — Your own shader, compiled live. WGSL or Shadertoy-style GLSL.
 - [hsvadjustTOP](#hsv-adjust--hsvadjusttop) — Hue, saturation and value, optionally over one band of the wheel.
+- [hsvtorgbTOP](#hsv-to-rgb--hsvtorgbtop) — The inverse of the RGB to HSV TOP.
 - [inTOP](#in--intop) — A texture input on this component's node.
+- [insideTOP](#inside--insidetop) — Input 2, kept only where input 1 is opaque.
+- [lensdistortTOP](#lens-distort--lensdistorttop) — Bulge or pinch the frame. Negative Distort bulges (fisheye), positive corrects a bulge.
 - [levelTOP](#level--leveltop) — Brightness, contrast, gamma, black/white levels.
+- [limitTOP](#limit--limittop) — Clamp to a range, quantise to a step, or both.
 - [lookupTOP](#lookup--lookuptop) — Input 1's brightness reads a colour out of input 2.
+- [lumablurTOP](#luma-blur--lumablurtop) — Blur radius driven by input 2's brightness.
+- [lumalevelTOP](#luma-level--lumaleveltop) — Brightness, contrast and gamma on luminance alone, keeping hue.
 - [mathTOP](#math--mathtop) — Arithmetic on two inputs, per channel.
+- [matteTOP](#matte--mattetop) — Colour from input 1, alpha from input 2.
 - [mirrorTOP](#mirror--mirrortop) — Fold the image onto itself, including a radial kaleidoscope.
+- [monochromeTOP](#monochrome--monochrometop) — Colour to grey, by a choice of weighting.
 - [moviefileinTOP](#movie-file-in--moviefileintop) — Plays an image or a movie file.
 - [moviefileoutTOP](#movie-file-out--moviefileouttop) — Records its input to a movie file. Passes the picture through.
+- [multiplyTOP](#multiply--multiplytop) — The two inputs multiplied — darkens.
 - [noiseTOP](#noise--noisetop) — Fractal value noise. Animate Translate Z to make it move.
+- [normalmapTOP](#normal-map--normalmaptop) — A height field becomes a tangent-space normal map.
 - [nullTOP](#null--nulltop) — Pass-through. A stable name to reference and to view.
 - [outTOP](#out--outtop) — This component's texture output.
+- [outsideTOP](#outside--outsidetop) — Input 2, kept only where input 1 is not.
+- [overTOP](#over--overtop) — Input 2 over input 1, by its alpha.
 - [rampTOP](#ramp--ramptop) — Linear or radial gradient between two colours.
 - [rectangleTOP](#rectangle--rectangletop) — A rectangle, with rounded corners and an optional border.
+- [remapTOP](#remap--remaptop) — Input 2's red and green are the coordinates to read input 1 at.
 - [renderTOP](#render--rendertop) — Draws Geometry components through a Camera.
+- [reorderTOP](#reorder--reordertop) — Build each output channel from a channel of either input.
 - [resolutionTOP](#resolution--resolutiontop) — Resamples its input to an explicit resolution.
+- [rgbkeyTOP](#rgb-key--rgbkeytop) — Key out one colour by distance in RGB.
+- [rgbtohsvTOP](#rgb-to-hsv--rgbtohsvtop) — Hue, saturation and value land in the red, green and blue channels.
+- [screenTOP](#screen--screentop) — Multiply in the negative — lightens.
 - [selectTOP](#select--selecttop) — This frame's output of another TOP, by path.
+- [slopeTOP](#slope--slopetop) — The image's own gradient, as a vector, a magnitude or an angle.
+- [subtractTOP](#subtract--subtracttop) — Input 2 taken away from input 1.
 - [switchTOP](#switch--switchtop) — Select one of two inputs, optionally blending between them.
 - [textTOP](#text--texttop) — Draws text, using a font file or the system's.
 - [thresholdTOP](#threshold--thresholdtop) — Split the image in two at a level, with a soft edge.
+- [tileTOP](#tile--tiletop) — Repeat the image across the frame, optionally mirrored.
 - [toonTOP](#toon--toontop) — Cel shading: flatten the luminance into bands and ink the edges.
 - [transformTOP](#transform--transformtop) — Translate, rotate and scale, with an extend mode.
+- [underTOP](#under--undertop) — Input 1 over input 2 — Over, the other way up.
 - [videodeviceinTOP](#video-device-in--videodeviceintop) — Frames from a camera or capture device.
 - [voronoiTOP](#voronoi--voronoitop) — Cellular noise, as flat cells, edges or a distance field.
 
@@ -1360,6 +1392,26 @@ A cylinder, cone or tapered tube, with optional caps.
 
 ## TOP
 
+### Add — `addTOP`
+
+The two inputs summed.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
+
+### Anti Alias — `antialiasTOP`
+
+Softens luminance edges in place — FXAA as a post pass.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Strength | `strength` | `1` | 0 … 2 |
+
 ### Blur — `blurTOP`
 
 Separable Gaussian blur.
@@ -1381,6 +1433,19 @@ Freezes its input. Turn `Active` off and the texture stops updating, which is ho
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Active | `active` | `true` |  |
+
+### Channel Mix — `channelmixTOP`
+
+Each output channel is a weighted sum of the input's four.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Red From RGBA | `red` | `[1.0, 0.0, 0.0, 0.0]` |  |
+| Green From RGBA | `green` | `[0.0, 1.0, 0.0, 0.0]` |  |
+| Blue From RGBA | `blue` | `[0.0, 0.0, 1.0, 0.0]` |  |
+| Alpha From RGBA | `alpha` | `[0.0, 0.0, 0.0, 1.0]` |  |
 
 ### CHOP to TOP — `choptotopTOP`
 
@@ -1434,7 +1499,7 @@ Blend two inputs. Input 2 is composited over input 1.
 
 | Parameter | Name | Default | Range |
 |---|---|---|---|
-| Operation | `operation` | `over` | `over` · `add` · `multiply` · `screen` · `difference` · `subtract` · `maximum` · `minimum` |
+| Operation | `operation` | `over` | `over` · `add` · `multiply` · `screen` · `difference` · `subtract` · `maximum` · `minimum` · `under` · `inside` · `outside` · `cross` |
 | Opacity | `opacity` | `1` | 0 … 1 |
 
 ### Constant — `constantTOP`
@@ -1448,6 +1513,73 @@ A flat colour at a chosen resolution.
 | Color | `color` | `[0.0, 0.0, 0.0, 1.0]` |  |
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
+
+### Convolve — `convolveTOP`
+
+An arbitrary 3x3 kernel: sharpen, blur, edge detect.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Kernel Row 1 | `row0` | `[0.0, 0.0, 0.0]` |  |
+| Kernel Row 2 | `row1` | `[0.0, 1.0, 0.0]` |  |
+| Kernel Row 3 | `row2` | `[0.0, 0.0, 0.0]` |  |
+| Spread (px) | `spread` | `1` | 0 … 32 |
+| Normalize | `normalize` | `true` |  |
+| Scale | `scale` | `1` | -4 … 4 |
+| Offset | `offset` | `0` | -1 … 1 |
+
+### Corner Pin — `cornerpinTOP`
+
+Drag the image's four corners anywhere — a perspective warp.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Bottom Left | `bottomleft` | `[0.0, 0.0]` |  |
+| Bottom Right | `bottomright` | `[1.0, 0.0]` |  |
+| Top Left | `topleft` | `[0.0, 1.0]` |  |
+| Top Right | `topright` | `[1.0, 1.0]` |  |
+| Extend | `extend` | `zero` | `zero` · `hold` · `repeat` · `mirror` |
+
+### Crop — `cropTOP`
+
+Keep a rectangle of the source, at an explicit output size.
+
+The region you keep is resampled to `Resolution W`/`H`, so this is a crop *and* a resize in one node. For a crop that keeps the source's pixel scale, set the resolution to the region's size in pixels — a half-width crop of a 1920 wide source wants 960.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Left | `left` | `0` | 0 … 1 |
+| Right | `right` | `1` | 0 … 1 |
+| Bottom | `bottom` | `0` | 0 … 1 |
+| Top | `top` | `1` | 0 … 1 |
+| Resolution W | `resw` | `1280` | 1 … 4096 |
+| Resolution H | `resh` | `720` | 1 … 4096 |
+
+### Cross — `crossTOP`
+
+Each input survives where the other is not.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
+
+### Difference — `differenceTOP`
+
+The absolute difference between the inputs.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
 
 ### Displace — `displaceTOP`
 
@@ -1495,6 +1627,19 @@ Sobel edge detection.
 | Keep Colour | `keepcolor` | `0` | 0 … 1 |
 | Edge Colour | `color` | `[1.0, 1.0, 1.0, 1.0]` |  |
 
+### Emboss — `embossTOP`
+
+A directional difference, sat at mid grey.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Direction | `direction` | `45` | -180 … 180 |
+| Width (px) | `width` | `1` | 0 … 32 |
+| Strength | `strength` | `4` | 0 … 32 |
+| Mix With Source | `mix` | `0` | 0 … 1 |
+
 ### Feedback — `feedbackTOP`
 
 Last frame's output of the Target TOP.
@@ -1510,6 +1655,19 @@ Point `Target TOP` at the node whose output you want to feed back, wire this nod
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Target TOP | `target` | *(empty)* |  |
+
+### Fit — `fitTOP`
+
+Resample into a new resolution: fill, fit, stretch or native.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Fit | `mode` | `fit` | `fill` · `fit` · `stretch` · `native` |
+| Background | `background` | `[0.0, 0.0, 0.0, 0.0]` |  |
+| Resolution W | `resw` | `1280` | 1 … 4096 |
+| Resolution H | `resh` | `720` | 1 … 4096 |
 
 ### Flip — `flipTOP`
 
@@ -1544,6 +1702,21 @@ The field is the curl of a noise field rather than the noise itself, and that is
 | Field Speed | `speed` | `0.3` | 0 … 8 |
 | Steer From Input 2 | `usefield` | `false` |  |
 | Field Mix | `fieldmix` | `1` | 0 … 1 |
+
+### Function — `functionTOP`
+
+One unary function per pixel, with a scale and offset either side.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Function | `function` | `none` | `none` · `log` · `exp` · `sqrt` · `square` · `reciprocal` · `invert` · `sin` · `cos` · `atan` · `abs` · `sign` |
+| Pre Multiply | `premultiply` | `1` | -4 … 4 |
+| Pre Add | `preadd` | `0` | -4 … 4 |
+| Post Multiply | `postmultiply` | `1` | -4 … 4 |
+| Post Add | `postadd` | `0` | -4 … 4 |
+| Include Alpha | `alpha` | `false` |  |
 
 ### GLSL — `glslTOP`
 
@@ -1583,11 +1756,45 @@ Hue, saturation and value, optionally over one band of the wheel.
 | Range Centre | `rangecentre` | `0` | 0 … 1 |
 | Range Width | `rangewidth` | `1` | 0 … 1 |
 
+### HSV to RGB — `hsvtorgbTOP`
+
+The inverse of the RGB to HSV TOP.
+
+**Inputs:** in
+
 ### In — `inTOP`
 
 A texture input on this component's node.
 
 *No inputs — this is a generator.*
+
+### Inside — `insideTOP`
+
+Input 2, kept only where input 1 is opaque.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
+
+### Lens Distort — `lensdistortTOP`
+
+Bulge or pinch the frame. Negative Distort bulges (fisheye), positive corrects a bulge.
+
+The sign of `Distort` is the whole operator and is easy to get backwards. NEGATIVE bulges the middle out — the fisheye, the GoPro look, barrel distortion. POSITIVE pinches it back in, which is the *correction* for footage that already bulges. So undoing a GoPro is a positive number, not a negative one.
+
+`Distort Squared` is the higher-order term and only shows up at the very edge of a wide lens; leave it at zero until the corners are still wrong with `Distort` right. Correcting a bulge leaves black corners where the image used to be — `Scale` above 1 crops them off.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Distort (- bulges, + corrects) | `k1` | `0` | -1 … 1 |
+| Distort Squared | `k2` | `0` | -1 … 1 |
+| Scale | `scale` | `1` | 0.1 … 4 |
+| Center | `center` | `[0.5, 0.5]` |  |
+| Extend | `extend` | `zero` | `zero` · `hold` · `repeat` · `mirror` |
 
 ### Level — `levelTOP`
 
@@ -1605,6 +1812,20 @@ Brightness, contrast, gamma, black/white levels.
 | White Level | `whitelevel` | `1` | 0 … 1 |
 | Invert | `invert` | `0` | 0 … 1 |
 
+### Limit — `limitTOP`
+
+Clamp to a range, quantise to a step, or both.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Mode | `mode` | `clamp` | `clamp` · `quantize` · `both` |
+| Minimum | `min` | `0` | -2 … 2 |
+| Maximum | `max` | `1` | -2 … 2 |
+| Quantize Step | `step` | `0.25` | 0.001 … 1 |
+| Include Alpha | `alpha` | `false` |  |
+
 ### Lookup — `lookupTOP`
 
 Input 1's brightness reads a colour out of input 2.
@@ -1614,6 +1835,33 @@ Input 1's brightness reads a colour out of input 2.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Index By | `source` | `luminance` | `luminance` · `red` · `green` · `blue` · `alpha` |
+
+### Luma Blur — `lumablurTOP`
+
+Blur radius driven by input 2's brightness.
+
+**Inputs:** source, blur
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| White Radius (px) | `white` | `16` | 0 … 128 |
+| Black Radius (px) | `black` | `0` | 0 … 128 |
+| Radius From | `source` | `luminance` | `luminance` · `alpha` · `red` |
+
+### Luma Level — `lumalevelTOP`
+
+Brightness, contrast and gamma on luminance alone, keeping hue.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Brightness | `brightness` | `1` | 0 … 4 |
+| Contrast | `contrast` | `1` | 0 … 4 |
+| Gamma | `gamma` | `1` | 0.1 … 4 |
+| Opacity | `opacity` | `1` | 0 … 1 |
+| Black Level | `blacklevel` | `0` | 0 … 1 |
+| White Level | `whitelevel` | `1` | 0 … 1 |
 
 ### Math — `mathTOP`
 
@@ -1628,6 +1876,18 @@ Arithmetic on two inputs, per channel.
 | Input 2 Gain | `gain2` | `[1.0, 1.0, 1.0, 1.0]` |  |
 | Offset | `offset` | `[0.0, 0.0, 0.0, 0.0]` |  |
 
+### Matte — `matteTOP`
+
+Colour from input 1, alpha from input 2.
+
+**Inputs:** source, matte
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Matte From | `source` | `alpha` | `alpha` · `luminance` · `red` |
+| Invert | `invert` | `false` |  |
+| Premultiply | `premultiply` | `false` |  |
+
 ### Mirror — `mirrorTOP`
 
 Fold the image onto itself, including a radial kaleidoscope.
@@ -1640,6 +1900,17 @@ Fold the image onto itself, including a radial kaleidoscope.
 | Segments | `segments` | `6` | 2 … 32 |
 | Angle | `angle` | `0` | -180 … 180 |
 | Centre | `centre` | `[0.5, 0.5]` |  |
+
+### Monochrome — `monochromeTOP`
+
+Colour to grey, by a choice of weighting.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Mode | `mode` | `luminance` | `luminance` · `average` · `maximum` · `minimum` · `red` · `green` · `blue` · `alpha` |
+| Opacity | `opacity` | `1` | 0 … 1 |
 
 ### Movie File In — `moviefileinTOP`
 
@@ -1681,6 +1952,16 @@ Records its input to a movie file. Passes the picture through.
 | Codec | `codec` | `h264` | `h264` · `h265` · `prores` |
 | Quality | `quality` | `75` | 0 … 100 |
 
+### Multiply — `multiplyTOP`
+
+The two inputs multiplied — darkens.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
+
 ### Noise — `noiseTOP`
 
 Fractal value noise. Animate Translate Z to make it move.
@@ -1700,6 +1981,18 @@ Fractal value noise. Animate Translate Z to make it move.
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
+### Normal Map — `normalmapTOP`
+
+A height field becomes a tangent-space normal map.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Height From | `source` | `luminance` | `luminance` · `alpha` · `red` |
+| Strength | `strength` | `4` | 0 … 64 |
+| Flip Green | `flipgreen` | `false` |  |
+
 ### Null — `nullTOP`
 
 Pass-through. A stable name to reference and to view.
@@ -1711,6 +2004,26 @@ Pass-through. A stable name to reference and to view.
 This component's texture output.
 
 **Inputs:** in
+
+### Outside — `outsideTOP`
+
+Input 2, kept only where input 1 is not.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
+
+### Over — `overTOP`
+
+Input 2 over input 1, by its alpha.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
 
 ### Ramp — `rampTOP`
 
@@ -1746,6 +2059,18 @@ A rectangle, with rounded corners and an optional border.
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
+### Remap — `remapTOP`
+
+Input 2's red and green are the coordinates to read input 1 at.
+
+**Inputs:** source, map
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Amount | `amount` | `1` | 0 … 1 |
+| Extend | `extend` | `zero` | `zero` · `hold` · `repeat` · `mirror` |
+| Flip V | `flipv` | `false` |  |
+
 ### Render — `renderTOP`
 
 Draws Geometry components through a Camera.
@@ -1773,6 +2098,19 @@ It is metric distance between Depth Near and Depth Far, not the depth buffer's o
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
+### Reorder — `reorderTOP`
+
+Build each output channel from a channel of either input.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Red | `red` | `input1 r` | `input1 r` · `input1 g` · `input1 b` · `input1 a` · `input2 r` · `input2 g` · `input2 b` · `input2 a` · `input1 luma` · `input2 luma` · `one` · `zero` |
+| Green | `green` | `input1 g` | `input1 r` · `input1 g` · `input1 b` · `input1 a` · `input2 r` · `input2 g` · `input2 b` · `input2 a` · `input1 luma` · `input2 luma` · `one` · `zero` |
+| Blue | `blue` | `input1 b` | `input1 r` · `input1 g` · `input1 b` · `input1 a` · `input2 r` · `input2 g` · `input2 b` · `input2 a` · `input1 luma` · `input2 luma` · `one` · `zero` |
+| Alpha | `alpha` | `input1 a` | `input1 r` · `input1 g` · `input1 b` · `input1 a` · `input2 r` · `input2 g` · `input2 b` · `input2 a` · `input1 luma` · `input2 luma` · `one` · `zero` |
+
 ### Resolution — `resolutionTOP`
 
 Resamples its input to an explicit resolution.
@@ -1785,6 +2123,35 @@ Resamples its input to an explicit resolution.
 | Resolution W | `resw` | `1280` | 1 … 4096 |
 | Resolution H | `resh` | `720` | 1 … 4096 |
 
+### RGB Key — `rgbkeyTOP`
+
+Key out one colour by distance in RGB.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Key Color | `color` | `[0.0, 1.0, 0.0, 1.0]` |  |
+| Tolerance | `tolerance` | `0.2` | 0 … 1.732 |
+| Softness | `softness` | `0.1` | 0 … 1 |
+| Output | `output` | `keyed` | `keyed` · `matte` · `inverted matte` |
+
+### RGB to HSV — `rgbtohsvTOP`
+
+Hue, saturation and value land in the red, green and blue channels.
+
+**Inputs:** in
+
+### Screen — `screenTOP`
+
+Multiply in the negative — lightens.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
+
 ### Select — `selectTOP`
 
 This frame's output of another TOP, by path.
@@ -1796,6 +2163,31 @@ Reads another TOP's output from the **current** frame, so the source cooks first
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | TOP | `top` | *(empty)* |  |
+
+### Slope — `slopeTOP`
+
+The image's own gradient, as a vector, a magnitude or an angle.
+
+The `xy` output is red = d/dx, green = d/dy, centred on 0.5 — which is exactly the layout a Displace TOP wants in its second input. So `noise1 -> slope1 -> displace1` warps a picture along a noise field with no shader anywhere in it.
+
+`magnitude` is an edge detector that does not care which way the edge runs, and `direction` is the angle as a hue, which is mostly useful to look at while you work out why a warp is going the wrong way.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Output | `mode` | `xy` | `xy` · `magnitude` · `direction` |
+| Strength | `strength` | `1` | 0 … 32 |
+
+### Subtract — `subtractTOP`
+
+Input 2 taken away from input 1.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
 
 ### Switch — `switchTOP`
 
@@ -1843,6 +2235,20 @@ Split the image in two at a level, with a soft edge.
 | Below Colour | `below` | `[0.0, 0.0, 0.0, 1.0]` |  |
 | Above Colour | `above` | `[1.0, 1.0, 1.0, 1.0]` |  |
 
+### Tile — `tileTOP`
+
+Repeat the image across the frame, optionally mirrored.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Repeat | `repeat` | `[2.0, 2.0]` |  |
+| Offset | `offset` | `[0.0, 0.0]` |  |
+| Mirror | `mirror` | `false` |  |
+| Row Shift | `rowshift` | `0` | 0 … 1 |
+| Column Shift | `columnshift` | `0` | 0 … 1 |
+
 ### Toon — `toonTOP`
 
 Cel shading: flatten the luminance into bands and ink the edges.
@@ -1873,6 +2279,16 @@ Translate, rotate and scale, with an extend mode.
 | Rotate | `rotate` | `0` | -180 … 180 |
 | Scale | `scale` | `[1.0, 1.0]` |  |
 | Extend | `extend` | `zero` | `zero` · `hold` · `repeat` · `mirror` |
+
+### Under — `underTOP`
+
+Input 1 over input 2 — Over, the other way up.
+
+**Inputs:** in1, in2
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Opacity | `opacity` | `1` | 0 … 1 |
 
 ### Video Device In — `videodeviceinTOP`
 

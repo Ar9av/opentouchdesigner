@@ -118,3 +118,22 @@ the look is wanted.
       CHOP, but nothing integrates position over time. Attractors, flocking
       and the rest need state that survives a frame, which is the same
       problem as ISF persistent buffers.
+
+## TouchDesigner TOPs still missing
+
+Measured against TouchDesigner 2023's TOP create dialog. 32 of them landed as
+shaders; what is left is not shader work, which is why it is left.
+
+- [ ] **Needs frame or scene state, not a fragment shader** — Analyze (reduce
+      to 1x1), Time Machine (a ring of past frames), Texture 3D, Cube Map,
+      PreFilter Map, Depth, SSAO, Render Pass, Render Select, Projection.
+- [ ] **Needs more than two texture inputs** — Layout, Pack, GLSL Multi. The
+      bind group layout is fixed at two, deliberately (`shaders/common.wgsl`),
+      so this is the same change for all three.
+- [ ] **Needs an outside protocol or device** — NDI, Syphon/Spout, Shared Mem,
+      Touch In/Out, Video Stream In/Out, Video Device Out, Screen Grab, Web
+      Render, Photoshop In, Point File In/Select, OpenColorIO, Substance.
+- [ ] **Vendor SDKs** — Kinect, RealSense, ZED, Ouster, Nvidia Flex/Flow/
+      Denoise, Notch, OpenVR, Oculus, RenderStream, Ncam, Leap Motion,
+      Scalable Display, Stype, Vioso. Greyed out in a stock TouchDesigner
+      install too; each is a proprietary runtime, not an operator.

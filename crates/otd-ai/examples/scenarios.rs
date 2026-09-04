@@ -61,7 +61,11 @@ fn camera_patch(registry: &OpRegistry) -> (Graph, Option<NodeId>) {
     let mut graph = Graph::new();
     let root = graph.root();
     let cam = graph
-        .create(root, registry.get("videodeviceinTOP").unwrap(), Some("camera1"))
+        .create(
+            root,
+            registry.get("videodeviceinTOP").unwrap(),
+            Some("camera1"),
+        )
         .unwrap();
     let out = graph
         .create(root, registry.get("nullTOP").unwrap(), Some("out1"))
@@ -214,6 +218,58 @@ const SCENARIOS: &[Scenario] = &[
         wants_image: false,
     },
     Scenario {
+        name: "key",
+        asking: "keying — chromakeyTOP or rgbkeyTOP, then a matte/over rather \
+                 than a hand-written shader",
+        prompt: "the background behind this is a flat blue, pull it out and put \
+                 what is left over a noise field",
+        setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
+        name: "pin",
+        asking: "cornerpinTOP — the projection-mapping ask, which a transformTOP \
+                 cannot do",
+        prompt: "i am projecting this onto a wall at an angle and it comes out \
+                 as a wonky trapezoid, let me drag the four corners to line it up",
+        setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
+        name: "dof",
+        asking: "lumablurTOP driven by a radial ramp — a per-pixel blur radius, \
+                 not one blurTOP over the whole frame",
+        prompt: "fake a depth of field on this: sharp in the middle of frame, \
+                 soft towards the edges",
+        setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
+        name: "grade",
+        asking: "monochromeTOP and limitTOP — two named operators for what \
+                 otherwise becomes one levelTOP and a guess",
+        prompt: "black and white, then posterise it down to about five levels",
+        setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
+        name: "wallpaper",
+        asking: "tileTOP with mirror on, and convolveTOP for the sharpen",
+        prompt: "tile this three by three, mirrored so the seams do not show, \
+                 and sharpen it a bit",
+        setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
+        name: "lens",
+        asking: "lensdistortTOP — the correction, so a POSITIVE k1, and it \
+                 should say so rather than reaching for a GLSL TOP",
+        prompt: "this is gopro footage and everything bulges, straighten the \
+                 fisheye out",
+        setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
         name: "image",
         // Empty on purpose: with a picture attached the reverse-engineering
         // brief is the whole request, and an empty box is a complete ask.
@@ -261,7 +317,11 @@ fn main() {
         })
     });
 
-    println!("assistant: {} ({})", provider.label(), provider.default_model());
+    println!(
+        "assistant: {} ({})",
+        provider.label(),
+        provider.default_model()
+    );
     let key = keys
         .get(provider)
         .cloned()
@@ -364,6 +424,17 @@ fn main() {
                         .collect();
                     families.sort_unstable();
                     families.dedup();
+                    // The families say a patch can be 3d or react. WHICH
+                    // operator it reached for is the finer question, and the
+                    // only way to see whether a named operator is being found
+                    // or hand-rolled out of a GLSL TOP.
+                    let mut ops: Vec<&str> = plan
+                        .nodes
+                        .iter()
+                        .filter_map(|n| registry.get(&n.op).map(|d| d.type_name))
+                        .collect();
+                    ops.sort_unstable();
+                    ops.dedup();
 
                     println!(
                         "  {:>5.1}s  {} nodes [{}], {} wires, {} expressions, \
@@ -386,6 +457,18 @@ fn main() {
                         },
                         format!("{note}{tag}"),
                     );
+                    println!("            ops: {}", ops.join(" "));
+                    // The numbers it chose, not just the operator it chose.
+                    // Reaching for the right operator and setting it the wrong
+                    // way round is a pass by every other measure here.
+                    for n in &plan.nodes {
+                        if n.params.is_empty() {
+                            continue;
+                        }
+                        let set: Vec<String> =
+                            n.params.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+                        println!("            {} ({}) {}", n.name, n.op, set.join(" "));
+                    }
                     if !before.is_empty() && reused.is_empty() {
                         println!("            ^ built beside the patch, not into it");
                     }
@@ -400,7 +483,9 @@ fn main() {
                             .find(|c| c.starts_with(name.trim_end_matches(char::is_numeric)))
                             .cloned()
                             .unwrap_or_else(|| "?".into());
-                        println!("            ^ asked to change {name}, got a new {landed} instead");
+                        println!(
+                            "            ^ asked to change {name}, got a new {landed} instead"
+                        );
                     }
                     if let Ok(json) = patch::extract_json(&reply.text) {
                         for (node, error) in patch::shader_problems(&json, check_shader) {
@@ -426,16 +511,11 @@ fn main() {
                             .iter()
                             .filter(|(_, p)| p.is_path_ref())
                             .filter(|(_, p)| !p.value.as_str().trim().is_empty())
-                            .filter(|(_, p)| {
-                                graph.find_from(id, p.value.as_str().trim()).is_none()
-                            })
+                            .filter(|(_, p)| graph.find_from(id, p.value.as_str().trim()).is_none())
                             .map(|(k, p)| format!("{k}={}", p.value.as_str()))
                             .collect();
                         if !dangling.is_empty() {
-                            println!(
-                                "            DANGLING REF {name}: {}",
-                                dangling.join(" ")
-                            );
+                            println!("            DANGLING REF {name}: {}", dangling.join(" "));
                         }
                     }
                     for warning in &applied.warnings {

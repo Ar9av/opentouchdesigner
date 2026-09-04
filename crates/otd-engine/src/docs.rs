@@ -34,6 +34,35 @@ const NOTES: &[(&str, &str)] = &[
          decay it. Without the decay the loop saturates within a second.",
     ),
     (
+        "lensdistortTOP",
+        "The sign of `Distort` is the whole operator and is easy to get \
+         backwards. NEGATIVE bulges the middle out — the fisheye, the GoPro \
+         look, barrel distortion. POSITIVE pinches it back in, which is the \
+         *correction* for footage that already bulges. So undoing a GoPro is a \
+         positive number, not a negative one.\n\n\
+         `Distort Squared` is the higher-order term and only shows up at the \
+         very edge of a wide lens; leave it at zero until the corners are \
+         still wrong with `Distort` right. Correcting a bulge leaves black \
+         corners where the image used to be — `Scale` above 1 crops them off.",
+    ),
+    (
+        "slopeTOP",
+        "The `xy` output is red = d/dx, green = d/dy, centred on 0.5 — which \
+         is exactly the layout a Displace TOP wants in its second input. So \
+         `noise1 -> slope1 -> displace1` warps a picture along a noise field \
+         with no shader anywhere in it.\n\n\
+         `magnitude` is an edge detector that does not care which way the edge \
+         runs, and `direction` is the angle as a hue, which is mostly useful \
+         to look at while you work out why a warp is going the wrong way.",
+    ),
+    (
+        "cropTOP",
+        "The region you keep is resampled to `Resolution W`/`H`, so this is a \
+         crop *and* a resize in one node. For a crop that keeps the source's \
+         pixel scale, set the resolution to the region's size in pixels — a \
+         half-width crop of a 1920 wide source wants 960.",
+    ),
+    (
         "selectTOP",
         "Reads another TOP's output from the **current** frame, so the source \
          cooks first. Use it to fan a texture out to several branches without \
