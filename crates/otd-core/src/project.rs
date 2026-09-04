@@ -203,6 +203,11 @@ impl Project {
                             saved.value = slot.value.clone();
                         }
                         saved.label = slot.label.clone();
+                        // Whether a parameter holds script source is part of
+                        // the operator definition, not of the project.
+                        if slot.is_script() {
+                            saved = saved.into_script();
+                        }
                         saved.range = slot.range.or(saved.range);
                         saved.menu = slot.menu.clone().or(saved.menu);
                         saved.recompile();
