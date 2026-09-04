@@ -259,6 +259,8 @@ pub enum GraphError {
     UnknownOpType(String),
     #[error("no node at path `{0}`")]
     BadPath(String),
+    #[error("no parameter `{0}` on that operator")]
+    NoSuchParam(String),
 }
 
 #[derive(Debug, Clone)]
@@ -786,6 +788,34 @@ impl Graph {
             p.set_expression(src);
             n.revision += 1;
         }
+        if custom {
+            self.dirty_descendants(id);
+        }
+        Ok(())
+    }
+
+    /// Put a parameter into Export mode, reading `channel` off the CHOP at
+    /// `op_path`.
+    ///
+    /// The same edit the parameter panel makes when a channel is dragged onto
+    /// a row, reached without a pointer — which is what the assistant needs,
+    /// since Export is how anything in this program reacts to anything else
+    /// and a plan that cannot express it can only build patches that sit
+    /// still.
+    pub fn set_export(
+        &mut self,
+        id: NodeId,
+        key: &str,
+        op_path: &str,
+        channel: &str,
+    ) -> Result<(), GraphError> {
+        let n = self.nodes.get_mut(id).ok_or(GraphError::NoSuchNode)?;
+        let custom = n.params.get(key).map(|p| p.custom).unwrap_or(false);
+        let Some(p) = n.params.get_mut(key) else {
+            return Err(GraphError::NoSuchParam(key.to_string()));
+        };
+        p.set_export(op_path, channel);
+        n.revision += 1;
         if custom {
             self.dirty_descendants(id);
         }

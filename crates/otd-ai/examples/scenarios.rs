@@ -55,6 +55,21 @@ fn video_patch(registry: &OpRegistry) -> (Graph, Option<NodeId>) {
     (graph, selected)
 }
 
+/// A live camera and a small chain off it — the shape somebody has on screen
+/// when they ask for the picture to react to them.
+fn camera_patch(registry: &OpRegistry) -> (Graph, Option<NodeId>) {
+    let mut graph = Graph::new();
+    let root = graph.root();
+    let cam = graph
+        .create(root, registry.get("videodeviceinTOP").unwrap(), Some("camera1"))
+        .unwrap();
+    let out = graph
+        .create(root, registry.get("nullTOP").unwrap(), Some("out1"))
+        .unwrap();
+    graph.connect(cam, out, 0).unwrap();
+    (graph, Some(cam))
+}
+
 /// The `tunnel` demo — nine nodes with numbers somebody chose.
 fn tunnel_patch(registry: &OpRegistry) -> (Graph, Option<NodeId>) {
     let (graph, _out) = otd_engine::demo::by_name("tunnel", registry).expect("tunnel demo");
@@ -102,6 +117,14 @@ const SCENARIOS: &[Scenario] = &[
         asking: "effects ON a clip — the shader has to READ the input, not replace it",
         prompt: "can u make add crazy video effects on top of existing video",
         setup: video_patch,
+        wants_image: false,
+    },
+    Scenario {
+        name: "motion",
+        asking: "reacting to the person in front of the camera — needs a \
+                 difference, a Top To CHOP and an EXPORT, not just absTime",
+        prompt: "add cool effects as i move around in the video",
+        setup: camera_patch,
         wants_image: false,
     },
     Scenario {
@@ -298,6 +321,12 @@ fn main() {
                 .filter(|n| before.contains(n))
                 .collect();
             let expressions: usize = plan.nodes.iter().map(|n| n.expressions.len()).sum();
+            let exports: usize = plan
+                .nodes
+                .iter()
+                .map(|n| n.exports.len())
+                .chain(plan.sets.iter().map(|s| s.exports.len()))
+                .sum();
 
             match patch::apply(&mut graph, root, &registry, &plan) {
                 Ok((applied, _viewer)) => {
@@ -313,7 +342,7 @@ fn main() {
 
                     println!(
                         "  {:>5.1}s  {} nodes [{}], {} wires, {} expressions, \
-                         {} retuned, {} removed{}{}{}",
+                         {} retuned, {} removed, {} EXPORTS{}{}{}",
                         took,
                         applied.created.len(),
                         families.join(" "),
@@ -321,6 +350,7 @@ fn main() {
                         expressions,
                         applied.changed.len(),
                         applied.removed.len(),
+                        exports,
                         match reused.is_empty() {
                             true => String::new(),
                             false => format!(", reuses [{}]", dedup(&reused).join(" ")),

@@ -50,6 +50,7 @@ pub struct PlannedSet {
     /// [`apply`] does it once it has both.
     pub params: BTreeMap<String, serde_json::Value>,
     pub expressions: BTreeMap<String, String>,
+    pub exports: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +62,8 @@ pub struct PlannedNode {
     pub params: BTreeMap<String, Value>,
     /// Parameters to put into Expression mode, by key.
     pub expressions: BTreeMap<String, String>,
+    /// Parameters to put into Export mode, by key: `node:channel`.
+    pub exports: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -263,7 +266,8 @@ Reply with ONE JSON object and nothing else. No prose, no markdown fences.
       "expressions": {{"translate": "absTime * 0.06"}}}}
   ],
   "connections": [{{"from": "noise1", "to": "level1", "input": 0}}],
-  "set": [{{"node": "level1", "params": {{"brightness": 0.9}}}}],
+  "set": [{{"node": "level1", "params": {{"brightness": 0.9}},
+            "exports": {{"contrast": "lag1:r"}}}}],
   "delete": ["blur2", "oldramp1"],
   "viewer": "out1"
 }}
@@ -319,11 +323,54 @@ doing the same job — a `delete` list, sometimes with a `set` to compensate.
   right.
 - A node marked [SELECTED] is what "it", "this" and "that" refer to.
 
+MAKING A PATCH REACT TO SOMETHING
+`expressions` animates on a clock, and a clock is not a reaction — the patch
+does the same thing whether anybody is in front of it or not. Reacting is
+`exports`: a parameter reads a live channel off a CHOP, which is the same
+mechanism as dragging a channel onto a parameter in the editor.
+
+    "exports": {{"scale": "lag1:r"}}
+
+The value is `node:channel`. The node is looked up like any other name, so it
+can be one you created in this same plan. ONLY A CHOP HAS CHANNELS — exporting
+from a TOP is refused. Use `average` on a Top To CHOP and the channels are
+`r`, `g`, `b`, `a`.
+
+To react to a CAMERA or a MOVIE — someone moving in frame, the picture getting
+brighter — the chain is:
+
+  the picture -> toptochopCHOP (layout "average", so it is one sample, not
+  a million) -> analyzeCHOP (function "average") -> lagCHOP -> exports
+
+MOVEMENT specifically is not brightness, it is *change* in brightness, so the
+picture you measure has to be a difference rather than the camera itself:
+
+  camera1 ------------------------> compositeTOP (operation "difference")
+  camera1 -> feedbackTOP (target that compositeTOP) --^
+
+That composite is near-black when nothing moves and bright where something
+did. Measure THAT, not the camera. Then:
+- `lagCHOP` is what turns a twitchy number into something worth watching. Set
+  `lagup` small and `lagdown` large — fast to rise, slow to fall — or every
+  parameter you drive will jitter.
+- The channel out of `analyzeCHOP` on a difference image is SMALL, often
+  under 0.05. Put a `mathCHOP` after it and scale it up, or nothing visibly
+  moves and the patch looks broken.
+- Export to two or three parameters, not ten. `transformTOP.scale`,
+  `levelTOP.brightness` and a `hsvadjustTOP` hue are the ones that read.
+
+The same chain with an audiodeviceinCHOP in place of the picture is how a
+patch reacts to sound; there is no Top To CHOP in that one because audio is
+already channels.
+
 WHAT MAKES A GOOD-LOOKING PATCH
 - Motion comes from a feedback loop, not from one operator. The shape is:
   feedbackTOP -> levelTOP (brightness ~0.96, the decay) -> transformTOP
   (scale ~1.03 or rotate ~1, the movement) -> compositeTOP with the source.
   Point the feedbackTOP's `target` parameter at the LAST node in the chain.
+  A feedbackTOP has NO INPUTS — it reads through `target`, so never list a
+  connection into one. Wiring `x -> feedback1` is rejected as an input index
+  out of range and the loop silently does not close.
 - Feed a loop CONTRAST, not a grey wash: a levelTOP with `blacklevel` around
   0.4 leaves only bright wisps, and that is the difference between a tunnel
   and fog.
@@ -551,12 +598,15 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
             }
         }
 
+        let exports = string_map(entry.get("exports"));
+
         plan.nodes.push(PlannedNode {
             name,
             op,
             pos,
             params,
             expressions,
+            exports,
         });
     }
 
@@ -584,19 +634,11 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
                 .and_then(|p| p.as_object())
                 .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default();
-            let expressions = entry
-                .get("expressions")
-                .and_then(|p| p.as_object())
-                .map(|m| {
-                    m.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                        .collect()
-                })
-                .unwrap_or_default();
             plan.sets.push(PlannedSet {
                 node: node.to_string(),
                 params,
-                expressions,
+                expressions: string_map(entry.get("expressions")),
+                exports: string_map(entry.get("exports")),
             });
         }
     }
@@ -617,6 +659,31 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
         return Err("the plan had nothing in it — no nodes, no changes, no deletions".into());
     }
     Ok(plan)
+}
+
+/// A JSON object of strings, or nothing. Used for `expressions` and
+/// `exports`, which are both `{parameter: text}`.
+fn string_map(value: Option<&serde_json::Value>) -> BTreeMap<String, String> {
+    value
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Split an export target — `analyze1:r`, or `/path/to/lag1:chan1`.
+///
+/// The node part is resolved against the network like any other name, so a
+/// plan can export from a CHOP it created this turn or one that was already
+/// there. Everything after the LAST colon is the channel, so a path
+/// containing one does not confuse it.
+fn split_export(target: &str) -> Option<(&str, &str)> {
+    let (node, channel) = target.trim().rsplit_once(':')?;
+    let (node, channel) = (node.trim(), channel.trim());
+    (!node.is_empty() && !channel.is_empty()).then_some((node, channel))
 }
 
 /// Coerce JSON into the parameter's declared type.
@@ -747,6 +814,62 @@ pub fn apply(
                     let _ = graph.set_param(*id, "target", Value::Str(path));
                 }
             }
+        }
+    }
+
+    // ---- point parameters at CHOP channels
+    //
+    // After the wiring, and after every node exists, because an export names
+    // an operator by path and the whole CHOP chain it reads from is usually
+    // being created by this same plan.
+    let mut export_targets: Vec<(NodeId, String, String)> = Vec::new();
+    for node in &plan.nodes {
+        if let Some(id) = made.get(&node.name) {
+            for (key, target) in &node.exports {
+                export_targets.push((*id, key.clone(), target.clone()));
+            }
+        }
+    }
+    for change in &plan.sets {
+        if let Some(id) = resolve(graph, &made, &change.node) {
+            for (key, target) in &change.exports {
+                export_targets.push((id, key.clone(), target.clone()));
+            }
+        }
+    }
+    for (id, key, target) in export_targets {
+        let Some((source, channel)) = split_export(&target) else {
+            applied.warnings.push(format!(
+                "{}.{key}: `{target}` is not `node:channel`",
+                graph.node(id).name
+            ));
+            continue;
+        };
+        let Some(source_id) = resolve(graph, &made, source) else {
+            applied.warnings.push(format!(
+                "{}.{key}: no operator named {source} to export from",
+                graph.node(id).name
+            ));
+            continue;
+        };
+        // Export reads channels, and only a CHOP has any. Pointing a
+        // parameter at a TOP silently reads nothing and leaves a node that
+        // does not move with no clue why — the same class of failure as the
+        // black shader, so it is reported rather than accepted.
+        if graph.node(source_id).family != otd_core::Family::Chop {
+            applied.warnings.push(format!(
+                "{}.{key}: {source} is a {} — only a CHOP has channels to export",
+                graph.node(id).name,
+                graph.node(source_id).family.suffix()
+            ));
+            continue;
+        }
+        let path = graph.path(source_id);
+        match graph.set_export(id, &key, &path, channel) {
+            Ok(()) => applied.changed.push(format!("{}.{key}", graph.node(id).name)),
+            Err(e) => applied
+                .warnings
+                .push(format!("{}.{key}: {e}", graph.node(id).name)),
         }
     }
 
@@ -931,6 +1054,24 @@ mod tests {
             summary: "",
             time_dependent: false,
             params: pass_params,
+            connector: Connector::None,
+        });
+        // A CHOP, so exports have something legitimate to read from — and so
+        // the "that is a TOP" refusal has something to contrast with.
+        fn beat_params() -> IndexMap<String, Param> {
+            let mut m = IndexMap::new();
+            m.insert("rate".into(), Param::float(1.0).with_label("Rate"));
+            m
+        }
+        r.register(OpDef {
+            type_name: "beat",
+            input_families: &[],
+            label: "Beat",
+            family: Family::Chop,
+            inputs: &[],
+            summary: "",
+            time_dependent: true,
+            params: beat_params,
             connector: Connector::None,
         });
         r
@@ -1166,6 +1307,81 @@ mod tests {
         assert!(parse_plan(&value, &reg).is_ok());
         let empty = serde_json::json!({ "notes": "nothing to do" });
         assert!(parse_plan(&empty, &reg).is_err());
+    }
+
+    #[test]
+    fn an_export_points_a_parameter_at_a_chop_channel() {
+        // Export is the only way anything in this program reacts to anything
+        // else. Without it in the plan format the assistant could animate on
+        // a clock and nothing more: asked to react to a camera it built a
+        // patch that looked busy and ignored the room.
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "lag1", "op": "beat" },
+                { "name": "zoom1", "op": "pass", "exports": { "gain": "lag1:chan1" } }
+            ]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        assert!(applied.warnings.is_empty(), "{:?}", applied.warnings);
+        let zoom = graph.find("/zoom1").unwrap();
+        let param = graph.node(zoom).param("gain").unwrap();
+        assert_eq!(param.mode, otd_core::param::ParamMode::Export);
+        assert_eq!(param.source, "/lag1:chan1");
+    }
+
+    #[test]
+    fn exporting_from_a_top_is_refused_rather_than_silently_reading_nothing() {
+        // A parameter pointed at something with no channels does not error at
+        // cook time — it just never changes, which looks exactly like a patch
+        // that does not react and gives nobody anywhere to look.
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let value = serde_json::json!({
+            "nodes": [
+                { "name": "src1", "op": "pass" },
+                { "name": "zoom1", "op": "pass", "exports": { "gain": "src1:r" } }
+            ]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("only a CHOP")),
+            "{:?}",
+            applied.warnings
+        );
+        let zoom = graph.find("/zoom1").unwrap();
+        assert_ne!(
+            graph.node(zoom).param("gain").unwrap().mode,
+            otd_core::param::ParamMode::Export
+        );
+    }
+
+    #[test]
+    fn a_malformed_export_target_is_reported() {
+        let reg = test_registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+        let value = serde_json::json!({
+            "nodes": [{ "name": "a", "op": "pass", "exports": { "gain": "nocolon" } }]
+        });
+        let plan = parse_plan(&value, &reg).unwrap();
+        let (applied, _) = apply(&mut graph, root, &reg, &plan).unwrap();
+        assert!(
+            applied.warnings.iter().any(|w| w.contains("node:channel")),
+            "{:?}",
+            applied.warnings
+        );
+        // A path with its own colon still splits on the last one.
+        assert_eq!(split_export("/rack/lag1:chan1"), Some(("/rack/lag1", "chan1")));
+        assert_eq!(split_export("  lag1 : r "), Some(("lag1", "r")));
+        assert_eq!(split_export("lag1:"), None);
     }
 
     #[test]
@@ -1510,6 +1726,7 @@ mod shader_tests {
             pos: [0.0, 0.0],
             params: BTreeMap::new(),
             expressions: BTreeMap::new(),
+            exports: BTreeMap::new(),
         }
     }
 
