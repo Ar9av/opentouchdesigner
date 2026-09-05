@@ -413,7 +413,7 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
     let empty = app.graph.children(app.current).is_empty();
     let hint = match (app.assistant.image.is_some(), empty) {
         (true, _) => "Enter to build this image — or say what to change about it…",
-        (false, true) => "Describe a patch — or pick a ✦ Recipe to start from…",
+        (false, true) => "Describe a patch — or pick a Recipe to start from…",
         (false, false) => "Describe a patch, and it gets built here…",
     };
     let edit = ui.add(
@@ -1309,7 +1309,7 @@ pub fn apply_recipe(app: &mut OtdApp, recipe: &'static Recipe) {
 /// The recipe picker: click builds it, right-click puts its request in the
 /// box for people who want to change a word first.
 fn recipes_menu(app: &mut OtdApp, ui: &mut egui::Ui) {
-    ui.menu_button("✦ Recipes", |ui| {
+    ui.menu_button("Recipes", |ui| {
         for group in recipes::groups() {
             ui.menu_button(group, |ui| {
                 for recipe in recipes::all().iter().filter(|r| r.group == group) {

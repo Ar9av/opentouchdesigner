@@ -309,7 +309,7 @@ well, and the picture is black.
 ## Recipes
 
 Not everybody knows what to type, and a text box with nothing beside it is a
-blank page. **✦ Recipes** on the bar is seventeen ready-made patches in four
+blank page. **Recipes** on the bar is seventeen ready-made patches in four
 groups — Looks, Video, 3D, Audio — and a click builds one into the network
 you are looking at. No model, no key, no round trip: the plan is in the
 binary and goes through the same `apply` a reply does, so what lands is
