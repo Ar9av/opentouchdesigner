@@ -100,6 +100,12 @@ It is not a chatbot bolted on the side:
   has been renamed.
 - **Shaders are compiled before the node exists.** A shader that fails goes back
   to the model with the compiler's own error, once.
+- The **Recipes** menu and the chat share the same tested plans. Ask for trails,
+  motion painting, slit-scan or a hologram and the assistant sees a working
+  construction with real parameters rather than guessing from operator names.
+- Follow-up requests keep the last six applied creative decisions in memory.
+  “Make it warmer and let the echo linger” retunes the patch already on screen
+  instead of starting a second one beside it.
 - Anything invented is dropped and reported; anything the model built and forgot
   to wire in is reported too.
 - **Keys never enter a project file.** `.otd` is meant to be committed, and a key
@@ -109,6 +115,42 @@ It is not a chatbot bolted on the side:
 entirely in perform mode. → **[docs/AI.md](docs/AI.md)**
 
 <br clear="right">
+
+---
+
+## Use the camera as material
+
+Select a Video Device In TOP, open **Recipes → Camera**, and the effect is
+wired onto the live picture. The same requests work in chat, where you can keep
+refining them in plain language. A Movie File In TOP follows the same path, so
+camera looks can be built and tested against repeatable footage before a show.
+
+<table>
+<tr>
+<td width="25%" align="center">
+<img src="docs/img/camera-motionpaint.png" width="220" alt="Cyan camera motion painting trails on a dark background"><br>
+<b>motion painting</b><br><sub>changed pixels become persistent light</sub>
+</td>
+<td width="25%" align="center">
+<img src="docs/img/camera-thermal.png" width="220" alt="False-colour thermal camera effect in violet, pink and yellow"><br>
+<b>thermal</b><br><sub>luminance mapped through a vivid false-colour palette</sub>
+</td>
+<td width="25%" align="center">
+<img src="docs/img/camera-hologram.png" width="220" alt="Cyan hologram camera effect with horizontal scanlines"><br>
+<b>hologram</b><br><sub>source-preserving scanlines and ghost feedback</sub>
+</td>
+<td width="25%" align="center">
+<img src="docs/img/camera-slitscan.png" width="220" alt="Slit-scan camera effect showing vertical slices from successive moments"><br>
+<b>slit-scan</b><br><sub>a frame assembled from successive moments</sub>
+</td>
+</tr>
+</table>
+
+These recipes stay honest about the input. Motion painting detects changed
+pixels, so moving the camera or changing the light also paints. Thermal is a
+false-colour look; a normal webcam cannot measure temperature. Hologram does
+not claim person segmentation, and slit-scan stores image history rather than
+tracking a body. Every useful quantity remains a parameter you can turn.
 
 ---
 

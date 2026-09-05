@@ -79,6 +79,22 @@ const PROMPTS: &[(&str, &str)] = &[
         "find the edges of the video and make them glow neon over a dark background",
     ),
     (
+        "motionpaint",
+        "turn my camera movement into glowing cyan light-painting trails on black",
+    ),
+    (
+        "thermal",
+        "make my webcam look like a vivid thermal camera with violet shadows and golden highlights",
+    ),
+    (
+        "hologram",
+        "turn my camera into a cyan hologram with scanlines and ghostly echoes while keeping me visible",
+    ),
+    (
+        "slitscan",
+        "slit-scan my camera so a stripe of now scrolls across a frame full of the recent past",
+    ),
+    (
         "psychedelic",
         "make it properly psychedelic — colour cycling, feedback, the works",
     ),
