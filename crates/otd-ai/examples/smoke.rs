@@ -58,6 +58,7 @@ fn main() {
             graph: &graph,
             parent: root,
             selected: None,
+            viewer: None,
             registry: &registry,
             allow_delete: true,
             scope: &[],

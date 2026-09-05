@@ -1058,6 +1058,7 @@ fn send(app: &mut OtdApp) {
         graph: &app.graph,
         parent: app.current,
         selected: app.selected,
+        viewer: app.viewer,
         registry: &app.registry,
         allow_delete: app.assistant.allow_delete,
         scope: &scope,
@@ -1261,10 +1262,30 @@ pub fn apply_recipe(app: &mut OtdApp, recipe: &'static Recipe) {
     // and the message says how to swap it for a clip.
     let mut aside = String::new();
     if recipe.needs == Needs::Video {
+        // The selection, or — nothing selected — the one camera or clip on
+        // the canvas. A recipe that ignored the only footage there is and
+        // parked a noise generator beside it was how `source1` ended up
+        // dangling in real patches.
         let source = app
             .selected
             .filter(|id| app.graph.contains(*id))
             .filter(|id| app.graph.node(*id).family == Family::Top)
+            .or_else(|| {
+                let sources: Vec<NodeId> = app
+                    .graph
+                    .children(app.current)
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        let op = app.graph.node(*id).op_type.as_str();
+                        op == otd_gpu::ops::VIDEO_DEVICE_IN || op == otd_gpu::ops::MOVIE_IN
+                    })
+                    .collect();
+                match sources.as_slice() {
+                    [one] => Some(*one),
+                    _ => None,
+                }
+            })
             .map(|id| app.graph.node(id).name.clone());
         match source {
             Some(name) => recipes::with_source(&mut plan, &name),

@@ -45,6 +45,9 @@ pub struct Ask<'a> {
     /// What the user has clicked on, if anything. This is the referent of
     /// "it" in a request, and the node a new chain most likely hangs off.
     pub selected: Option<NodeId>,
+    /// What the user is looking at. With several outputs on the canvas this
+    /// is the one a change has to land on to be seen at all.
+    pub viewer: Option<NodeId>,
     pub registry: &'a OpRegistry,
     /// Whether the plan may remove operators. Off in the editor unless the
     /// user turns it on for the request — see [`patch::NO_DELETE_RULE`].
@@ -66,7 +69,14 @@ pub struct Ask<'a> {
 /// UI thread where the graph lives — so nothing that touches the network ever
 /// touches a frame.
 pub fn request_for(ask: &Ask) -> Request {
-    let network = patch::describe(ask.graph, ask.parent, ask.selected, ask.scope, ask.registry);
+    let network = patch::describe(
+        ask.graph,
+        ask.parent,
+        ask.selected,
+        ask.viewer,
+        ask.scope,
+        ask.registry,
+    );
     let prompt = ask.prompt.trim();
 
     let user = match &ask.image {

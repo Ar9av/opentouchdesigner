@@ -207,6 +207,7 @@ fn main() {
                     graph: &graph,
                     parent: root,
                     selected: Some(source),
+                    viewer: None,
                     registry: &reg,
                     allow_delete: true,
                     scope: &[],

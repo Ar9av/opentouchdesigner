@@ -143,7 +143,21 @@ is the same trick the operator reference already uses, pointed at a different
 reader.
 
 It also gets a description of the network you are in, so "add trails to this"
-means the thing on your canvas.
+means the thing on your canvas. Three things in that description are there
+because a wire does not show them, and each earned its place against a real
+patch:
+
+- **`[VIEWER]`** — the null you are looking at. With three outputs on the
+  canvas, "make it better" landed on a fourth null nobody was viewing.
+- **`[READ BY plasma1.uniform1 through export]`** — a CHOP an export reads
+  has no wire out of it, and "make it simpler" deleted the whole analysis
+  chain a shader was driven by, calling it clutter.
+- **`[IN THE FEEDBACK LOOP of fb1]`** — the target null and everything back
+  to the Feedback TOP. "Make it look better" put a hue shift and a ramp
+  multiply *inside* that path, where they run every lap: the hue spun, the
+  ramp starved the loop, and the picture went green. The brief now says
+  colour work goes after the target, and the marker says which nodes that
+  means.
 
 ## What stops it breaking your patch
 

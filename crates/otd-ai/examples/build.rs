@@ -2,6 +2,13 @@
 //!
 //!     cargo run -p otd-ai --example build -- openrouter "a slow blue tunnel" out.otd
 //!     cargo run -p otd-ai --example build -- claude-code "" out.otd --image ref.png
+//!     cargo run -p otd-ai --example build -- claude-code "make it slower" out.otd --on mine.otd
+//!
+//! `--on` builds on a project that already exists — the shape of every ask
+//! after the first — and `--select NAME` says which node is "it". The plan
+//! `--view NAME` says which null the user is looking at. The plan the
+//! model returned is written beside the output as `<out>.plan.json`,
+//! because when the result is wrong the plan is where to look.
 //!
 //! The point of it is the last step: the result is an ordinary `.otd` that
 //! `otd render` will draw. A patch that parses but does not render is not a
@@ -44,6 +51,22 @@ fn main() {
         args.drain(at..=at + 1);
     }
 
+    let mut on: Option<String> = None;
+    if let Some(at) = args.iter().position(|a| a == "--on") {
+        on = args.get(at + 1).cloned();
+        args.drain(at..=at + 1);
+    }
+    let mut view: Option<String> = None;
+    if let Some(at) = args.iter().position(|a| a == "--view") {
+        view = args.get(at + 1).cloned();
+        args.drain(at..=at + 1);
+    }
+    let mut select: Option<String> = None;
+    if let Some(at) = args.iter().position(|a| a == "--select") {
+        select = args.get(at + 1).cloned();
+        args.drain(at..=at + 1);
+    }
+
     if args.len() < 3 {
         eprintln!("usage: build <provider> <prompt> <out.otd> [model] [--image PATH]");
         std::process::exit(2);
@@ -59,8 +82,22 @@ fn main() {
 
     let keys = Keys::load();
     let registry = otd_engine::registry();
-    let graph = Graph::new();
+    let mut graph = match &on {
+        Some(path) => Project::open(path, &registry).unwrap_or_else(|e| {
+            eprintln!("--on {path}: {e}");
+            std::process::exit(2);
+        }),
+        None => Graph::new(),
+    };
     let root = graph.root();
+    let selected = select
+        .as_deref()
+        .and_then(|name| graph.find_from(root, name));
+    let viewer = view.as_deref().and_then(|name| graph.find_from(root, name));
+    if select.is_some() && selected.is_none() {
+        eprintln!("--select {}: no such node", select.unwrap());
+        std::process::exit(2);
+    }
 
     let ask = Ask {
         provider,
@@ -69,7 +106,8 @@ fn main() {
         image,
         graph: &graph,
         parent: root,
-        selected: None,
+        selected,
+        viewer,
         registry: &registry,
         allow_delete: true,
         scope: &[],
@@ -93,7 +131,10 @@ fn main() {
         }
     };
     if let Some(repair) = reply.repaired {
-        eprintln!("  (came back broken and was sent back to be fixed: {})", repair.label());
+        eprintln!(
+            "  (came back broken and was sent back to be fixed: {})",
+            repair.label()
+        );
     }
     let plan = match otd_ai::plan_from_reply(&reply.text, &registry) {
         Ok(plan) => plan,
@@ -106,17 +147,28 @@ fn main() {
         for (node, error) in otd_ai::patch::shader_problems(&json, check_shader) {
             eprintln!("  STILL BROKEN {node}: {error}");
         }
+        let side = format!("{}.plan.json", args[2]);
+        if let Ok(text) = serde_json::to_string_pretty(&json) {
+            let _ = std::fs::write(&side, text);
+        }
     }
     for loose in otd_ai::patch::dangling(&plan) {
         eprintln!("  loose (wired to nothing): {loose}");
     }
     eprintln!("{:.1}s — {}", started.elapsed().as_secs_f64(), plan.notes);
 
-    let mut graph = Graph::new();
-    let root = graph.root();
     let (applied, viewer) = otd_ai::patch::apply(&mut graph, root, &registry, &plan).unwrap();
     for warning in &applied.warnings {
         eprintln!("  skipped: {warning}");
+    }
+    for r in otd_ai::patch::unresolved_refs(&graph, root, &applied.created) {
+        eprintln!("  DANGLING REF {r}");
+    }
+    if !applied.changed.is_empty() {
+        eprintln!("  retuned: {}", applied.changed.join(", "));
+    }
+    if !applied.removed.is_empty() {
+        eprintln!("  removed: {}", applied.removed.join(", "));
     }
     if let Some(viewer) = viewer {
         eprintln!("  viewer: {}", graph.path(viewer));
