@@ -104,6 +104,12 @@ pub struct TopEngine {
     /// Nodes that asked to be recorded this frame, drained in `end_frame`
     /// once the encoder has been submitted and the pixels are real.
     pending_records: Vec<NodeId>,
+    /// Feedback nodes cooked this frame, with the target they resolved to.
+    ///
+    /// Their copy happens at the end of the frame rather than at their own
+    /// cook — see the Feedback branch in `cook_top` for why order cannot be
+    /// relied on.
+    pending_feedback: Vec<(NodeId, NodeId)>,
     /// Parsed font faces, shared by every Text TOP.
     fonts: crate::text::FontCache,
     /// What each Text TOP last rasterised, so retyping one caption does not
@@ -222,6 +228,7 @@ impl TopEngine {
             renderer: None,
             recorders: SecondaryMap::new(),
             pending_records: Vec::new(),
+            pending_feedback: Vec::new(),
             fonts: crate::text::FontCache::default(),
             text_keys: SecondaryMap::new(),
             passes_this_frame: 0,
@@ -398,6 +405,11 @@ impl TopEngine {
 
     /// Submit the frame's work, capture any recordings, and recycle scratch.
     pub fn end_frame(&mut self) {
+        // Before the submit, so the copies land in this frame's encoder and
+        // read what every other pass has already written into the target.
+        for (id, target) in std::mem::take(&mut self.pending_feedback) {
+            self.hold_for_next_frame(id, target);
+        }
         if let Some(encoder) = self.encoder.take() {
             self.ctx.queue.submit(Some(encoder.finish()));
         }
@@ -1278,6 +1290,42 @@ impl TopEngine {
         })
     }
 
+    /// Copy a Feedback TOP's target into it, to be read on the next frame.
+    ///
+    /// The same pass `blit_from` runs, minus the graph lookup: the target was
+    /// resolved at cook time, so this needs nothing but the two node ids.
+    fn hold_for_next_frame(&mut self, id: NodeId, target: NodeId) {
+        let Some(src) = self
+            .nodes
+            .get(target)
+            .and_then(|n| n.output.as_ref())
+            .cloned()
+        else {
+            return;
+        };
+        self.ensure_output(id, src.key.width, src.key.height);
+        let Some(out) = self.nodes[id].output.as_ref().map(|t| t.view.clone()) else {
+            return;
+        };
+        let uniforms = self.uniforms(
+            src.key.width,
+            src.key.height,
+            &CookContext::default(),
+            ops::NO_PARAMS,
+        );
+        let buf = self.write_uniform(id, 0, uniforms);
+        let dummy = self.dummy.clone();
+        let _ = self.run_pass(Pass {
+            label: "feedback hold",
+            pipeline: PipelineRef::Builtin(ops::NULL),
+            target: &out,
+            uniform: &buf,
+            in0: &src.view,
+            in1: &dummy,
+            nearest: false,
+        });
+    }
+
     fn blit_from(
         &mut self,
         graph: &Graph,
@@ -1440,11 +1488,42 @@ impl TopEngine {
             return self.blit_from(graph, id, source, ctx, &path);
         }
 
-        // ---- Feedback reads its target as it stands right now, which is last
-        // frame's content because the target has not re-cooked yet.
+        // ---- Feedback holds the target's picture from the END of the last
+        // frame, and is refreshed after everything else has cooked.
+        //
+        // It used to blit the target here, at its own cook, on the reasoning
+        // that the target "has not re-cooked yet". That is true only when the
+        // target is DOWNSTREAM — the ordinary loop, `fb -> decay -> out` with
+        // `target = out`. Point a Feedback TOP at something upstream of it and
+        // the target cooks first, the blit copies THIS frame, and the delay
+        // silently disappears.
+        //
+        // Which breaks the most useful camera technique there is: `source`
+        // differenced against `feedback(target = source)` is how you get
+        // movement, and it came out identically black — a correct-looking
+        // patch, eleven operators, no warning, no picture. So the delay is now
+        // a property of the operator rather than of the cook order: the copy
+        // is deferred to `end_frame`, where every node has already run.
         if node.op_type == ops::FEEDBACK {
-            let target = referenced_target(graph, id, "target");
-            return self.blit_from(graph, id, target, ctx, &path);
+            let target = referenced_target(graph, id, "target")
+                .and_then(|t| otd_core::cook::resolve_bypass(graph, t));
+            let Some(target) = target else {
+                // Nothing to read: a black frame, so downstream still samples
+                // something rather than failing.
+                self.ensure_output(id, FALLBACK_SIZE.0, FALLBACK_SIZE.1);
+                return Ok(());
+            };
+            // Match the target's size now so operators sized from this one are
+            // right on the first frame; the content arrives at end_frame.
+            let size = self
+                .nodes
+                .get(target)
+                .and_then(|n| n.output.as_ref())
+                .map(|t| (t.key.width, t.key.height))
+                .unwrap_or(FALLBACK_SIZE);
+            self.ensure_output(id, size.0, size.1);
+            self.pending_feedback.push((id, target));
+            return Ok(());
         }
         // ---- Select reads the same way, but its target has already cooked.
         if node.op_type == ops::SELECT {

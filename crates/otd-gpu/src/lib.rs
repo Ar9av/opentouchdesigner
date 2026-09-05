@@ -665,6 +665,10 @@ mod tests {
 
     #[test]
     fn feedback_reads_the_previous_frame() {
+        // Observed through a consumer, not by reading the Feedback TOP's own
+        // texture after the frame: the delay is a promise to whatever samples
+        // it *during* a cook, and the node's own texture is mid-hand-off by
+        // the time the frame has ended.
         let ctx = gpu_or_skip!();
         let mut engine = TopEngine::new(ctx.clone());
         let reg = ops::registry();
@@ -680,9 +684,13 @@ mod tests {
         let fb = graph
             .create(root, reg.get(ops::FEEDBACK).unwrap(), Some("fb"))
             .unwrap();
+        let seen = graph
+            .create(root, reg.get(ops::NULL).unwrap(), Some("seen"))
+            .unwrap();
         graph.set_param(src, "resw", Value::Int(32)).unwrap();
         graph.set_param(src, "resh", Value::Int(32)).unwrap();
         graph.connect(src, target, 0).unwrap();
+        graph.connect(fb, seen, 0).unwrap();
         graph
             .set_param(fb, "target", Value::Str("/target".into()))
             .unwrap();
@@ -695,29 +703,105 @@ mod tests {
             .set_param(src, "color", Value::Vec4([1.0, 1.0, 1.0, 1.0]))
             .unwrap();
         engine.begin_frame();
-        cook.pull(&graph, fb, &ctxt, &mut engine).unwrap();
+        cook.pull(&graph, seen, &ctxt, &mut engine).unwrap();
         cook.pull(&graph, target, &ctxt, &mut engine).unwrap();
         engine.end_frame();
 
-        // Frame 2: source goes black. Feedback must still show white.
+        // Frame 2: source goes black. Anything sampling the feedback this
+        // frame must still get last frame's white.
         ctxt.advance(1.0 / 60.0);
         graph
             .set_param(src, "color", Value::Vec4([0.0, 0.0, 0.0, 1.0]))
             .unwrap();
         engine.begin_frame();
-        cook.pull(&graph, fb, &ctxt, &mut engine).unwrap();
+        cook.pull(&graph, seen, &ctxt, &mut engine).unwrap();
         cook.pull(&graph, target, &ctxt, &mut engine).unwrap();
         engine.end_frame();
 
-        let fb_tex = engine.output(&graph, fb).unwrap().clone();
-        let (w, _, pixels) = read_pixels_rgba8(&ctx, &fb_tex).unwrap();
+        let seen_tex = engine.output(&graph, seen).unwrap().clone();
+        let (w, _, pixels) = read_pixels_rgba8(&ctx, &seen_tex).unwrap();
         assert!(
             px(&pixels, w, 4, 4)[0] > 250,
-            "feedback showed this frame's black instead of last frame's white"
+            "feedback handed on this frame's black instead of last frame's white"
         );
 
         let target_tex = engine.output(&graph, target).unwrap().clone();
         let (w, _, pixels) = read_pixels_rgba8(&ctx, &target_tex).unwrap();
         assert!(px(&pixels, w, 4, 4)[0] < 5, "target should be black now");
+    }
+
+    #[test]
+    fn feedback_lags_a_target_that_is_upstream_of_it() {
+        // The camera-motion patch: `source` differenced against
+        // `feedback(target = source)`. The target cooks FIRST here, and the
+        // delay used to come from the cook order rather than from the
+        // operator — so the feedback copied the very frame it was being
+        // subtracted from and the difference was identically black. Eleven
+        // operators, no warning, no picture.
+        let ctx = gpu_or_skip!();
+        let mut engine = TopEngine::new(ctx.clone());
+        let reg = ops::registry();
+        let mut graph = Graph::new();
+        let root = graph.root();
+
+        let src = graph
+            .create(root, reg.get("constantTOP").unwrap(), Some("src"))
+            .unwrap();
+        let fb = graph
+            .create(root, reg.get(ops::FEEDBACK).unwrap(), Some("fb"))
+            .unwrap();
+        let diff = graph
+            .create(root, reg.get("compositeTOP").unwrap(), Some("diff"))
+            .unwrap();
+        graph.set_param(src, "resw", Value::Int(32)).unwrap();
+        graph.set_param(src, "resh", Value::Int(32)).unwrap();
+        graph
+            .set_param(fb, "target", Value::Str("/src".into()))
+            .unwrap();
+        graph
+            .set_param(diff, "operation", Value::Str("difference".into()))
+            .unwrap();
+        graph.connect(src, diff, 0).unwrap();
+        graph.connect(fb, diff, 1).unwrap();
+
+        let mut cook = CookEngine::new();
+        let mut ctxt = CookContext::default();
+
+        graph
+            .set_param(src, "color", Value::Vec4([0.0, 0.0, 0.0, 1.0]))
+            .unwrap();
+        engine.begin_frame();
+        cook.pull(&graph, diff, &ctxt, &mut engine).unwrap();
+        engine.end_frame();
+
+        // The source jumps to white. The difference against last frame's
+        // black is the whole picture.
+        ctxt.advance(1.0 / 60.0);
+        graph
+            .set_param(src, "color", Value::Vec4([1.0, 1.0, 1.0, 1.0]))
+            .unwrap();
+        engine.begin_frame();
+        cook.pull(&graph, diff, &ctxt, &mut engine).unwrap();
+        engine.end_frame();
+
+        let tex = engine.output(&graph, diff).unwrap().clone();
+        let (w, _, pixels) = read_pixels_rgba8(&ctx, &tex).unwrap();
+        assert!(
+            px(&pixels, w, 4, 4)[0] > 250,
+            "a change in the source produced no difference — the feedback \
+             copied the same frame it was subtracted from"
+        );
+
+        // And when nothing changes, nothing is painted.
+        ctxt.advance(1.0 / 60.0);
+        engine.begin_frame();
+        cook.pull(&graph, diff, &ctxt, &mut engine).unwrap();
+        engine.end_frame();
+        let tex = engine.output(&graph, diff).unwrap().clone();
+        let (w, _, pixels) = read_pixels_rgba8(&ctx, &tex).unwrap();
+        assert!(
+            px(&pixels, w, 4, 4)[0] < 5,
+            "a still source should paint nothing"
+        );
     }
 }

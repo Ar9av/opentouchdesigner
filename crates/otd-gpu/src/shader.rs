@@ -87,6 +87,115 @@ layout(set = 0, binding = 3) uniform texture2D otd_tex1;
 #define iChannel1 otd_image1
 "#;
 
+/// Shadertoy samples its channels bottom-up, like the `fragCoord` it hands
+/// out. Our textures are top-down.
+///
+/// So a shader doing the most ordinary thing there is —
+/// `texture(iChannel0, fragCoord / iResolution.xy)` — got the picture upside
+/// down, silently, in a way that reads as a deliberate effect until you put a
+/// camera on it and watch yourself hang from the ceiling. Every generated
+/// shader that read its input had it, and so did two of the camera recipes.
+///
+/// Flipping `fragCoord` instead would fix the passthrough and mirror every
+/// generative shader copied off shadertoy.com, so the flip goes where the
+/// mismatch actually is: the lookup, and only for our own channels.
+///
+/// Rewritten at the call site rather than wrapped in a helper, because naga's
+/// GLSL front end will not take a `sampler2D` as a function parameter — and
+/// not as `#define texture(...)` either, because its preprocessor leaves the
+/// builtin alone, so that one compiled, did nothing, and left the picture
+/// upside down, which is worse than not trying.
+fn flip_channel_lookups(source: &str) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let call: Vec<char> = "texture(".chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < chars.len() {
+        // `texture(` cannot be the tail of `textureLod(` or `textureGrad(`,
+        // but it can be the tail of an identifier somebody declared, so the
+        // character before it has to be a non-identifier one.
+        let starts_here = chars[i..].starts_with(&call)
+            && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_'));
+        let rewritten = starts_here
+            .then(|| matching_paren(&chars, i + call.len() - 1))
+            .flatten()
+            .and_then(|close| {
+                let inner: String = chars[i + call.len()..close].iter().collect();
+                let args = split_args(&inner);
+                // Two arguments, and the sampler is one of ours. Anything
+                // else is left exactly as it was written.
+                let ours = args.first().is_some_and(|a| {
+                    let a = a.trim();
+                    a.starts_with("iChannel") || a.starts_with("otd_image")
+                });
+                (args.len() == 2 && ours).then(|| {
+                    (
+                        format!(
+                            "texture({}, vec2(({1}).x, 1.0 - ({1}).y))",
+                            args[0].trim(),
+                            args[1].trim()
+                        ),
+                        close,
+                    )
+                })
+            });
+        match rewritten {
+            Some((text, close)) => {
+                out.push_str(&text);
+                i = close + 1;
+            }
+            None => {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The index of the `)` closing the `(` at `open`.
+fn matching_paren(chars: &[char], open: usize) -> Option<usize> {
+    if chars.get(open) != Some(&'(') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (at, c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split an argument list on the commas that are not inside brackets.
+fn split_args(inner: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for c in inner.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    if !current.trim().is_empty() || !args.is_empty() {
+        args.push(current);
+    }
+    args
+}
 /// Shadertoy's fragCoord has its origin bottom-left; ours is top-left.
 const GLSL_MAIN: &str = r#"
 void main() {
@@ -101,10 +210,17 @@ pub fn wrap_glsl(source: &str) -> String {
     let mut out = String::from(GLSL_PREAMBLE);
     // Declaring samplers a shader never uses would still bind them, so only
     // pay for them when the source mentions one.
-    if source.contains("otd_image") || source.contains("iChannel") {
+    let flip_channels = source.contains("iChannel");
+    if source.contains("otd_image") || flip_channels {
         out.push_str(GLSL_SAMPLERS);
     }
-    out.push_str(source);
+    // ISF has its own accessors and already flips inside them, so only a
+    // source written against Shadertoy's names is rewritten.
+    let body = match flip_channels {
+        true => std::borrow::Cow::Owned(flip_channel_lookups(source)),
+        false => std::borrow::Cow::Borrowed(source),
+    };
+    out.push_str(&body);
     if !source.contains("void main(") {
         out.push_str(GLSL_MAIN);
     }
@@ -155,6 +271,51 @@ fn trim_location(message: &str) -> String {
         message.trim().to_string()
     } else {
         useful.join(" — ")
+    }
+}
+
+#[cfg(test)]
+mod channel_flip {
+    use super::*;
+
+    #[test]
+    fn our_channels_are_flipped_and_nothing_else_is() {
+        let out = flip_channel_lookups(
+            "texture(iChannel0, uv) + texture(iChannel1, vec2(u.x, f(a, b))) \
+             + textureLod(iChannel0, uv, 0.0) + texture(other, uv) \
+             + texture(iChannel0, uv, 0.5) + mytexture(iChannel0, uv)",
+        );
+        assert!(out.contains("texture(iChannel0, vec2((uv).x, 1.0 - (uv).y))"));
+        // A comma inside the coordinate expression is not an argument break.
+        assert!(out.contains(
+            "texture(iChannel1, vec2((vec2(u.x, f(a, b))).x, 1.0 - (vec2(u.x, f(a, b))).y))"
+        ));
+        // Left alone: a different function, a different sampler, the
+        // three-argument form, and an identifier that merely ends in it.
+        assert!(out.contains("textureLod(iChannel0, uv, 0.0)"));
+        assert!(out.contains("texture(other, uv)"));
+        assert!(out.contains("texture(iChannel0, uv, 0.5)"));
+        assert!(out.contains("mytexture(iChannel0, uv)"));
+    }
+
+    #[test]
+    fn a_shadertoy_passthrough_compiles_after_the_rewrite() {
+        let src = "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n\
+                   vec2 uv = fragCoord / iResolution.xy;\n\
+                   fragColor = texture(iChannel0, uv);\n}";
+        let full = wrap_glsl(src);
+        assert!(full.contains("vec2((uv).x, 1.0 - (uv).y)"));
+        validate_glsl(&full).expect("the rewritten passthrough must still compile");
+    }
+
+    #[test]
+    fn an_isf_source_is_left_alone() {
+        // ISF flips inside IMG_NORM_PIXEL already; doing it again is the same
+        // bug the other way up.
+        let src = "void main() { gl_FragColor = texture(otd_image0, isf_FragNormCoord); }";
+        let full = wrap_glsl(src);
+        assert!(full.contains("texture(otd_image0, isf_FragNormCoord)"));
+        assert!(!full.contains("1.0 - (isf_FragNormCoord).y"));
     }
 }
 
