@@ -1,0 +1,128 @@
+{
+  "name": "slitscan",
+  "group": "Camera",
+  "prompt": "slit-scan my camera so a stripe of now scrolls across a frame full of the recent past",
+  "needs": "video",
+  "notes": "A stripe of the live picture is stamped at the left edge each frame and the whole canvas scrolls right, so the frame reads left-to-right as the last few seconds. Whatever stands at mask1.centre.x is what gets recorded \u2014 move it to 0.5 to sample the middle. mask1.size.x and scroll1.translate.x should match, or the stripes overlap or leave gaps.",
+  "nodes": [
+    {
+      "name": "mask1",
+      "op": "rectangleTOP",
+      "pos": [
+        0,
+        160
+      ],
+      "params": {
+        "centre": [
+          0.02,
+          0.5
+        ],
+        "size": [
+          0.04,
+          1.0
+        ],
+        "fill": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "background": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "name": "slit1",
+      "op": "mathTOP",
+      "pos": [
+        200,
+        0
+      ],
+      "params": {
+        "operation": "multiply"
+      }
+    },
+    {
+      "name": "history",
+      "op": "feedbackTOP",
+      "pos": [
+        0,
+        320
+      ],
+      "params": {
+        "target": "canvas1"
+      }
+    },
+    {
+      "name": "scroll1",
+      "op": "transformTOP",
+      "pos": [
+        200,
+        320
+      ],
+      "params": {
+        "translate": [
+          0.04,
+          0.0
+        ],
+        "extend": "zero"
+      }
+    },
+    {
+      "name": "canvas1",
+      "op": "compositeTOP",
+      "pos": [
+        400,
+        160
+      ],
+      "params": {
+        "operation": "maximum"
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        600,
+        160
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "slit1",
+      "input": 0
+    },
+    {
+      "from": "mask1",
+      "to": "slit1",
+      "input": 1
+    },
+    {
+      "from": "history",
+      "to": "scroll1",
+      "input": 0
+    },
+    {
+      "from": "scroll1",
+      "to": "canvas1",
+      "input": 0
+    },
+    {
+      "from": "slit1",
+      "to": "canvas1",
+      "input": 1
+    },
+    {
+      "from": "canvas1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

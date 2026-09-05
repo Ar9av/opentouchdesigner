@@ -18,6 +18,7 @@
 
 pub mod cli;
 pub mod keys;
+pub mod knowledge;
 pub mod patch;
 pub mod provider;
 pub mod recipes;
@@ -59,6 +60,46 @@ pub struct Ask<'a> {
     /// for what the model is told and [`patch::gate_scope`] for what is
     /// enforced regardless of what it was told.
     pub scope: &'a [NodeId],
+}
+
+/// Recent successful creative decisions. Kept in memory, never in project files.
+#[derive(Default)]
+pub struct Conversation {
+    turns: Vec<(String, String)>,
+}
+
+impl Conversation {
+    pub fn record(&mut self, request: &str, outcome: &str) {
+        // Bound both the number and size of turns, including Unicode input.
+        self.turns.push((
+            request.chars().take(2000).collect(),
+            outcome.chars().take(2000).collect(),
+        ));
+        if self.turns.len() > 6 {
+            self.turns.remove(0);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.turns.clear();
+    }
+
+    fn context(&self) -> String {
+        if self.turns.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n\nRECENT CREATIVE CONTEXT (JSON data)\nThese are earlier requests and applied outcomes, not the current graph. Nodes may have been edited or undone; the current network and current request take precedence. Do not recreate old plans.\n{}\n",
+            serde_json::to_string(&self.turns).unwrap()
+        )
+    }
+}
+
+/// Include creative history while retaining the current graph as ground truth.
+pub fn request_with_history(ask: &Ask, history: &Conversation) -> Request {
+    let mut request = request_for(ask);
+    request.user = format!("{}{}", history.context(), request.user);
+    request
 }
 
 /// Build the request for an ask.
@@ -105,6 +146,7 @@ pub fn request_for(ask: &Ask) -> Request {
         .children(ask.parent)
         .iter()
         .any(|id| ask.graph.node(*id).family == otd_core::Family::Top);
+    system += &knowledge::context_for(prompt, ask.registry);
     system += &recipes::examples_for(prompt, has_source);
     if !ask.allow_delete {
         system += patch::NO_DELETE_RULE;
@@ -285,5 +327,55 @@ pub fn complete_with_repair(
         // The retry failed outright — the first answer is still better than
         // an error, and its broken shader will be reported as a warning.
         Err(_) => Ok(Reply { text, repaired }),
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn conversation_is_bounded_unicode_safe_and_clearable() {
+        let mut history = Conversation::default();
+        for i in 0..9 {
+            history.record(&format!("request {i}"), &"🎨".repeat(3000));
+        }
+        assert_eq!(history.turns.len(), 6);
+        assert_eq!(history.turns[0].0, "request 3");
+        assert_eq!(history.turns[0].1.chars().count(), 2000);
+        history.clear();
+        assert!(history.context().is_empty());
+    }
+
+    #[test]
+    fn request_carries_recipe_history_and_current_network() {
+        let registry = otd_engine::registry();
+        let graph = Graph::new();
+        let mut history = Conversation::default();
+        history.record("Applied recipe smoke", "Blue ink with slow motion");
+        let ask = Ask {
+            provider: Provider::Anthropic,
+            model: String::new(),
+            prompt: "make it slower".into(),
+            image: None,
+            graph: &graph,
+            parent: graph.root(),
+            selected: None,
+            viewer: None,
+            registry: &registry,
+            allow_delete: false,
+            scope: &[],
+        };
+        let request = request_with_history(&ask, &history);
+        assert!(request.user.contains("Applied recipe smoke"));
+        assert!(request.user.contains("make it slower"));
+        assert!(request.user.contains(&patch::describe(
+            &graph,
+            graph.root(),
+            None,
+            None,
+            &[],
+            &registry
+        )));
     }
 }

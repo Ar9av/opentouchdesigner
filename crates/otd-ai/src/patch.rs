@@ -495,6 +495,25 @@ doing the same job — a `delete` list, sometimes with a `set` to compensate.
   `out2` nobody is looking at is the commonest way an answer that is
   entirely correct still shows the user no change at all.
 - A node marked [SELECTED] is what "it", "this" and "that" refer to.
+
+WHAT A CAMERA CAN AND CANNOT BE ASKED FOR
+A `videodeviceinTOP` is a picture and nothing more: there is no face
+detection, no pose, no depth, no background segmentation and no body mask in
+this build. So "only show me and remove the background", "follow my hand" and
+"put it behind me" cannot be built as asked, and a plan that pretends
+otherwise produces a patch that does something quite different from what was
+promised. Say so in `notes` and build the nearest thing that is real:
+
+- MOVEMENT is a frame difference: the camera against a `feedbackTOP` whose
+  `target` is THE CAMERA ITSELF, composited with `difference`. What lights up
+  is what changed — which is a person moving, and also a curtain, a passing
+  cloud and the camera being nudged. The difference is DIM; put a levelTOP
+  after it with `brightness` 3 or more, or it reads as black.
+- A SILHOUETTE is a threshold or a chroma key, and it needs the subject to be
+  brighter, darker or a different colour than the wall behind them.
+- DEPTH exists only for a 3D scene this patch rendered (`renderTOP` with
+  `output` depth). There is none for a camera.
+
 - A node marked [VIEWER] is what the user is LOOKING AT. When there are
   several nullTOPs, that one is the output, and your result has to arrive
   there: wire it into that null's input, or `set` its input by rewiring, so
@@ -564,7 +583,7 @@ MOVEMENT specifically is not brightness, it is *change* in brightness, so the
 picture you measure has to be a difference rather than the camera itself:
 
   camera1 ------------------------> compositeTOP (operation "difference")
-  camera1 -> feedbackTOP (target that compositeTOP) --^
+  feedbackTOP (target camera1) -----------------------^
 
 That composite is near-black when nothing moves and bright where something
 did. Measure THAT, not the camera. Then:
@@ -581,8 +600,36 @@ The same chain with an audiodeviceinCHOP in place of the picture is how a
 patch reacts to sound; there is no Top To CHOP in that one because audio is
 already channels.
 
+UNITS, WHICH THE CATALOGUE DOES NOT SPELL OUT
+A number in the right parameter with the wrong scale is the quietest way to
+get a patch that builds, cooks, and shows nothing. These are the ones that
+bite:
+
+- `transformTOP.translate` is a FRACTION OF THE FRAME, not pixels. `0.01` is
+  a one-percent nudge and about what a drift wants; `0.04` per frame is a
+  brisk scroll; `1.0` moves the picture off the frame entirely and `2` is
+  two frames away — nothing is left but the background.
+- `transformTOP.scale` is a multiplier: `1.0` is unchanged, `1.03` is the
+  slow zoom a feedback tunnel wants. `rotate` is in DEGREES, so `1` is a
+  gentle spin per frame and `90` is a quarter turn.
+- `rectangleTOP.centre` / `.size` and `circleTOP.centre` / `.radius` are
+  fractions of the frame, `0..1`, measured from the top left. A one-stripe
+  mask is `size [0.03, 1.0]`, not `[30, 720]`.
+- `blurTOP.size` and `ditherTOP.scale` really are in pixels.
+- `noiseTOP.period` is a feature size, and SMALLER IS FINER: `0.05` is grain,
+  `0.5` is slow rolling cloud.
+- `levelTOP.brightness` and `mathCHOP.gain` are multipliers about `1.0`.
+  `lagCHOP.lagup` / `.lagdown` are seconds.
+- 3D — `geometryCOMP.translate`, `cameraCOMP.translate`, SOP sizes — is in
+  scene units, where a default `boxSOP` is about one unit across. A camera at
+  `[0, 2, 6]` sees it; a camera at `[0, 200, 600]` sees a dot.
+
+If a number could plausibly be either pixels or fractions, it is fractions
+everywhere except `blurTOP.size` and `ditherTOP.scale`.
+
 WHAT MAKES A GOOD-LOOKING PATCH
-- Motion comes from a feedback loop, not from one operator. The shape is:
+- For temporal trails and recursive motion use a feedback loop. Other motion
+  can come from expressions, CHOP exports, animated geometry or shaders. The loop shape is:
   feedbackTOP -> levelTOP (brightness ~0.96, the decay) -> transformTOP
   (scale ~1.03 or rotate ~1, the movement) -> compositeTOP with the source.
   Point the feedbackTOP's `target` parameter at the LAST node in the chain.

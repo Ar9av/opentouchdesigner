@@ -81,6 +81,15 @@ cargo run -p otd-ai --example scenarios
       `scenarios -- --only tunnel,trails,react --repeat 3` and put the new
       rate here.
 
+- [ ] **The eval harness measured against a still photograph.** `vfx_eval`
+      cooked its forty frames as fast as the GPU would go — about 20ms, one
+      frame of footage — so anything that converges on a constant input read
+      as frozen, and `trails` was marked STILL for being correct. The loop is
+      paced to real time now and reports the source's own motion beside the
+      patch's, so a still result over a still source says `SRC-STILL` instead
+      of blaming the patch. Worth checking whether `scenarios` has the same
+      blind spot.
+
 - [ ] **A second output null** — the model sometimes parks its work on `out2`
       while `out1` still shows the raw clip, so a correct answer shows the
       user no change. The brief now says to insert before an existing null and

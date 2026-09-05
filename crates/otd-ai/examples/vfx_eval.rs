@@ -88,6 +88,12 @@ struct Measured {
     luma: f64,
     motion: f64,
     from_source: f64,
+    /// How much the SOURCE moved over the same frames.
+    ///
+    /// Without this the ruler cannot tell a patch that froze the picture from
+    /// a clip that never advanced, and it called the second one the first —
+    /// see the pacing note in `measure`.
+    source_motion: f64,
 }
 
 fn main() {
@@ -149,12 +155,13 @@ fn main() {
             provider.default_model()
         );
     }
-    println!("clip:      {clip}\n");
+    println!("clip:      {clip}");
+    println!();
     println!(
-        "{:<11} {:>5} {:>6} {:>7} {:>7}  {}",
-        "prompt", "nodes", "luma", "motion", "vs src", "verdict"
+        "{:<11} {:>5} {:>6} {:>7} {:>7} {:>7}  verdict",
+        "prompt", "nodes", "luma", "motion", "src mo", "vs src"
     );
-    println!("{}", "-".repeat(78));
+    println!("{}", "-".repeat(86));
 
     let key = keys
         .get(provider)
@@ -275,8 +282,14 @@ fn main() {
             if m.luma > 248.0 {
                 faults.push("BLOWN".into());
             }
+            // A patch that does not move over a source that also does not
+            // move has not been shown to be wrong: there was nothing to
+            // respond to. Say which it is rather than blaming the patch.
             if m.motion < 0.4 {
-                faults.push("STILL".into());
+                faults.push(match m.source_motion < 0.4 {
+                    true => "SRC-STILL".into(),
+                    false => "STILL".to_string(),
+                });
             }
             if m.from_source < 2.0 {
                 faults.push("PASSTHROUGH".into());
@@ -291,10 +304,11 @@ fn main() {
             };
 
             println!(
-                "{name:<11} {:>5} {:>6.1} {:>7.2} {:>7.1}  {verdict}",
+                "{name:<11} {:>5} {:>6.1} {:>7.2} {:>7.2} {:>7.1}  {verdict}",
                 applied.created.len(),
                 m.luma,
                 m.motion,
+                m.source_motion,
                 m.from_source,
             );
             for w in &applied.warnings {
@@ -311,7 +325,7 @@ fn main() {
         }
     }
 
-    println!("{}", "-".repeat(78));
+    println!("{}", "-".repeat(86));
     println!("{passes}/{runs} produced a moving, non-black picture that differs from the source");
 }
 
@@ -354,6 +368,7 @@ fn measure(
     let mut early: Option<Vec<u8>> = None;
     let mut late: Option<Vec<u8>> = None;
     let mut src_pixels: Option<Vec<u8>> = None;
+    let mut src_early: Option<Vec<u8>> = None;
 
     // ---- wait for the clip before judging anything
     //
@@ -388,14 +403,29 @@ fn measure(
                 luma: 0.0,
                 motion: 0.0,
                 from_source: 0.0,
+                source_motion: 0.0,
             },
             vec!["SOURCE NEVER DECODED".into()],
         );
     }
 
     // Long enough for the decoder to deliver and for a feedback loop to have
-    // built up something to look at.
+    // built up something to look at — and PACED, which the readiness loop
+    // above always was and this one was not.
+    //
+    // A movie decodes on its own thread in real time; this loop cooks as fast
+    // as the GPU will go, which is a few hundred microseconds a frame. Forty
+    // unpaced frames is about 20ms of wall clock — one frame of footage — so
+    // every patch was measured against a still photograph. Anything that
+    // converges on a constant input then reads as frozen, which is exactly
+    // what a crossfade trail does, and `trails` was marked STILL for being
+    // correct. `otd render` never hit this because encoding a PNG per frame
+    // paces it by accident.
+    //
+    // So: hold each cook to its share of real time, the way the editor does.
+    let step = std::time::Duration::from_secs_f64(1.0 / 60.0);
     for frame in 0..40 {
+        let began = std::time::Instant::now();
         engines.begin_frame();
         if let Err(e) = cook.cook_frame(graph, &[watched, source], &time, &mut engines) {
             if cook_error.is_none() {
@@ -407,10 +437,14 @@ fn measure(
 
         if frame == 24 {
             early = read(gpu, &engines, graph, watched);
+            src_early = read(gpu, &engines, graph, source);
         }
         if frame == 39 {
             late = read(gpu, &engines, graph, watched);
             src_pixels = read(gpu, &engines, graph, source);
+        }
+        if let Some(left) = step.checked_sub(began.elapsed()) {
+            std::thread::sleep(left);
         }
     }
 
@@ -441,12 +475,17 @@ fn measure(
         (Some(_), Some(_)) => 255.0,
         _ => 0.0,
     };
+    let source_motion = match (&src_early, &src_pixels) {
+        (Some(a), Some(b)) if a.len() == b.len() => mean_abs_diff(a, b),
+        _ => 0.0,
+    };
 
     (
         Measured {
             luma,
             motion,
             from_source,
+            source_motion,
         },
         errors,
     )

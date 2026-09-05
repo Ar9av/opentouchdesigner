@@ -64,6 +64,10 @@ pub struct Recipe {
 const HEADER: &[&str] = &["name", "group", "prompt", "needs"];
 
 const FILES: &[&str] = &[
+    include_str!("../recipes/motionpaint.json"),
+    include_str!("../recipes/slitscan.json"),
+    include_str!("../recipes/thermal.json"),
+    include_str!("../recipes/hologram.json"),
     include_str!("../recipes/tunnel.json"),
     include_str!("../recipes/plasma.json"),
     include_str!("../recipes/rings.json"),
@@ -220,32 +224,10 @@ pub fn stand_in_source(plan: &mut Plan) {
     );
 }
 
-/// Words a request is matched on: lowercase, letters only, four or longer.
-fn words(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() >= 4)
-        .map(|w| w.to_string())
-        .collect()
-}
-
-/// The request words that mean "a feedback loop", whatever the rest says.
-const LOOP_WORDS: &[&str] = &[
-    "trail", "feedback", "echo", "smear", "tunnel", "loop", "ghost",
-];
-
-/// The two recipes nearest a request, ready to append to the system prompt.
-///
-/// Nearest by word overlap with each recipe's prompt, notes and operators.
-/// `has_source` is whether the network has a TOP to work on, which tilts the
-/// pick towards the recipes that wire from one. A request that sounds like a
-/// loop always gets `trails`: that is the construction the model gets wrong,
-/// and one worked example of it with the numbers filled in is the whole
-/// point of this.
+/// Up to two relevant executable examples. Unknown requests get no arbitrary
+/// fallback; short tokens such as 3D and explicit recipe names carry intent.
 pub fn examples_for(prompt: &str, has_source: bool) -> String {
-    let asked = words(prompt);
-    let wants_loop = LOOP_WORDS.iter().any(|w| prompt.to_lowercase().contains(w));
-
+    let asked = crate::knowledge::words(prompt);
     let mut scored: Vec<(i32, &Recipe)> = all()
         .iter()
         .map(|r| {
@@ -258,26 +240,63 @@ pub fn examples_for(prompt: &str, has_source: bool) -> String {
                     }
                 }
             }
-            let have = words(&text);
-            let mut score = asked.iter().filter(|w| have.contains(w)).count() as i32;
-            if has_source && r.needs == Needs::Video {
-                score += 1;
+            let have = crate::knowledge::words(&text);
+            let mut score = asked
+                .iter()
+                .filter(|w| {
+                    w.len() >= 4
+                        && ![
+                            "make",
+                            "with",
+                            "that",
+                            "this",
+                            "from",
+                            "like",
+                            "into",
+                            "more",
+                            "less",
+                            "have",
+                            "give",
+                            "some",
+                            "something",
+                        ]
+                        .contains(&w.as_str())
+                        && have.contains(w)
+                })
+                .count() as i32;
+            if asked.contains(&r.name.to_lowercase()) {
+                score += 20;
             }
-            if wants_loop && r.name == "trails" {
-                score += 10;
+            for technique in crate::knowledge::TECHNIQUES {
+                if crate::knowledge::matches(technique, prompt)
+                    && technique.recipes.contains(&r.name.as_str())
+                {
+                    score += 5;
+                }
+            }
+            if score > 0 && has_source && r.needs == Needs::Video {
+                score += 1;
             }
             (score, r)
         })
         .collect();
     // Stable, so a tie keeps menu order.
     scored.sort_by(|a, b| b.0.cmp(&a.0));
-    let picked: Vec<&Recipe> = scored.iter().take(2).map(|(_, r)| *r).collect();
+    let picked: Vec<&Recipe> = scored
+        .iter()
+        .filter(|(score, _)| *score > 0)
+        .take(2)
+        .map(|(_, r)| *r)
+        .collect();
 
+    if picked.is_empty() {
+        return String::new();
+    }
     let mut out = String::from(
         "\n\nWORKED EXAMPLES\n\
-         Two requests and the plan that answered each, exactly as it was \
-         applied. Match their shape: a chain that ends in a nullTOP named \
-         out1 with `viewer` set to it, a feedback loop closed with `maximum`, \
+         Relevant requests and the plan that answered each, exactly as it was \
+         applied. Adapt only the relevant parts to the request: a chain that ends in a nullTOP named \
+         out1 with `viewer` set to it, where feedback is needed choose its mix deliberately, \
          and the numbers worth turning in `params` rather than in a shader. \
          Where an example wires from `source1`, that is the clip already on \
          the canvas: use the real name of the source node in the network \

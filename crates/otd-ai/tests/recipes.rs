@@ -157,3 +157,40 @@ fn a_feedback_target_follows_its_node_when_the_name_is_taken() {
         "fb1.target = {target:?} does not point at the recipe's own null"
     );
 }
+
+#[test]
+fn retrieval_understands_visual_intent_and_does_not_default_to_tunnels() {
+    for (prompt, recipe) in [
+        ("organic liquid ink", "smoke"),
+        ("3d swarm", "field"),
+        ("music reactive", "audio"),
+        ("120 bpm pulse", "beat"),
+        ("tunnel", "tunnel"),
+    ] {
+        let examples = recipes::examples_for(prompt, false);
+        assert!(
+            examples.contains(&recipes::find(recipe).unwrap().json),
+            "{prompt}: missing {recipe}"
+        );
+    }
+    assert!(recipes::examples_for("xyzzy", false).is_empty());
+    assert!(recipes::examples_for("xyzzy", true).is_empty());
+    assert!(recipes::examples_for("make this more beautiful", true).is_empty());
+}
+
+#[test]
+fn technique_cards_reference_real_recipes_and_supported_operators() {
+    let reg = registry();
+    for card in otd_ai::knowledge::TECHNIQUES {
+        for op in card.operators {
+            assert!(reg.get(op).is_some(), "{}: {op}", card.name);
+        }
+        for name in card.recipes {
+            assert!(recipes::find(name).is_some(), "{}: {name}", card.name);
+        }
+    }
+    let text = otd_ai::knowledge::context_for("3d swarm", &reg);
+    assert!(text.contains("Instanced geometry"));
+    let text = otd_ai::knowledge::context_for("3d swarm", &otd_core::OpRegistry::default());
+    assert!(!text.contains("Instanced geometry"));
+}

@@ -176,6 +176,7 @@ impl OtdApp {
             self.status = format!("no built-in patch called `{name}`");
             return;
         };
+        self.assistant.reset_context();
         self.graph = graph;
         self.engines.reset();
         self.cook.reset();
@@ -669,6 +670,7 @@ impl OtdApp {
     /// One undo, like everything else the assistant does, because the whole
     /// point of it is to be the fast way back from a patch that went wrong.
     pub fn clear_network(&mut self) -> usize {
+        self.assistant.reset_context();
         let doomed: Vec<NodeId> = self.graph.node(self.current).children.clone();
         if doomed.is_empty() {
             return 0;
@@ -826,6 +828,7 @@ impl OtdApp {
         };
         match Project::open(&path, &self.registry) {
             Ok(graph) => {
+                self.assistant.reset_context();
                 self.graph = graph;
                 self.engines.top.reset();
                 self.cook.reset();

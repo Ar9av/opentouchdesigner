@@ -49,6 +49,8 @@ pub struct Assistant {
     /// screenshot.
     pub key_input: String,
     pub prompt: String,
+    conversation: otd_ai::Conversation,
+    submitted_prompt: String,
     /// Whether the assistant may remove operators as well as add them. Off by
     /// default: adding to a patch is recoverable by looking at it, and a node
     /// that quietly went away is not — you have to notice the absence first.
@@ -130,6 +132,8 @@ impl Default for Assistant {
             model: provider.default_model().to_string(),
             key_input: String::new(),
             prompt: String::new(),
+            conversation: otd_ai::Conversation::default(),
+            submitted_prompt: String::new(),
             allow_delete: false,
             scope_selection: false,
             scoped_to: Vec::new(),
@@ -150,6 +154,13 @@ impl Default for Assistant {
 }
 
 impl Assistant {
+    /// A new project must not receive an old request or old creative context.
+    pub fn reset_context(&mut self) {
+        self.conversation.clear();
+        self.submitted_prompt.clear();
+        self.pending = None;
+    }
+
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
@@ -1050,19 +1061,27 @@ fn send(app: &mut OtdApp) {
         .map(|id| app.graph.node(*id).name.clone())
         .collect();
 
-    let request = otd_ai::request_for(&Ask {
-        provider: app.assistant.provider,
-        model: app.assistant.model.clone(),
-        prompt: app.assistant.prompt.clone(),
-        image: app.assistant.image.clone(),
-        graph: &app.graph,
-        parent: app.current,
-        selected: app.selected,
-        viewer: app.viewer,
-        registry: &app.registry,
-        allow_delete: app.assistant.allow_delete,
-        scope: &scope,
-    });
+    let request = otd_ai::request_with_history(
+        &Ask {
+            provider: app.assistant.provider,
+            model: app.assistant.model.clone(),
+            prompt: app.assistant.prompt.clone(),
+            image: app.assistant.image.clone(),
+            graph: &app.graph,
+            parent: app.current,
+            selected: app.selected,
+            viewer: app.viewer,
+            registry: &app.registry,
+            allow_delete: app.assistant.allow_delete,
+            scope: &scope,
+        },
+        &app.assistant.conversation,
+    );
+    app.assistant.submitted_prompt = if app.assistant.prompt.trim().is_empty() {
+        "Build from the attached reference image".into()
+    } else {
+        app.assistant.prompt.clone()
+    };
 
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = std::thread::Builder::new()
@@ -1158,6 +1177,13 @@ fn poll(app: &mut OtdApp) {
         .map(|json| patch::shader_problems(&json, check_shader))
         .unwrap_or_default();
     if land(app, &plan, broken) {
+        let outcome = format!(
+            "{} Warnings: {:?}. Shader errors: {:?}",
+            plan.notes, app.assistant.warnings, app.assistant.broken
+        );
+        app.assistant
+            .conversation
+            .record(&app.assistant.submitted_prompt, &outcome);
         if let Some(repair) = repaired {
             app.assistant
                 .status
@@ -1320,6 +1346,10 @@ pub fn apply_recipe(app: &mut OtdApp, recipe: &'static Recipe) {
 
     let broken = patch::shader_problems(recipe.value(), check_shader);
     if land(app, &plan, broken) {
+        app.assistant.conversation.record(
+            &format!("Applied recipe {}: {}", recipe.name, recipe.prompt),
+            &format!("{}{}", plan.notes, aside),
+        );
         app.assistant.status = format!("{} · {}", recipe.name, app.assistant.status);
         if let Some(last) = &mut app.assistant.last {
             last.push_str(&aside);
@@ -1361,6 +1391,18 @@ fn recipes_menu(app: &mut OtdApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resetting_context_discards_an_inflight_reply() {
+        let mut assistant = Assistant::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        assistant.pending = Some(rx);
+        assistant.submitted_prompt = "old project".into();
+        assistant.reset_context();
+        assert!(!assistant.busy());
+        assert!(assistant.submitted_prompt.is_empty());
+        assert!(tx.send(Ok(("old plan".into(), None))).is_err());
+    }
 
     #[test]
     fn it_opens_on_a_provider_that_is_usable() {

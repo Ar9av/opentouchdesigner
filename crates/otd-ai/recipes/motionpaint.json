@@ -1,0 +1,198 @@
+{
+  "name": "motionpaint",
+  "group": "Camera",
+  "prompt": "turn my camera movement into glowing cyan light-painting trails on black",
+  "needs": "video",
+  "notes": "Frame difference isolates movement, not people: a moving camera or changing light also paints. sensitivity.brightness controls response; decay1.brightness controls persistence. Stand still and the trails fade.",
+  "nodes": [
+    {
+      "name": "previous",
+      "op": "feedbackTOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "target": "source1"
+      }
+    },
+    {
+      "name": "difference",
+      "op": "compositeTOP",
+      "pos": [
+        200,
+        0
+      ],
+      "params": {
+        "operation": "difference"
+      }
+    },
+    {
+      "name": "sensitivity",
+      "op": "levelTOP",
+      "pos": [
+        400,
+        0
+      ],
+      "params": {
+        "brightness": 3.0
+      }
+    },
+    {
+      "name": "palette",
+      "op": "rampTOP",
+      "pos": [
+        400,
+        180
+      ],
+      "params": {
+        "color1": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "color2": [
+          0.1,
+          0.9,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "name": "colour",
+      "op": "lookupTOP",
+      "pos": [
+        600,
+        0
+      ],
+      "params": {}
+    },
+    {
+      "name": "history",
+      "op": "feedbackTOP",
+      "pos": [
+        600,
+        320
+      ],
+      "params": {
+        "target": "paint"
+      }
+    },
+    {
+      "name": "decay1",
+      "op": "levelTOP",
+      "pos": [
+        800,
+        320
+      ],
+      "params": {
+        "brightness": 0.94
+      }
+    },
+    {
+      "name": "paint",
+      "op": "compositeTOP",
+      "pos": [
+        1000,
+        0
+      ],
+      "params": {
+        "operation": "maximum"
+      }
+    },
+    {
+      "name": "glow",
+      "op": "blurTOP",
+      "pos": [
+        1200,
+        180
+      ],
+      "params": {
+        "size": 10
+      }
+    },
+    {
+      "name": "bloom",
+      "op": "addTOP",
+      "pos": [
+        1400,
+        0
+      ],
+      "params": {}
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        1600,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "difference",
+      "input": 0
+    },
+    {
+      "from": "previous",
+      "to": "difference",
+      "input": 1
+    },
+    {
+      "from": "difference",
+      "to": "sensitivity",
+      "input": 0
+    },
+    {
+      "from": "sensitivity",
+      "to": "colour",
+      "input": 0
+    },
+    {
+      "from": "palette",
+      "to": "colour",
+      "input": 1
+    },
+    {
+      "from": "history",
+      "to": "decay1",
+      "input": 0
+    },
+    {
+      "from": "decay1",
+      "to": "paint",
+      "input": 1
+    },
+    {
+      "from": "colour",
+      "to": "paint",
+      "input": 0
+    },
+    {
+      "from": "paint",
+      "to": "glow",
+      "input": 0
+    },
+    {
+      "from": "paint",
+      "to": "bloom",
+      "input": 0
+    },
+    {
+      "from": "glow",
+      "to": "bloom",
+      "input": 1
+    },
+    {
+      "from": "bloom",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

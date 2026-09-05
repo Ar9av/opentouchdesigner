@@ -94,8 +94,8 @@ fn main() {
         .as_deref()
         .and_then(|name| graph.find_from(root, name));
     let viewer = view.as_deref().and_then(|name| graph.find_from(root, name));
-    if select.is_some() && selected.is_none() {
-        eprintln!("--select {}: no such node", select.unwrap());
+    if let (Some(name), None) = (&select, selected) {
+        eprintln!("--select {name}: no such node");
         std::process::exit(2);
     }
 

@@ -368,6 +368,31 @@ works on any footage. Both fixed, and the brief now says so.
 To add one, copy a file, change the words and the numbers, and run the tests.
 Prose in the brief is the thing to reach for *after* that, not before.
 
+Four of them are about a camera, because that is what most people point this
+at first: **motionpaint** (a frame difference painting glowing trails wherever
+you move), **thermal** (false-colour luminance), **hologram** (cyan scanlines
+that keep you legible), and **slitscan** (a stripe of now stamped into a
+frame full of the last few seconds). None of them claim to know where a person
+is — see below.
+
+## What a camera cannot be asked for
+
+There is no face detection, no pose, no depth and no background segmentation
+in this build. So "remove the background so only I am visible" cannot be built
+as asked, and the interesting question is what the assistant does about it.
+It used to build something confident and wrong. The brief now names the three
+things a camera *can* do — a frame difference for movement, a threshold or
+chroma key for a silhouette, and depth only for a 3D scene the patch rendered
+itself — and asks for the limitation in `notes`. Asked to remove a background
+it now says segmentation is not possible, keys on luminance instead, and tells
+you it only works if you stand out from the wall.
+
+The same section carries the units, which are the quietest way to get a patch
+that builds and shows nothing: `transformTOP.translate` is a fraction of the
+frame, so the `-2` a model reached for to scroll a slit-scan put the canvas
+two frames off-screen and left one stripe on black. It builds. It cooks. There
+is no warning to give.
+
 ## Prompts that work
 
 Concrete and visual beats clever. The chips under the box are the recipes'
@@ -403,3 +428,39 @@ otd render out.otd --node /out1 --frames 150 --out shots
 `build` writes an ordinary `.otd`. That it then renders is the actual test of
 whether any of this works — a plan that parses but does not draw is not a
 patch.
+
+
+## Creative context and technique selection
+
+The editor retains six recent applied requests and outcomes in memory, including
+recipes selected from the menu. Each request and outcome is limited to 2,000
+characters. The current graph and current request take precedence over history,
+so an undo or a manual edit does not make the old plan authoritative. Opening a
+project, loading an example or clearing the network resets this context and
+discards any pending reply. History is not saved into `.otd` files.
+
+The assistant receives curated technique guidance from
+`crates/otd-ai/src/knowledge.rs`: when to use temporal trails, organic flow,
+instancing, actual audio input, a tempo clock, or surface treatments. These cards
+include provenance and are only included when their required operators exist in
+the registry. They are offline guidance, not a live forum search or an imported
+TouchDesigner component library. TouchDesigner-specific POP networks and shader
+APIs must still be translated to supported OpenTouchDesigner operators.
+
+Recipe selection combines explicit recipe names, technique keywords (including
+short terms such as `3d`, `mic` and `bpm`), and word overlap. It includes up to two
+relevant plans; unmatched requests no longer automatically receive the first two
+recipes. Examples illustrate constructions, not a requirement to use feedback
+for every look.
+
+The editor still does not render and critique a generated result before applying
+it. JSON and shader validation cannot establish composition or visual quality.
+The offline GPU evaluation can check basic visual behavior:
+
+```sh
+cargo run -p otd-ai --example vfx_eval -- --recipes --clip examples/media/plasma.mp4 --only tunnel,smoke,field,beat
+```
+
+These four recipes passed the moving/non-black/output-difference checks on
+2026-09-05. This validates the templates, not an improvement in live model output;
+that needs a comparative set of generated renders and aesthetic review.

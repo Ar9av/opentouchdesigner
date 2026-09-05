@@ -1,0 +1,82 @@
+{
+  "name": "hologram",
+  "group": "Camera",
+  "prompt": "turn my camera into a cyan hologram with scanlines and ghostly echoes while keeping me visible",
+  "needs": "video",
+  "notes": "The camera stays legible under cyan scanlines, a slow roll and a delayed echo. hologram1.uniform1.x is the horizontal wobble, uniform1.y how far the cyan replaces the picture; echo.opacity is how much of the last frame stays. No background removal is implied \u2014 the room is still there, just cold.",
+  "nodes": [
+    {
+      "name": "hologram1",
+      "op": "glslTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float shift = U.p0.x * sin(uv.y * 35.0 + iTime * 1.5);\n    vec3 src = texture(iChannel0, clamp(uv + vec2(shift, 0.0), 0.0, 1.0)).rgb;\n    float l = dot(src, vec3(0.2126, 0.7152, 0.0722));\n    // Push the midtones down so the subject reads against the room instead\n    // of the whole frame flooding to one cyan.\n    l = pow(clamp(l, 0.0, 1.0), 1.9);\n    float scan = 0.55 + 0.45 * sin(fragCoord.y * 2.2 - iTime * 6.0);\n    float roll = 0.85 + 0.15 * sin(uv.y * 3.0 - iTime * 0.7);\n    vec3 c = vec3(0.10, 0.95, 1.0) * l * scan * roll * 2.1;\n    // A cold rim where the picture changes fastest reads as an edge glow.\n    c += vec3(0.4, 1.0, 1.0) * pow(l, 6.0) * 0.5;\n    fragColor = vec4(mix(src, c, clamp(U.p0.y, 0.0, 1.0)), 1.0);\n}\n",
+        "uniform1": [
+          0.004,
+          0.95,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "history",
+      "op": "feedbackTOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "target": "echo"
+      }
+    },
+    {
+      "name": "echo",
+      "op": "compositeTOP",
+      "pos": [
+        200,
+        0
+      ],
+      "params": {
+        "operation": "over",
+        "opacity": 0.5
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        400,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "hologram1",
+      "input": 0
+    },
+    {
+      "from": "hologram1",
+      "to": "echo",
+      "input": 0
+    },
+    {
+      "from": "history",
+      "to": "echo",
+      "input": 1
+    },
+    {
+      "from": "echo",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}
