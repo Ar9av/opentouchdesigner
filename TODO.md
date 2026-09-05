@@ -71,14 +71,23 @@ cargo run -p otd-ai --example scenarios
       loop with `over`, saturating an `add` loop with full-brightness video,
       and crushing the source with a `blacklevel` above where it enters), and
       what is left is variance on a fiddly construction rather than one bug.
-      Likely next step: a worked, known-good loop in the brief with real
-      numbers, rather than a description of one.
+      The brief now carries a worked, known-good loop with real numbers —
+      the `trails` recipe, appended as an example whenever the request sounds
+      like one (`otd_ai::recipes::examples_for`). Two causes found while
+      measuring the recipes are fixed as well: `apply` no longer loses a
+      Feedback TOP's `target` when `out1` is renamed on collision, and `over`
+      at partial opacity — the crossfade trail — is no longer flagged as
+      starving the loop. Re-measure with
+      `scenarios -- --only tunnel,trails,react --repeat 3` and put the new
+      rate here.
 
 - [ ] **A second output null** — the model sometimes parks its work on `out2`
       while `out1` still shows the raw clip, so a correct answer shows the
       user no change. The brief now says to insert before an existing null and
-      it mostly complies; it is not reliable. Consider making `apply` rewire
-      it, or warning the way the starved-loop check does.
+      it mostly complies; it is not reliable. Every recipe shown as an example
+      now ends in `out1` and the example header says to wire into an existing
+      one, which should help; if it does not, make `apply` rewire it, or warn
+      the way the starved-loop check does.
 
 ## Camera and packaging
 

@@ -1,0 +1,24 @@
+{
+  "name": "terrain",
+  "group": "3D",
+  "prompt": "a wireframe landscape of rolling noise hills scrolling past, seen from low down",
+  "needs": "none",
+  "notes": "A dense grid displaced by noise along its normals, drawn as wireframe. noise1.offset moves so the hills scroll; noise1.amplitude is their height.",
+  "nodes": [
+    {"name": "grid1", "op": "gridSOP", "pos": [0, 0], "params": {"size": [10.0, 10.0], "rows": 90, "columns": 90, "orientation": "xz"}},
+    {"name": "noise1", "op": "noiseSOP", "pos": [200, 0],
+     "params": {"amplitude": 0.7, "period": 2.5}, "expressions": {"offset": "[absTime * 0.4, 0.0, 0.0]"}},
+    {"name": "mat1", "op": "wireframeMAT", "pos": [200, 140], "params": {"basecolor": [0.3, 0.9, 1.0, 1.0]}},
+    {"name": "geo1", "op": "geometryCOMP", "pos": [400, 0], "params": {"sop": "noise1", "material": "mat1"}},
+    {"name": "cam1", "op": "cameraCOMP", "pos": [400, 140], "params": {"translate": [0.0, 1.2, 6.0], "rotate": [-8.0, 0.0, 0.0]}},
+    {"name": "light1", "op": "lightCOMP", "pos": [400, 280]},
+    {"name": "render1", "op": "renderTOP", "pos": [600, 0],
+     "params": {"geometry": "geo1", "camera": "cam1", "light": "light1", "background": [0.01, 0.01, 0.03, 1.0]}},
+    {"name": "out1", "op": "nullTOP", "pos": [800, 0]}
+  ],
+  "connections": [
+    {"from": "grid1", "to": "noise1", "input": 0},
+    {"from": "render1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

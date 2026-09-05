@@ -82,7 +82,8 @@ Three things worth knowing:
 
 ## Recipe 1 — the tunnel (this is what `tunnel` is)
 
-Nine nodes, no shader. Open it and follow along.
+Nine nodes, no shader. Open it and follow along — or **✦ Recipes → Looks →
+tunnel** on the assistant bar builds it into whatever you have open.
 
 ```
   noise1 ──► wisps1 ──┐
@@ -120,6 +121,8 @@ can:
 
 ## Recipe 2 — displacement
 
+*✦ Recipes → Video → ripple, or cells.*
+
 The Displace TOP pushes one image around using the pixels of another. It is
 the cheapest way to make something look organic rather than computed.
 
@@ -134,6 +137,8 @@ ripples like heat haze. Feed the *feedback loop* through it instead and the
 trails themselves start flowing.
 
 ## Recipe 3 — make it react to something
+
+*✦ Recipes → Audio → audio, or beat for a clock instead of a microphone.*
 
 A visual that reacts is the difference between a wallpaper and a performance.
 Any CHOP channel can drive any parameter — that is what **Export** mode is.
@@ -167,6 +172,9 @@ and everything above works identically.
 
 ## Recipe 4 — steal a shader
 
+*✦ Recipes → Looks → plasma and rings, and Video → glitch, are each one GLSL
+TOP: read the source to see the shape.*
+
 The ceiling of a patch is not the operator list.
 
 - **Paste Shadertoy GLSL.** Set a GLSL TOP's `language` to `glsl` and paste a
@@ -194,6 +202,8 @@ number, the node outlines red, and the last shader that compiled keeps
 running. You can type in a live patch without blacking it out.
 
 ## Recipe 5 — 3D, and instancing
+
+*✦ Recipes → 3D → torus, field (instanced), terrain.*
 
 Wire SOPs → a Geometry COMP, add a Camera and a Light, point a **Render TOP**
 at them. Its output is an ordinary texture, so everything downstream neither

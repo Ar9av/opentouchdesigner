@@ -1,0 +1,43 @@
+{
+  "name": "rings",
+  "group": "Looks",
+  "prompt": "concentric rings pulsing outward from the centre, electric blue on near-black",
+  "needs": "none",
+  "notes": "One GLSL TOP. uniform1.x is speed, uniform1.y is how many rings.",
+  "nodes": [
+    {
+      "name": "rings1",
+      "op": "glslTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;\n    float d = length(uv);\n    float speed = U.p0.x;\n    float count = U.p0.y;\n    float ring = 0.5 + 0.5 * sin(d * count - iTime * speed);\n    ring = pow(ring, 6.0);\n    vec3 dark = vec3(0.05, 0.02, 0.15);\n    vec3 bright = vec3(0.2, 0.9, 1.0);\n    vec3 col = mix(dark, bright, ring) * clamp(1.2 - d, 0.0, 1.0);\n    fragColor = vec4(col, 1.0);\n}\n",
+        "uniform1": [
+          3.0,
+          40.0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        200,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "rings1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

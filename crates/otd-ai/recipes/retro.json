@@ -1,0 +1,18 @@
+{
+  "name": "retro",
+  "group": "Video",
+  "prompt": "make it look like an old 1-bit computer, dithered black and white",
+  "needs": "video",
+  "notes": "Grey it, then dither to two levels with a chunky bayer pattern. dither1.scale is the pixel size.",
+  "nodes": [
+    {"name": "mono1", "op": "monochromeTOP", "pos": [0, 0]},
+    {"name": "dither1", "op": "ditherTOP", "pos": [200, 0], "params": {"levels": 2, "pattern": "bayer4", "scale": 3}},
+    {"name": "out1", "op": "nullTOP", "pos": [400, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "mono1", "input": 0},
+    {"from": "mono1", "to": "dither1", "input": 0},
+    {"from": "dither1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

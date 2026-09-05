@@ -1,0 +1,21 @@
+{
+  "name": "neon",
+  "group": "Video",
+  "prompt": "find the edges of the video and make them glow neon over a dark background",
+  "needs": "video",
+  "notes": "Edges on black, then bloom: blur the edges wide and add them back. blur1.size is the glow radius, edge1.color the neon.",
+  "nodes": [
+    {"name": "edge1", "op": "edgeTOP", "pos": [0, 0], "params": {"strength": 2.0, "color": [0.2, 1.0, 0.8, 1.0]}},
+    {"name": "blur1", "op": "blurTOP", "pos": [200, 160], "params": {"size": 18}},
+    {"name": "glow1", "op": "addTOP", "pos": [400, 0]},
+    {"name": "out1", "op": "nullTOP", "pos": [600, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "edge1", "input": 0},
+    {"from": "edge1", "to": "blur1", "input": 0},
+    {"from": "edge1", "to": "glow1", "input": 0},
+    {"from": "blur1", "to": "glow1", "input": 1},
+    {"from": "glow1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

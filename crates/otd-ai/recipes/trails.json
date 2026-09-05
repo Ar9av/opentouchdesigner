@@ -1,0 +1,78 @@
+{
+  "name": "trails",
+  "group": "Video",
+  "prompt": "give the video long smeary trails that echo behind the movement",
+  "needs": "video",
+  "notes": "The feedback loop as a crossfade: fb1 reads out1's last frame, drift1 zooms it a little, mix1 lays it over the clip at 80% opacity, so every frame is 80% history and 20% now. mix1.opacity is trail length (higher = longer), drift1.scale is how fast they fly.",
+  "nodes": [
+    {
+      "name": "fb1",
+      "op": "feedbackTOP",
+      "pos": [
+        0,
+        160
+      ],
+      "params": {
+        "target": "out1"
+      }
+    },
+    {
+      "name": "drift1",
+      "op": "transformTOP",
+      "pos": [
+        200,
+        160
+      ],
+      "params": {
+        "scale": [
+          1.04,
+          1.04
+        ],
+        "rotate": 0.5
+      }
+    },
+    {
+      "name": "mix1",
+      "op": "compositeTOP",
+      "pos": [
+        400,
+        0
+      ],
+      "params": {
+        "operation": "over",
+        "opacity": 0.8
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        600,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "mix1",
+      "input": 0
+    },
+    {
+      "from": "fb1",
+      "to": "drift1",
+      "input": 0
+    },
+    {
+      "from": "drift1",
+      "to": "mix1",
+      "input": 1
+    },
+    {
+      "from": "mix1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

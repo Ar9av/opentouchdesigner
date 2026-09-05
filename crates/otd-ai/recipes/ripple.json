@@ -1,0 +1,19 @@
+{
+  "name": "ripple",
+  "group": "Video",
+  "prompt": "displace the video with a noise pattern so it ripples",
+  "needs": "video",
+  "notes": "A drifting colour noise is the displacement map: its red and green move each pixel's lookup. displace1.amount is the strength, noise1.period the ripple size.",
+  "nodes": [
+    {"name": "noise1", "op": "noiseTOP", "pos": [0, 160],
+     "params": {"period": 0.15, "monochrome": false}, "expressions": {"translate": "absTime * 0.2"}},
+    {"name": "displace1", "op": "displaceTOP", "pos": [200, 0], "params": {"amount": 0.06}},
+    {"name": "out1", "op": "nullTOP", "pos": [400, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "displace1", "input": 0},
+    {"from": "noise1", "to": "displace1", "input": 1},
+    {"from": "displace1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

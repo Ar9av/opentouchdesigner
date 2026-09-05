@@ -306,14 +306,66 @@ rather than folded into the collapsed "things skipped" list. It is the one
 failure that looks like a success: the node count is right, the notes read
 well, and the picture is black.
 
+## Recipes
+
+Not everybody knows what to type, and a text box with nothing beside it is a
+blank page. **✦ Recipes** on the bar is seventeen ready-made patches in four
+groups — Looks, Video, 3D, Audio — and a click builds one into the network
+you are looking at. No model, no key, no round trip: the plan is in the
+binary and goes through the same `apply` a reply does, so what lands is
+exactly what the assistant would have built had it answered with that. It is
+one undo, like everything else the bar does.
+
+A *Video* recipe goes on whatever TOP you have selected — your clip, your
+camera. With nothing selected a noise generator stands in, so there is still
+a picture, and the message says to drop a movie onto it. The same recipes are
+under **Add Effect → Recipes**, where they behave like any other effect:
+after the selected node. Right-click a recipe instead of clicking it and its
+request lands in the box, for the people who want to change one word before
+sending.
+
+Each recipe is a JSON file in `crates/otd-ai/recipes/`, in exactly the shape
+the model is asked to reply in — a request in plain words, and the plan that
+answers it, with the numbers that actually work. That shape is the point,
+because the same file is read three ways:
+
+- **As a template**, above.
+- **As a worked example for the model.** The two recipes nearest your
+  request are appended to the brief. The brief had always *described* a
+  feedback loop; now it shows one, with `brightness 0.9`, `scale 1.03` and
+  `maximum` filled in, which is what the model was getting wrong half the
+  time.
+- **As a test.** `cargo test -p otd-ai` applies every recipe against the real
+  registry and fails on a single warning, a shader that does not compile, or
+  a path that resolves to nothing. `cargo run -p otd-ai --example vfx_eval --
+  --recipes` cooks each one on the GPU and looks at the pixels: at the time of
+  writing 16 of 17 pass every check, and the seventeenth is `trails`, which
+  the ruler calls still on a slow clip because a crossfade *is* a smoothing
+  filter — the frames show the echoes. A template cannot rot without the
+  build saying so.
+
+Two things fell out of measuring them. `apply` had stopped rewriting a
+Feedback TOP's `target` when the graph renamed on collision — every plan
+that added an `out1` to a network that already had one closed its loop on
+the *old* null and read the raw clip — and the starved-loop warning fired on
+`over` at any opacity, when `over` at 0.8 is a crossfade and the trail that
+works on any footage. Both fixed, and the brief now says so.
+
+To add one, copy a file, change the words and the numbers, and run the tests.
+Prose in the brief is the thing to reach for *after* that, not before.
+
 ## Prompts that work
 
-Concrete and visual beats clever:
+Concrete and visual beats clever. The chips under the box are the recipes'
+own requests, and any of them is a fine first sentence:
 
-- *A slow feedback tunnel in deep blue and gold*
-- *Concentric rings pulsing outward from the centre*
-- *A kaleidoscope over drifting noise, with trails*
-- *Something that reacts to the microphone*
+- *a slow feedback tunnel: sparse bright wisps of noise, tinted cyan to
+  magenta, flying forward*
+- *concentric rings pulsing outward from the centre, electric blue on
+  near-black*
+- *give the video long smeary trails that echo behind the movement*
+- *something that reacts to the microphone: trails that lurch forward on
+  the bass*
 
 The system prompt already carries the taste from [GUIDE.md](GUIDE.md) — that
 motion comes from a loop, that a loop needs contrast rather than a grey wash,

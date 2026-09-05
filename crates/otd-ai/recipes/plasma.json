@@ -1,0 +1,43 @@
+{
+  "name": "plasma",
+  "group": "Looks",
+  "prompt": "a slow plasma of domain-warped noise in deep blue, magenta and a hot gold highlight",
+  "needs": "none",
+  "notes": "One GLSL TOP: fbm of fbm of fbm (domain warping). uniform1.x is the drift speed.",
+  "nodes": [
+    {
+      "name": "plasma1",
+      "op": "glslTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\nfloat vnoise(vec2 p) {\n    vec2 i = floor(p);\n    vec2 f = fract(p);\n    vec2 u = f * f * (3.0 - 2.0 * f);\n    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),\n               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);\n}\nfloat fbm(vec2 p) {\n    float v = 0.0;\n    float a = 0.5;\n    for (int i = 0; i < 5; i++) { v += a * vnoise(p); p *= 2.02; a *= 0.5; }\n    return v;\n}\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 2.5;\n    float t = iTime * U.p0.x;\n    vec2 q = vec2(fbm(uv + vec2(0.0, t)), fbm(uv + vec2(5.2, 1.3 - t)));\n    vec2 r = vec2(fbm(uv + 4.0 * q + vec2(1.7, 9.2) + t), fbm(uv + 4.0 * q + vec2(8.3, 2.8) - t));\n    float f = fbm(uv + 4.0 * r);\n    float shade = clamp(f * f * 3.0, 0.0, 1.0);\n    vec3 col = mix(vec3(0.02, 0.02, 0.09), vec3(0.05, 0.55, 0.85), shade);\n    col = mix(col, vec3(0.85, 0.15, 0.55), clamp(length(q) * 0.9 - 0.15, 0.0, 1.0));\n    col += vec3(1.0, 0.75, 0.35) * pow(clamp(r.x * 1.5, 0.0, 1.0), 4.0) * 1.2;\n    col *= 0.35 + 1.1 * f;\n    fragColor = vec4(col, 1.0);\n}\n",
+        "uniform1": [
+          0.15,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        200,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "plasma1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

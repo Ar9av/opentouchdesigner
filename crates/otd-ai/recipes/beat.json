@@ -1,0 +1,25 @@
+{
+  "name": "beat",
+  "group": "Audio",
+  "prompt": "flash on every beat at 120 bpm, no microphone needed, over drifting noise",
+  "needs": "none",
+  "notes": "A tempo clock instead of a mic: beat1's pulse channel fires trig1's envelope, which is scaled and exported onto level1.brightness. beat1.tempo is the BPM; trig1.decay how fast each flash fades.",
+  "nodes": [
+    {"name": "beat1", "op": "beatCHOP", "pos": [0, 200], "params": {"tempo": 120}},
+    {"name": "pulse", "op": "selectCHOP", "pos": [200, 200], "params": {"channels": "pulse", "rename": "flash"}},
+    {"name": "trig1", "op": "triggerCHOP", "pos": [400, 200], "params": {"attack": 0.02, "decay": 0.35, "sustain": 0.0, "release": 0.1}},
+    {"name": "flash", "op": "mathCHOP", "pos": [600, 200], "params": {"gain": 1.6, "offset": 0.7}},
+    {"name": "noise1", "op": "noiseTOP", "pos": [0, 0],
+     "params": {"period": 0.3, "monochrome": false}, "expressions": {"translate": "absTime * 0.1"}},
+    {"name": "level1", "op": "levelTOP", "pos": [400, 0], "exports": {"brightness": "flash:flash"}},
+    {"name": "out1", "op": "nullTOP", "pos": [800, 0]}
+  ],
+  "connections": [
+    {"from": "beat1", "to": "pulse", "input": 0},
+    {"from": "pulse", "to": "trig1", "input": 0},
+    {"from": "trig1", "to": "flash", "input": 0},
+    {"from": "noise1", "to": "level1", "input": 0},
+    {"from": "level1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

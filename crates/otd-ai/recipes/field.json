@@ -1,0 +1,36 @@
+{
+  "name": "field",
+  "group": "3D",
+  "prompt": "a field of hundreds of small glowing spheres in 3d, rippling like a wave",
+  "needs": "none",
+  "notes": "Instancing: every sample of the merged CHOP is one sphere. pattern_x/pattern_z lay out a 16x16 grid, pattern_y is a sine whose phase moves, so the grid ripples. pattern_y.amplitude is wave height.",
+  "nodes": [
+    {"name": "pattern_x", "op": "patternCHOP", "pos": [0, 300],
+     "params": {"name": "tx", "type": "triangle", "length": 256, "periods": 16, "amplitude": 6.0, "offset": -3.0}},
+    {"name": "pattern_z", "op": "patternCHOP", "pos": [0, 420],
+     "params": {"name": "tz", "type": "ramp", "length": 256, "periods": 1, "amplitude": 6.0, "offset": -3.0}},
+    {"name": "pattern_y", "op": "patternCHOP", "pos": [0, 540],
+     "params": {"name": "ty", "type": "sine", "length": 256, "periods": 5, "amplitude": 0.6},
+     "expressions": {"phase": "absTime * 0.25"}},
+    {"name": "grid_pos", "op": "mergeCHOP", "pos": [200, 360]},
+    {"name": "instances", "op": "mergeCHOP", "pos": [400, 420]},
+    {"name": "sphere1", "op": "sphereSOP", "pos": [0, 0], "params": {"radius": 0.12, "rows": 8, "columns": 10}},
+    {"name": "mat1", "op": "pbrMAT", "pos": [0, 140], "params": {"basecolor": [0.35, 0.75, 1.0, 1.0], "roughness": 0.25, "metallic": 0.6, "emit": 0.4}},
+    {"name": "geo1", "op": "geometryCOMP", "pos": [600, 0],
+     "params": {"sop": "sphere1", "material": "mat1", "instancing": true, "instancechop": "instances"},
+     "expressions": {"rotate": "[0.0, absTime * 10.0, 0.0]"}},
+    {"name": "cam1", "op": "cameraCOMP", "pos": [600, 140], "params": {"translate": [0.0, 4.0, 9.0], "lookat": "geo1"}},
+    {"name": "light1", "op": "lightCOMP", "pos": [600, 280], "params": {"translate": [4.0, 6.0, 3.0], "intensity": 1.3}},
+    {"name": "render1", "op": "renderTOP", "pos": [800, 0],
+     "params": {"geometry": "geo1", "camera": "cam1", "light": "light1", "background": [0.02, 0.02, 0.04, 1.0]}},
+    {"name": "out1", "op": "nullTOP", "pos": [1000, 0]}
+  ],
+  "connections": [
+    {"from": "pattern_x", "to": "grid_pos", "input": 0},
+    {"from": "pattern_z", "to": "grid_pos", "input": 1},
+    {"from": "grid_pos", "to": "instances", "input": 0},
+    {"from": "pattern_y", "to": "instances", "input": 1},
+    {"from": "render1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

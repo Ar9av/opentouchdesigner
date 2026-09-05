@@ -1,0 +1,16 @@
+{
+  "name": "toon",
+  "group": "Video",
+  "prompt": "make the video look like a cartoon with flat colours and black outlines",
+  "needs": "video",
+  "notes": "toonTOP does both halves: bands the luminance and inks the edges. toon1.bands is how flat, toon1.edge is how heavy the ink.",
+  "nodes": [
+    {"name": "toon1", "op": "toonTOP", "pos": [0, 0], "params": {"bands": 4, "edge": 3, "saturation": 1.5}},
+    {"name": "out1", "op": "nullTOP", "pos": [200, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "toon1", "input": 0},
+    {"from": "toon1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

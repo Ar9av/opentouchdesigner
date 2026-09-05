@@ -336,6 +336,24 @@ pub fn effects_menu(app: &mut OtdApp, ui: &mut egui::Ui) {
             }
         });
     }
+    // Whole chains, not one operator: the video recipes wire from the
+    // selected node the same way a single effect does.
+    ui.separator();
+    ui.menu_button("Recipes", |ui| {
+        for recipe in otd_ai::recipes::all()
+            .iter()
+            .filter(|r| r.needs == otd_ai::recipes::Needs::Video)
+        {
+            if ui
+                .button(&recipe.name)
+                .on_hover_text(&recipe.prompt)
+                .clicked()
+            {
+                crate::assistant::apply_recipe(app, recipe);
+                ui.close();
+            }
+        }
+    });
 }
 
 /// The file dialog for one operator's file parameter, filtered to what that

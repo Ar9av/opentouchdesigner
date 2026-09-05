@@ -20,6 +20,7 @@ pub mod cli;
 pub mod keys;
 pub mod patch;
 pub mod provider;
+pub mod recipes;
 pub mod vision;
 
 pub use keys::{Key, Keys};
@@ -87,6 +88,14 @@ pub fn request_for(ask: &Ask) -> Request {
     };
 
     let mut system = patch::system_prompt(ask.registry);
+    // Two recipes nearest the request, as worked examples. The brief
+    // describes a feedback loop; this shows one with the numbers in.
+    let has_source = ask
+        .graph
+        .children(ask.parent)
+        .iter()
+        .any(|id| ask.graph.node(*id).family == otd_core::Family::Top);
+    system += &recipes::examples_for(prompt, has_source);
     if !ask.allow_delete {
         system += patch::NO_DELETE_RULE;
     }

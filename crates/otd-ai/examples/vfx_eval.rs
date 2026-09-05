@@ -26,6 +26,12 @@
 //!     cargo run -p otd-ai --example vfx_eval -- --only glitch,smoke
 //!     cargo run -p otd-ai --example vfx_eval -- --provider anthropic --repeat 2
 //!     cargo run -p otd-ai --example vfx_eval -- --save /tmp/out
+//!     cargo run -p otd-ai --example vfx_eval -- --recipes
+//!
+//! `--recipes` cooks the shipped recipes instead of asking a model: no key,
+//! no money, and the same ruler. They are the ground truth the model's plans
+//! are measured against, and one that fails here is a template that builds
+//! a broken patch.
 //!
 //! `--save` writes each patch as a `.otd`, so anything that scores badly can
 //! be opened in the editor and looked at rather than guessed about.
@@ -62,14 +68,8 @@ const PROMPTS: &[(&str, &str)] = &[
         "toon",
         "make the video look like a cartoon with flat colours and black outlines",
     ),
-    (
-        "smoke",
-        "make the video dissolve into drifting smoke",
-    ),
-    (
-        "cells",
-        "break the video up into cracked glass cells",
-    ),
+    ("smoke", "make the video dissolve into drifting smoke"),
+    ("cells", "break the video up into cracked glass cells"),
     (
         "displace",
         "displace the video with a noise pattern so it ripples",
@@ -99,6 +99,7 @@ fn main() {
     let mut only: Vec<String> = Vec::new();
     let mut repeat = 1usize;
     let mut save: Option<String> = None;
+    let mut use_recipes = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -119,6 +120,7 @@ fn main() {
             }
             "--repeat" => repeat = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
             "--save" => save = args.next(),
+            "--recipes" => use_recipes = true,
             other => eprintln!("ignoring `{other}`"),
         }
     }
@@ -135,7 +137,18 @@ fn main() {
         let _ = std::fs::create_dir_all(dir);
     }
 
-    println!("assistant: {} ({})", provider.label(), provider.default_model());
+    if use_recipes {
+        println!(
+            "recipes:   {} shipped, no model",
+            otd_ai::recipes::all().len()
+        );
+    } else {
+        println!(
+            "assistant: {} ({})",
+            provider.label(),
+            provider.default_model()
+        );
+    }
     println!("clip:      {clip}\n");
     println!(
         "{:<11} {:>5} {:>6} {:>7} {:>7}  {}",
@@ -150,7 +163,19 @@ fn main() {
     let mut passes = 0usize;
     let mut runs = 0usize;
 
-    for (name, prompt) in PROMPTS {
+    // Either the prompts, answered by a model, or the recipes, answered by
+    // themselves. Same columns, same verdicts.
+    let cases: Vec<(&str, &str, Option<&otd_ai::recipes::Recipe>)> = if use_recipes {
+        otd_ai::recipes::all()
+            .iter()
+            .map(|r| (r.name.as_str(), r.prompt.as_str(), Some(r)))
+            .collect()
+    } else {
+        PROMPTS.iter().map(|(n, p)| (*n, *p, None)).collect()
+    };
+    let repeat = if use_recipes { 1 } else { repeat };
+
+    for (name, prompt, recipe) in cases {
         if !only.is_empty() && !only.iter().any(|n| n == name) {
             continue;
         }
@@ -159,38 +184,63 @@ fn main() {
             let (mut graph, source) = clip_patch(&reg, &clip);
             let root = graph.root();
 
-            let ask = Ask {
-                provider,
-                model: provider.default_model().to_string(),
-                prompt: prompt.to_string(),
-                image: None,
-                graph: &graph,
-                parent: root,
-                selected: Some(source),
-                registry: &reg,
-                allow_delete: true,
-                scope: &[],
-            };
-            let request = otd_ai::request_for(&ask);
-            let reply =
-                match otd_ai::complete_with_repair(&request, &key, &keys, Some(check_shader)) {
-                    Ok(r) => r,
+            let plan = if let Some(recipe) = recipe {
+                match recipe.plan(&reg) {
+                    Ok(mut plan) => {
+                        otd_ai::recipes::with_source(&mut plan, "movie1");
+                        plan
+                    }
                     Err(e) => {
-                        println!("{name:<11} {:>5} {:>6} {:>7} {:>7}  CALL FAILED {e}", "-", "-", "-", "-");
+                        println!(
+                            "{name:<11} {:>5} {:>6} {:>7} {:>7}  PLAN REJECTED {e}",
+                            "-", "-", "-", "-"
+                        );
                         continue;
                     }
+                }
+            } else {
+                let ask = Ask {
+                    provider,
+                    model: provider.default_model().to_string(),
+                    prompt: prompt.to_string(),
+                    image: None,
+                    graph: &graph,
+                    parent: root,
+                    selected: Some(source),
+                    registry: &reg,
+                    allow_delete: true,
+                    scope: &[],
                 };
-            let plan = match otd_ai::plan_from_reply(&reply.text, &reg) {
-                Ok(p) => p,
-                Err(e) => {
-                    println!("{name:<11} {:>5} {:>6} {:>7} {:>7}  PLAN REJECTED {e}", "-", "-", "-", "-");
-                    continue;
+                let request = otd_ai::request_for(&ask);
+                let reply =
+                    match otd_ai::complete_with_repair(&request, &key, &keys, Some(check_shader)) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            println!(
+                                "{name:<11} {:>5} {:>6} {:>7} {:>7}  CALL FAILED {e}",
+                                "-", "-", "-", "-"
+                            );
+                            continue;
+                        }
+                    };
+                match otd_ai::plan_from_reply(&reply.text, &reg) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        println!(
+                            "{name:<11} {:>5} {:>6} {:>7} {:>7}  PLAN REJECTED {e}",
+                            "-", "-", "-", "-"
+                        );
+                        continue;
+                    }
                 }
             };
             let (applied, viewer) = match patch::apply(&mut graph, root, &reg, &plan) {
                 Ok(v) => v,
                 Err(e) => {
-                    println!("{name:<11} {:>5} {:>6} {:>7} {:>7}  APPLY FAILED {e}", "-", "-", "-", "-");
+                    println!(
+                        "{name:<11} {:>5} {:>6} {:>7} {:>7}  APPLY FAILED {e}",
+                        "-", "-", "-", "-"
+                    );
                     continue;
                 }
             };
@@ -401,14 +451,11 @@ fn measure(
     )
 }
 
-fn read(
-    gpu: &GpuContext,
-    engines: &Engines,
-    graph: &Graph,
-    id: NodeId,
-) -> Option<Vec<u8>> {
+fn read(gpu: &GpuContext, engines: &Engines, graph: &Graph, id: NodeId) -> Option<Vec<u8>> {
     let tex = engines.top.output(graph, id)?.clone();
-    otd_gpu::read_pixels_rgba8(gpu, &tex).ok().map(|(_, _, p)| p)
+    otd_gpu::read_pixels_rgba8(gpu, &tex)
+        .ok()
+        .map(|(_, _, p)| p)
 }
 
 fn mean_luma(pixels: &[u8]) -> f64 {
@@ -424,7 +471,9 @@ fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
     if n == 0 {
         return 0.0;
     }
-    let sum: f64 = (0..n).map(|i| (a[i] as i32 - b[i] as i32).abs() as f64).sum();
+    let sum: f64 = (0..n)
+        .map(|i| (a[i] as i32 - b[i] as i32).abs() as f64)
+        .sum();
     sum / n as f64
 }
 
@@ -450,7 +499,10 @@ fn dangling_refs(graph: &Graph, created: &[String]) -> Vec<String> {
 }
 
 fn first_words(text: &str) -> String {
-    text.split_whitespace().take(6).collect::<Vec<_>>().join(" ")
+    text.split_whitespace()
+        .take(6)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn check_shader(source: &str, is_glsl: bool) -> Result<(), String> {

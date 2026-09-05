@@ -25,8 +25,9 @@ use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{Color32, RichText};
+use otd_ai::recipes::{self, Needs, Recipe};
 use otd_ai::{Ask, Keys, Provider, cli, patch};
-use otd_core::NodeId;
+use otd_core::{Family, NodeId};
 
 use crate::app::OtdApp;
 
@@ -341,12 +342,16 @@ fn model_label(model: &str) -> &str {
 
 /// A handful of prompts that produce something worth looking at, for the
 /// blank-page problem. A chat box with no examples is a chat box nobody uses.
-const SUGGESTIONS: &[&str] = &[
-    "A slow feedback tunnel in deep blue and gold",
-    "Concentric rings pulsing outward from the centre",
-    "A kaleidoscope over drifting noise, with trails",
-    "Something that reacts to the microphone",
-];
+/// One recipe's request per group, pasted into the box on a click. They
+/// are the recipes' own prompts, so a chip and the template behind it can
+/// never disagree about what the words mean.
+fn suggestions() -> Vec<&'static str> {
+    recipes::groups()
+        .into_iter()
+        .filter_map(|g| recipes::all().iter().find(|r| r.group == g))
+        .map(|r| r.prompt.as_str())
+        .collect()
+}
 
 /// The floating bar over the canvas.
 ///
@@ -405,9 +410,11 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
     // The hint changes when a picture is attached, because what the box is
     // for changes: with a reference, typing nothing is a complete request and
     // whatever you do type is a correction to it.
-    let hint = match app.assistant.image.is_some() {
-        true => "Enter to build this image — or say what to change about it…",
-        false => "Describe a patch, and it gets built here…",
+    let empty = app.graph.children(app.current).is_empty();
+    let hint = match (app.assistant.image.is_some(), empty) {
+        (true, _) => "Enter to build this image — or say what to change about it…",
+        (false, true) => "Describe a patch — or pick a ✦ Recipe to start from…",
+        (false, false) => "Describe a patch, and it gets built here…",
     };
     let edit = ui.add(
         egui::TextEdit::multiline(&mut app.assistant.prompt)
@@ -441,6 +448,7 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
             app.assistant.open = true;
         }
 
+        recipes_menu(app, ui);
         attachment_row(app, ui);
 
         // The model chip, as in every chat UI: provider and model in one
@@ -875,8 +883,8 @@ fn prompt_section(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
 
     ui.horizontal_wrapped(|ui| {
-        for suggestion in SUGGESTIONS {
-            if ui.small_button(*suggestion).clicked() {
+        for suggestion in suggestions() {
+            if ui.small_button(suggestion).clicked() {
                 app.assistant.prompt = suggestion.to_string();
             }
         }
@@ -1143,11 +1151,29 @@ fn poll(app: &mut OtdApp) {
         app.assistant.warnings.push(skipped);
     }
 
+    // A shader that survived the repair round still broken would otherwise
+    // be a red node and a silently black output.
+    let broken = patch::extract_json(&text)
+        .map(|json| patch::shader_problems(&json, check_shader))
+        .unwrap_or_default();
+    if land(app, &plan, broken) {
+        if let Some(repair) = repaired {
+            app.assistant
+                .status
+                .push_str(&format!(" · {}", repair.label()));
+        }
+    }
+}
+
+/// Build a plan into the network and report what happened — the half of
+/// the job that is the same whether the plan came from a model or a recipe.
+/// Returns whether it applied.
+fn land(app: &mut OtdApp, plan: &patch::Plan, broken: Vec<(String, String)>) -> bool {
     // One checkpoint, before anything is created, so the whole patch undoes
     // as the single thing it was.
     app.edit("assistant");
     let current = app.current;
-    match patch::apply(&mut app.graph, current, &app.registry, &plan) {
+    match patch::apply(&mut app.graph, current, &app.registry, plan) {
         Ok((applied, viewer)) => {
             if let Some(viewer) = viewer {
                 app.viewer = Some(viewer);
@@ -1189,31 +1215,126 @@ fn poll(app: &mut OtdApp) {
             // Anything the model built and then forgot to join on. The nodes
             // are real and they cook; saying so beats leaving them to be
             // found.
-            let loose = patch::dangling(&plan);
+            let loose = patch::dangling(plan);
             if !loose.is_empty() {
                 app.assistant.warnings.push(format!(
                     "created but wired to nothing: {}",
                     loose.join(", ")
                 ));
             }
-            // A shader that survived the repair round still broken would
-            // otherwise be a red node and a silently black output.
-            if let Ok(json) = patch::extract_json(&text) {
-                app.assistant.broken = patch::shader_problems(&json, check_shader);
-            }
-            if let Some(repair) = repaired {
-                app.assistant
-                    .status
-                    .push_str(&format!(" · {}", repair.label()));
-            }
+            app.assistant.broken = broken;
             app.assistant.last = Some(if plan.notes.trim().is_empty() {
                 "Built.".to_string()
             } else {
                 plan.notes.clone()
             });
+            true
         }
-        Err(e) => app.assistant.error = Some(e),
+        Err(e) => {
+            app.assistant.error = Some(e);
+            false
+        }
     }
+}
+
+/// Build a recipe into the network you are looking at. No model, no key,
+/// no round trip: the plan is in the binary and `apply` is the same one a
+/// reply goes through, so what you get is exactly what the assistant would
+/// have built had it answered with this.
+pub fn apply_recipe(app: &mut OtdApp, recipe: &'static Recipe) {
+    app.assistant.error = None;
+    app.assistant.warnings.clear();
+    app.assistant.broken.clear();
+    app.assistant.last = None;
+    app.assistant.status.clear();
+
+    let mut plan = match recipe.plan(&app.registry) {
+        Ok(plan) => plan,
+        Err(e) => {
+            app.assistant.error = Some(format!("recipe {}: {e}", recipe.name));
+            return;
+        }
+    };
+
+    // A video recipe goes on whatever TOP is selected. With nothing selected
+    // it still has to build something you can see, so a generator stands in
+    // and the message says how to swap it for a clip.
+    let mut aside = String::new();
+    if recipe.needs == Needs::Video {
+        let source = app
+            .selected
+            .filter(|id| app.graph.contains(*id))
+            .filter(|id| app.graph.node(*id).family == Family::Top)
+            .map(|id| app.graph.node(id).name.clone());
+        match source {
+            Some(name) => recipes::with_source(&mut plan, &name),
+            None => {
+                recipes::stand_in_source(&mut plan);
+                aside = format!(
+                    " Noise is standing in for the clip: drop a movie onto {}, \
+                     or select your clip first next time.",
+                    recipes::SOURCE
+                );
+            }
+        }
+    }
+
+    // Land it in clear canvas, to the right of everything already there and
+    // level with the selection, rather than on top of the last patch.
+    let children = app.graph.children(app.current);
+    let right = children
+        .iter()
+        .map(|id| app.graph.node(*id).pos[0])
+        .fold(None, |m: Option<f32>, x| Some(m.map_or(x, |m| m.max(x))));
+    let level = app
+        .selected
+        .filter(|id| app.graph.contains(*id))
+        .map(|id| app.graph.node(id).pos[1])
+        .or_else(|| children.first().map(|id| app.graph.node(*id).pos[1]));
+    if let (Some((lo, _)), Some(right)) = (plan.bounds(), right) {
+        let dx = right + crate::canvas::NODE_W + 80.0 - lo[0];
+        let dy = level.unwrap_or(lo[1]) - lo[1];
+        plan.offset(dx, dy);
+    }
+
+    let broken = patch::shader_problems(recipe.value(), check_shader);
+    if land(app, &plan, broken) {
+        app.assistant.status = format!("{} · {}", recipe.name, app.assistant.status);
+        if let Some(last) = &mut app.assistant.last {
+            last.push_str(&aside);
+        }
+    }
+}
+
+/// The recipe picker: click builds it, right-click puts its request in the
+/// box for people who want to change a word first.
+fn recipes_menu(app: &mut OtdApp, ui: &mut egui::Ui) {
+    ui.menu_button("✦ Recipes", |ui| {
+        for group in recipes::groups() {
+            ui.menu_button(group, |ui| {
+                for recipe in recipes::all().iter().filter(|r| r.group == group) {
+                    let row = ui.button(&recipe.name).on_hover_text(&recipe.prompt);
+                    if row.clicked() {
+                        apply_recipe(app, recipe);
+                        ui.close();
+                    } else if row.secondary_clicked() {
+                        app.assistant.prompt = recipe.prompt.clone();
+                        ui.close();
+                    }
+                }
+            });
+        }
+        ui.separator();
+        ui.label(
+            RichText::new(
+                "Click: built here, no model needed. Right-click: its request, in the box to edit.",
+            )
+            .weak()
+            .small(),
+        );
+    })
+    .response
+    .on_hover_text("Ready-made patches — the same ones the assistant learns from");
 }
 
 #[cfg(test)]
@@ -1310,7 +1431,7 @@ mod tests {
     fn the_suggestions_are_prompts_rather_than_labels() {
         // They are pasted into the box verbatim, so each has to read as a
         // request on its own.
-        for s in SUGGESTIONS {
+        for s in suggestions() {
             assert!(s.len() > 20, "{s}");
             assert!(!s.ends_with('.'), "{s}");
         }

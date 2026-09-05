@@ -1,0 +1,24 @@
+{
+  "name": "smoke",
+  "group": "Video",
+  "prompt": "make the video dissolve into drifting smoke",
+  "needs": "video",
+  "notes": "A flow loop: fb1 reads last frame, flow1 advects it along curl noise, decay1 dims it, mix1 folds a dimmed clip back in with maximum. flow1.amount is how far it drifts per frame.",
+  "nodes": [
+    {"name": "dim1", "op": "levelTOP", "pos": [0, 0], "params": {"brightness": 0.5}},
+    {"name": "fb1", "op": "feedbackTOP", "pos": [0, 160], "params": {"target": "out1"}},
+    {"name": "flow1", "op": "flowTOP", "pos": [200, 160], "params": {"amount": 8, "scale": 3, "speed": 0.3}},
+    {"name": "decay1", "op": "levelTOP", "pos": [400, 160], "params": {"brightness": 0.96}},
+    {"name": "mix1", "op": "compositeTOP", "pos": [600, 0], "params": {"operation": "maximum"}},
+    {"name": "out1", "op": "nullTOP", "pos": [800, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "dim1", "input": 0},
+    {"from": "dim1", "to": "mix1", "input": 0},
+    {"from": "fb1", "to": "flow1", "input": 0},
+    {"from": "flow1", "to": "decay1", "input": 0},
+    {"from": "decay1", "to": "mix1", "input": 1},
+    {"from": "mix1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

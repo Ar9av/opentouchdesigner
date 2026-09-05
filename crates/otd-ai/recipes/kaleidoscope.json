@@ -1,0 +1,19 @@
+{
+  "name": "kaleidoscope",
+  "group": "Video",
+  "prompt": "turn the video into a kaleidoscope that slowly rotates",
+  "needs": "video",
+  "notes": "Spin the clip, then fold it radially. mirror1.segments is how many wedges; spin1.rotate is the turn.",
+  "nodes": [
+    {"name": "spin1", "op": "transformTOP", "pos": [0, 0],
+     "params": {"extend": "mirror"}, "expressions": {"rotate": "absTime * 8.0"}},
+    {"name": "mirror1", "op": "mirrorTOP", "pos": [200, 0], "params": {"mode": "radial", "segments": 8}},
+    {"name": "out1", "op": "nullTOP", "pos": [400, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "spin1", "input": 0},
+    {"from": "spin1", "to": "mirror1", "input": 0},
+    {"from": "mirror1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

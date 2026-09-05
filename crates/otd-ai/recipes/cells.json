@@ -1,0 +1,22 @@
+{
+  "name": "cells",
+  "group": "Video",
+  "prompt": "break the video up into cracked glass cells",
+  "needs": "video",
+  "notes": "One voronoi drives a displace (each cell shifts the clip), a second draws the cracks and is added on top. cells1.scale is the cell count.",
+  "nodes": [
+    {"name": "cells1", "op": "voronoiTOP", "pos": [0, 160], "params": {"scale": 10, "speed": 0.1, "output": "distance"}},
+    {"name": "cracks1", "op": "voronoiTOP", "pos": [0, 320], "params": {"scale": 10, "speed": 0.1, "output": "edges"}},
+    {"name": "displace1", "op": "displaceTOP", "pos": [200, 0], "params": {"amount": 0.08, "sourcex": "r", "sourcey": "r"}},
+    {"name": "comp1", "op": "compositeTOP", "pos": [400, 0], "params": {"operation": "add", "opacity": 0.6}},
+    {"name": "out1", "op": "nullTOP", "pos": [600, 0]}
+  ],
+  "connections": [
+    {"from": "source1", "to": "displace1", "input": 0},
+    {"from": "cells1", "to": "displace1", "input": 1},
+    {"from": "displace1", "to": "comp1", "input": 0},
+    {"from": "cracks1", "to": "comp1", "input": 1},
+    {"from": "comp1", "to": "out1", "input": 0}
+  ],
+  "viewer": "out1"
+}

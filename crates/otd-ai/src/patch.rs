@@ -46,6 +46,29 @@ pub struct Plan {
     pub warnings: Vec<String>,
 }
 
+impl Plan {
+    /// Move every node the plan creates, so a recipe authored around the
+    /// origin can land in clear canvas.
+    pub fn offset(&mut self, dx: f32, dy: f32) {
+        for node in &mut self.nodes {
+            node.pos[0] += dx;
+            node.pos[1] += dy;
+        }
+    }
+
+    /// The box the plan's nodes occupy: `(min, max)`, or nothing if it
+    /// creates none.
+    pub fn bounds(&self) -> Option<([f32; 2], [f32; 2])> {
+        let first = self.nodes.first()?.pos;
+        Some(self.nodes.iter().fold((first, first), |(lo, hi), n| {
+            (
+                [lo[0].min(n.pos[0]), lo[1].min(n.pos[1])],
+                [hi[0].max(n.pos[0]), hi[1].max(n.pos[1])],
+            )
+        }))
+    }
+}
+
 /// A change to an operator that already exists.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlannedSet {
@@ -442,16 +465,24 @@ WHAT MAKES A GOOD-LOOKING PATCH
   the source might as well not be wired in. If in doubt leave `blacklevel`
   at 0 and simply dim the source — that always works.
 
-- THE COMPOSITE THAT CLOSES A FEEDBACK LOOP MUST NOT BE `over`. A
-  compositeTOP's inputs are `base` then `over`, and input 1 is drawn over
-  input 0. Video and most generators are fully opaque, so `over` means input
-  1 wins outright and input 0 contributes NOTHING. Wire the source to input 0
-  and the feedback to input 1 with the default operation and you have built a
-  loop the source cannot get into: it looks right for about a second, then
-  the decay eats what was already circulating and the whole thing fades to
-  black. Use `add`, `screen` or `maximum`, all of which let both sides
-  through. This is the single most common way a generated feedback patch
-  dies, and it dies slowly enough to look fine at first.
+- THE COMPOSITE THAT CLOSES A FEEDBACK LOOP MUST NOT BE `over` AT FULL
+  OPACITY. A compositeTOP's inputs are `base` then `over`, and input 1 is
+  drawn over input 0. Video and most generators are fully opaque, so `over`
+  means input 1 wins outright and input 0 contributes NOTHING. Wire the
+  source to input 0 and the feedback to input 1 with the default operation
+  and you have built a loop the source cannot get into: it looks right for
+  about a second, then the decay eats what was already circulating and the
+  whole thing fades to black. This is the single most common way a
+  generated feedback patch dies, and it dies slowly enough to look fine at
+  first. Two constructions work:
+  - `over` with `opacity` 0.8-0.9 on the composite. That is a crossfade —
+    85% of last frame, 15% of this one — so the source gets in every frame,
+    nothing runs away, and it works on ANY footage, bright or dark. No
+    separate decay levelTOP is needed; the opacity IS the decay. This is the
+    trail to reach for on a clip or a camera.
+  - `add`, `screen` or `maximum`, which let both sides through, with the
+    care about brightness described above. `maximum` is safe but on bright
+    footage the trail hides behind the picture, so dim the source first.
   A feedbackTOP has NO INPUTS — it reads through `target`, so never list a
   connection into one. Wiring `x -> feedback1` is rejected as an input index
   out of range and the loop silently does not close.
@@ -1079,13 +1110,28 @@ pub fn apply(
     // pointed the Render TOP at `cam1` when the node had become `/cam1`, and
     // rendered an empty frame. `is_path_ref` is the registry's own marker for
     // these, so operators added later are covered without a list here.
+    //
+    // Plus the two that are deliberately *not* path refs: a Feedback TOP's
+    // `target` and a Select TOP's `top`. A path ref is a cook dependency, and
+    // a Feedback TOP that depends on its own target is the cycle the
+    // previous-frame read exists to avoid — so they hold a name and the
+    // engine resolves it relatively. That is fine until the graph renames on
+    // collision: a plan that adds `out1` to a network that already has one
+    // gets `out2`, and a `target` still saying `out1` points at the old
+    // null, which reads the raw clip and the loop never closes. The `is_path_ref`
+    // refactor dropped the rewrite these two used to get; this puts it back.
     let touched: Vec<NodeId> = made.values().copied().collect();
     for id in touched {
+        let op_type = graph.node(id).op_type.clone();
+        let by_name = |key: &str| {
+            (op_type == "feedbackTOP" && key == "target")
+                || (op_type == "selectTOP" && key == "top")
+        };
         let refs: Vec<(String, String)> = graph
             .node(id)
             .params
             .iter()
-            .filter(|(_, p)| p.is_path_ref())
+            .filter(|(key, p)| p.is_path_ref() || by_name(key))
             .map(|(key, p)| (key.clone(), p.value.as_str()))
             .collect();
         for (key, value) in refs {
@@ -1313,6 +1359,19 @@ fn starved_loops(graph: &Graph, made: &BTreeMap<String, NodeId>) -> Vec<String> 
         let operation = operation_param.value.as_str();
         // Empty means the default, which is `over`.
         if !(operation.is_empty() || operation.eq_ignore_ascii_case("over")) {
+            continue;
+        }
+        // `over` at less than full opacity is a crossfade — `0.85 * last
+        // frame + 0.15 * this one` — which is the classic trail and lets the
+        // source in every frame. Only an opaque `over` seals the loop.
+        let opacity = node
+            .param("opacity")
+            .and_then(|p| match p.value {
+                Value::Float(f) => Some(f),
+                _ => None,
+            })
+            .unwrap_or(1.0);
+        if opacity < 0.999 {
             continue;
         }
         // Input 0 has to be carrying something, or there is nothing to hide.
@@ -2280,16 +2339,62 @@ pub fn shader_problems(value: &serde_json::Value, check: ShaderCheck) -> Vec<(St
     problems
 }
 
+/// Path parameters on the named nodes that point at nothing, as
+/// `node.key=value`.
+///
+/// No warning covers this and the symptom is a black texture: a Render TOP
+/// whose `camera` is a name that never became a path renders an empty frame
+/// and reports nothing. The scenario and vfx harnesses print it as
+/// `DANGLING REF`; this is the same check for anything else that applies a
+/// plan.
+pub fn unresolved_refs(graph: &Graph, parent: NodeId, names: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in names {
+        let Some(id) = graph.find_from(parent, name) else {
+            continue;
+        };
+        for (key, p) in &graph.node(id).params {
+            if !p.is_path_ref() {
+                continue;
+            }
+            let v = p.value.as_str();
+            if !v.trim().is_empty() && graph.find_from(id, v.trim()).is_none() {
+                out.push(format!("{name}.{key}={v}"));
+            }
+        }
+    }
+    out
+}
+
 /// Nodes a plan creates that nothing reads and nothing looks at.
 ///
 /// A model asked to add to a patch will sometimes build a whole second chain
 /// and forget to join it on. The nodes are real, they cook, and they do
 /// nothing — worth saying so rather than leaving them to be found.
 pub fn dangling(plan: &Plan) -> Vec<String> {
+    // Not everything is read by a wire. A Render TOP reads its camera, light
+    // and geometry by name in a parameter; a Geometry COMP reads its SOP and
+    // MAT the same way; an export reads a CHOP as `node:channel`. Counting
+    // only wires called every camera in every 3D plan "wired to nothing",
+    // which is a warning about the one part of the patch that was right.
+    let named: Vec<&str> = plan
+        .nodes
+        .iter()
+        .flat_map(|n| {
+            n.params
+                .values()
+                .filter_map(|v| match v {
+                    Value::Str(s) => Some(s.trim().trim_start_matches('/')),
+                    _ => None,
+                })
+                .chain(n.exports.values().filter_map(|e| e.split(':').next()))
+        })
+        .collect();
     plan.nodes
         .iter()
         .filter(|node| {
-            let read = plan.connections.iter().any(|w| w.from == node.name);
+            let read = plan.connections.iter().any(|w| w.from == node.name)
+                || named.contains(&node.name.as_str());
             let viewed = plan.viewer.as_deref() == Some(node.name.as_str());
             // A node that feeds nothing and is not the output. Feedback is
             // exempt: it is read by its `target`, not by a wire.
