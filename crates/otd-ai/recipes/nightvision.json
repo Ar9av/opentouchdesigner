@@ -1,0 +1,49 @@
+{
+  "name": "nightvision",
+  "group": "Camera",
+  "prompt": "give my webcam a green night vision look with grain scanlines and a dark vignette",
+  "needs": "video",
+  "notes": "A stylistic green grade, not enhanced sensor sensitivity. night1.uniform1.x is exposure; uniform1.y is grain strength. The image still comes from the selected camera.",
+  "nodes": [
+    {
+      "name": "night1",
+      "op": "glslTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "uniform1": [
+          1.5,
+          0.05,
+          0,
+          0
+        ],
+        "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n vec2 uv=fragCoord/iResolution.xy;\n vec3 src=texture(iChannel0,uv).rgb;\n float l=dot(src,vec3(0.2126,0.7152,0.0722));\n float grain=fract(sin(dot(floor(fragCoord)+floor(iTime*24.0),vec2(12.9898,78.233)))*43758.5453)-0.5;\n float v=1.0-smoothstep(0.3,0.75,length(uv-0.5));\n float scan=0.9+0.1*sin(fragCoord.y*1.6);\n l=clamp(l*U.p0.x+grain*U.p0.y,0.0,1.0);\n fragColor=vec4(vec3(0.09,1.0,0.25)*l*v*scan,1.0);\n}"
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        240,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "night1",
+      "input": 0
+    },
+    {
+      "from": "night1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

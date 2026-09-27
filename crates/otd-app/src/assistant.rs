@@ -74,6 +74,11 @@ pub struct Assistant {
     /// A still to work back from. With one attached the prompt is optional:
     /// pointing at a picture is a complete request.
     pub image: Option<otd_ai::Image>,
+    /// What that image is — a reference, a camera frame, or a look at the
+    /// result — which picks the brief it goes out with.
+    pub seen: otd_ai::Seen,
+    /// The camera loop, while one is running. See `crate::watch`.
+    pub watch: Option<crate::watch::Watch>,
     /// The thumbnail, uploaded once and dropped whenever the image changes.
     /// Rebuilding a texture every frame is how a 96-pixel preview becomes a
     /// performance problem.
@@ -138,6 +143,8 @@ impl Default for Assistant {
             scope_selection: false,
             scoped_to: Vec::new(),
             image: None,
+            seen: otd_ai::Seen::Reference,
+            watch: None,
             image_tex: None,
             bar_rect: egui::Rect::NOTHING,
             keys,
@@ -207,6 +214,7 @@ impl Assistant {
         match otd_ai::Image::load(path) {
             Ok(image) => {
                 self.image = Some(image);
+                self.seen = otd_ai::Seen::Reference;
                 self.image_tex = None;
                 self.error = None;
             }
@@ -216,6 +224,7 @@ impl Assistant {
 
     pub fn detach(&mut self) {
         self.image = None;
+        self.seen = otd_ai::Seen::Reference;
         self.image_tex = None;
     }
 
@@ -371,6 +380,12 @@ fn suggestions() -> Vec<&'static str> {
 /// anywhere; `Escape` collapses it to a pill; the pill clicks back open. It
 /// is hidden entirely in perform mode, where the window is the show.
 pub fn bar(app: &mut OtdApp, ctx: &egui::Context) {
+    // Before anything that might return early: a hidden bar still watches.
+    poll(app);
+    crate::watch::tick(app);
+    if app.assistant.watch.is_some() {
+        ctx.request_repaint();
+    }
     if app.perform {
         return;
     }
@@ -386,8 +401,6 @@ pub fn bar(app: &mut OtdApp, ctx: &egui::Context) {
     if !app.assistant.bar {
         return;
     }
-
-    poll(app);
 
     if app.assistant.collapsed {
         collapsed_pill(app, ctx);
@@ -461,6 +474,20 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
 
         recipes_menu(app, ui);
         attachment_row(app, ui);
+
+        let watching = app.assistant.watch.is_some();
+        if ui
+            .selectable_label(watching, "Watch")
+            .on_hover_text(
+                "Turn the camera on, show the assistant what it sees and build an \
+                 effect for it — then it looks at the result and fixes it once if \
+                 it is black, blown out, frozen or unchanged. Anything typed is \
+                 taken as direction (\"make it moody\"). Click again to stop.",
+            )
+            .clicked()
+        {
+            crate::watch::toggle(app);
+        }
 
         // The model chip, as in every chat UI: provider and model in one
         // place, because they are one decision.
@@ -567,7 +594,12 @@ fn bar_contents(app: &mut OtdApp, ui: &mut egui::Ui) {
     });
 
     // ---- one line of what happened, so the bar answers on its own
-    if let Some(error) = &app.assistant.error {
+    if let Some(watch) = &app.assistant.watch {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(RichText::new(watch.label()).small().weak());
+        });
+    } else if let Some(error) = &app.assistant.error {
         ui.label(
             RichText::new(one_line(error))
                 .small()
@@ -999,10 +1031,16 @@ fn local_command(app: &mut OtdApp) -> bool {
             app.assistant.status = said.clone();
             app.assistant.last = Some(said);
         }
+        "/watch" => {
+            // Whatever follows the command is direction for the effect.
+            app.assistant.prompt = line["/watch".len()..].trim().to_string();
+            crate::watch::toggle(app);
+        }
         "/help" => {
             app.assistant.prompt.clear();
             app.assistant.last = Some(
                 "/clear empties the network you are looking at (one undo).\n\
+                 /watch [direction] turns the camera on and builds an effect for what it sees.\n\
                  /help is this.\n\
                  Anything not starting with a slash is a request for the model."
                     .into(),
@@ -1016,7 +1054,7 @@ fn local_command(app: &mut OtdApp) -> bool {
 }
 
 /// Build the request here, where the graph is, and hand it to a worker.
-fn send(app: &mut OtdApp) {
+pub(crate) fn send(app: &mut OtdApp) {
     app.assistant.error = None;
     app.assistant.warnings.clear();
     app.assistant.broken.clear();
@@ -1067,6 +1105,7 @@ fn send(app: &mut OtdApp) {
             model: app.assistant.model.clone(),
             prompt: app.assistant.prompt.clone(),
             image: app.assistant.image.clone(),
+            seen: app.assistant.seen.clone(),
             graph: &app.graph,
             parent: app.current,
             selected: app.selected,
@@ -1078,7 +1117,12 @@ fn send(app: &mut OtdApp) {
         &app.assistant.conversation,
     );
     app.assistant.submitted_prompt = if app.assistant.prompt.trim().is_empty() {
-        "Build from the attached reference image".into()
+        match app.assistant.seen {
+            otd_ai::Seen::Reference => "Build from the attached reference image",
+            otd_ai::Seen::Camera => "Make the live camera look striking",
+            otd_ai::Seen::Result(_) => "Fix what the result was measured doing wrong",
+        }
+        .into()
     } else {
         app.assistant.prompt.clone()
     };

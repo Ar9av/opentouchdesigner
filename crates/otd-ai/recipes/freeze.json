@@ -1,0 +1,69 @@
+{
+  "name": "freeze",
+  "prompt": "freeze my webcam while I hold the F key and resume when I release it",
+  "notes": "Hold F to freeze, release to return live. keys1.keys chooses the trigger key; live1 converts held=1 into cache active=0. cache1.active can also be set manually after removing the export.",
+  "nodes": [
+    {
+      "name": "keys1",
+      "op": "keyboardinCHOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "keys": "f"
+      }
+    },
+    {
+      "name": "live1",
+      "op": "mathCHOP",
+      "pos": [
+        220,
+        180
+      ],
+      "params": {
+        "gain": -1,
+        "offset": 1
+      }
+    },
+    {
+      "name": "cache1",
+      "op": "cacheTOP",
+      "pos": [
+        440,
+        0
+      ],
+      "exports": {
+        "active": "live1:f"
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "cache1",
+      "input": 0
+    },
+    {
+      "from": "keys1",
+      "to": "live1",
+      "input": 0
+    },
+    {
+      "from": "cache1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "group": "Camera",
+  "needs": "video",
+  "viewer": "out1"
+}

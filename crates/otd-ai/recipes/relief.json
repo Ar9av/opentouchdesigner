@@ -1,0 +1,61 @@
+{
+  "name": "relief",
+  "group": "Camera",
+  "prompt": "make my camera look like a metallic embossed relief lit from the side",
+  "needs": "video",
+  "notes": "Embossed image relief, not inferred 3D depth. relief1.direction changes the apparent light direction; relief1.strength sets relief depth; relief1.mix brings back source colour.",
+  "nodes": [
+    {
+      "name": "soft1",
+      "op": "blurTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "size": 2
+      }
+    },
+    {
+      "name": "relief1",
+      "op": "embossTOP",
+      "pos": [
+        220,
+        0
+      ],
+      "params": {
+        "direction": 45,
+        "width": 2,
+        "strength": 3,
+        "mix": 0.15
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        440,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "soft1",
+      "input": 0
+    },
+    {
+      "from": "soft1",
+      "to": "relief1",
+      "input": 0
+    },
+    {
+      "from": "relief1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

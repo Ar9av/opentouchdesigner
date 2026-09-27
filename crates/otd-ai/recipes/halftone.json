@@ -1,0 +1,48 @@
+{
+  "name": "halftone",
+  "group": "Camera",
+  "prompt": "print my camera as a halftone dot screen on paper, like a newspaper photo",
+  "needs": "video",
+  "notes": "A rotated grid of ink dots whose size follows darkness. halftone1.uniform1.x is the dot spacing in pixels, .y the screen angle in degrees (45 is the newspaper default), .z tints the ink with the camera's colour.",
+  "nodes": [
+    {
+      "name": "halftone1",
+      "op": "glslTOP",
+      "pos": [
+        220,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    float cell = max(U.p0.x, 3.0);\n    float a = radians(U.p0.y);\n    mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));\n    mat2 back = mat2(cos(a), sin(a), -sin(a), cos(a));\n    vec2 p = rot * fragCoord;\n    vec2 centre = (floor(p / cell) + 0.5) * cell;\n    vec3 src = texture(iChannel0, (back * centre) / iResolution.xy).rgb;\n    float l = dot(src, vec3(0.2126, 0.7152, 0.0722));\n    float radius = sqrt(clamp(1.0 - l, 0.0, 1.0)) * cell * 0.72;\n    float ink = 1.0 - smoothstep(radius - 1.0, radius + 1.0, length(p - centre));\n    vec3 paper = vec3(0.96, 0.93, 0.86);\n    vec3 inkc = mix(vec3(0.07, 0.06, 0.12), src * 0.6, U.p0.z);\n    fragColor = vec4(mix(paper, inkc, ink), 1.0);\n}\n",
+        "uniform1": [
+          9.0,
+          45.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        440,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "halftone1",
+      "input": 0
+    },
+    {
+      "from": "halftone1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

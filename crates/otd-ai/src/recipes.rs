@@ -64,6 +64,19 @@ pub struct Recipe {
 const HEADER: &[&str] = &["name", "group", "prompt", "needs"];
 
 const FILES: &[&str] = &[
+    include_str!("../recipes/blobhud.json"),
+    include_str!("../recipes/ascii.json"),
+    include_str!("../recipes/halftone.json"),
+    include_str!("../recipes/pointcloud.json"),
+    include_str!("../recipes/blobfollow.json"),
+    include_str!("../recipes/datamosh.json"),
+    include_str!("../recipes/greenscreen.json"),
+    include_str!("../recipes/nightvision.json"),
+    include_str!("../recipes/relief.json"),
+    include_str!("../recipes/mosaic.json"),
+    include_str!("../recipes/watercolour.json"),
+    include_str!("../recipes/freeze.json"),
+    include_str!("../recipes/audiocamera.json"),
     include_str!("../recipes/motionpaint.json"),
     include_str!("../recipes/slitscan.json"),
     include_str!("../recipes/thermal.json"),
@@ -309,9 +322,64 @@ pub fn examples_for(prompt: &str, has_source: bool) -> String {
     out
 }
 
+/// Looks that read at a glance on a live camera, strongest first. The Watch
+/// brief shows two of these in full and names the rest.
+pub const CAMERA_LOOKS: &[&str] = &[
+    "blobhud", "ascii", "halftone", "pointcloud", "neon", "thermal", "datamosh",
+    "glitch", "kaleidoscope", "motionpaint", "toon", "nightvision",
+];
+
+/// Worked examples for a request made of a camera frame rather than words.
+///
+/// Word matching finds nothing in an empty prompt, and without examples a
+/// model asked to "make it cool" improvises faint trails over a subject that
+/// is standing still. So: every known-good camera look by name, and two of
+/// them in full — the ones the typed direction points at if there is one,
+/// otherwise a pair that moves along with `turn`, so asking twice does not
+/// give the same answer twice.
+pub fn camera_examples(prompt: &str, turn: usize) -> String {
+    let matched = examples_for(prompt, true);
+    let mut out = String::from(
+        "\n\nKNOWN-GOOD CAMERA LOOKS\nEach of these is tested on real footage. Build one of them, \
+         or combine two, adapted to what you see; name which in `notes`.\n",
+    );
+    for name in CAMERA_LOOKS {
+        if let Some(r) = find(name) {
+            out.push_str(&format!("- {name}: {}\n", r.prompt));
+        }
+    }
+    if !matched.is_empty() {
+        return out + &matched;
+    }
+    out.push_str(
+        "\n\nWORKED EXAMPLES\nTwo of those, exactly as applied. `source1` is the camera \
+         already on the canvas: use its real name and never create one. Wire into the \
+         existing out1 rather than adding a second.\n",
+    );
+    for k in 0..2 {
+        let name = CAMERA_LOOKS[(turn * 2 + k) % CAMERA_LOOKS.len()];
+        if let Some(r) = find(name) {
+            out.push_str(&format!("\nREQUEST: {}\nPLAN: {}\n", r.prompt, r.json));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_examples_name_real_recipes_and_rotate() {
+        for name in CAMERA_LOOKS {
+            assert!(find(name).is_some(), "{name}");
+        }
+        let (a, b) = (camera_examples("", 0), camera_examples("", 1));
+        assert!(a.contains("- blobhud:") && a.contains("PLAN:"));
+        assert_ne!(a, b, "asking twice shows different worked examples");
+        // Typed direction picks the examples.
+        assert!(camera_examples("newspaper halftone", 0).contains(&find("halftone").unwrap().json));
+    }
 
     #[test]
     fn every_file_parses_and_names_are_unique() {

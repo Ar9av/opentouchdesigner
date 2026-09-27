@@ -1084,6 +1084,132 @@ fn cook_delay(c: &mut ChopCtx) -> ChopData {
     ChopData::new(channels, input.sample_rate, input.time_sliced)
 }
 
+// ---------------------------------------------------------------- trail
+
+fn params_trail() -> IndexMap<String, Param> {
+    params! {
+        "window" => Param::float(2.0).with_label("Window (s)").with_range(0.05, 60.0),
+    }
+}
+
+/// The last `window` seconds of every channel, oldest first, as one buffer.
+///
+/// The ring lives in the float scratch like Delay's, but the output is the
+/// whole history rather than one late sample — which is what a waveform
+/// line or a per-sample instance layout wants to draw.
+fn cook_trail(c: &mut ChopCtx) -> ChopData {
+    let input = c.input(0).clone();
+    let rate = input.sample_rate.max(1.0);
+    // ponytail: 65536 samples per channel caps a 48 kHz trail at ~1.4 s.
+    let len = ((c.f("window") as f64 * rate).round() as usize).clamp(2, 1 << 16);
+    let needed = input.num_channels() * len;
+    if c.state.f.len() != needed {
+        c.state.f = vec![0.0; needed];
+        c.state.i = vec![0; input.num_channels().max(1)];
+    }
+    let mut channels = Vec::with_capacity(input.num_channels());
+    for (ci, ch) in input.channels.iter().enumerate() {
+        let ring = &mut c.state.f[ci * len..(ci + 1) * len];
+        let mut head = c.state.i[ci] as usize;
+        for x in &ch.samples {
+            ring[head] = *x;
+            head = (head + 1) % len;
+        }
+        c.state.i[ci] = head as i64;
+        let samples = ring[head..].iter().chain(&ring[..head]).copied().collect();
+        channels.push(Channel::new(ch.name.clone(), samples));
+    }
+    ChopData::new(channels, input.sample_rate, false)
+}
+
+// --------------------------------------------------------------- spring
+
+fn params_spring() -> IndexMap<String, Param> {
+    params! {
+        "spring" => Param::float(80.0).with_label("Spring Constant").with_range(0.0, 1000.0),
+        "damping" => Param::float(6.0).with_label("Damping").with_range(0.0, 100.0),
+    }
+}
+
+/// Follow the input like a mass on a spring: overshoot, wobble, settle.
+///
+/// Unlike Lag this keeps moving after the input stops, so it has to cook
+/// every frame. Position is `state.f`, velocity is `state.prev`, and
+/// `state.i` marks a channel as started so the first cook begins at rest on
+/// the input instead of flying in from zero.
+fn cook_spring(c: &mut ChopCtx) -> ChopData {
+    let input = c.input(0).clone();
+    let dt = 1.0 / input.sample_rate.max(1.0) as f32;
+    let (k, d) = (c.f("spring").max(0.0), c.f("damping").max(0.0));
+    c.state.fit(input.num_channels());
+    let mut channels = Vec::with_capacity(input.num_channels());
+    for (ci, ch) in input.channels.iter().enumerate() {
+        if c.state.i[ci] == 0 {
+            c.state.f[ci] = ch.samples.first().copied().unwrap_or(0.0);
+            c.state.prev[ci] = 0.0;
+            c.state.i[ci] = 1;
+        }
+        let (mut y, mut v) = (c.state.f[ci], c.state.prev[ci]);
+        let samples = ch
+            .samples
+            .iter()
+            .map(|x| {
+                // Semi-implicit Euler: stable for the stiffness range offered.
+                v += (k * (x - y) - d * v) * dt;
+                y += v * dt;
+                y
+            })
+            .collect();
+        (c.state.f[ci], c.state.prev[ci]) = (y, v);
+        channels.push(Channel::new(ch.name.clone(), samples));
+    }
+    ChopData::new(channels, input.sample_rate, input.time_sliced)
+}
+
+// ------------------------------------------------------------------ fan
+
+fn params_fan() -> IndexMap<String, Param> {
+    params! {
+        "operation" => Param::menu("fanout", &["fanout", "fanin"]).with_label("Operation"),
+        "channels" => Param::int(4).with_label("Channels (fan out)").with_range(1.0, 64.0),
+    }
+}
+
+/// Fan out: one index channel becomes `chan0..chanN-1`, 1 where the rounded
+/// index matches. Fan in: many channels become `chan1`, the index of the
+/// first one above zero, or -1 when none is.
+fn cook_fan(c: &mut ChopCtx) -> ChopData {
+    let input = c.input(0).clone();
+    let n = input.channels.first().map_or(1, |ch| ch.samples.len()).max(1);
+    let channels = if c.menu("operation") == 0 {
+        let count = c.i("channels").clamp(1, 64) as usize;
+        let index = input.channels.first();
+        (0..count)
+            .map(|k| {
+                let samples = (0..n)
+                    .map(|s| {
+                        let v = index.and_then(|ch| ch.samples.get(s)).copied().unwrap_or(-1.0);
+                        if v.round() == k as f32 { 1.0 } else { 0.0 }
+                    })
+                    .collect();
+                Channel::new(format!("chan{k}"), samples)
+            })
+            .collect()
+    } else {
+        let samples = (0..n)
+            .map(|s| {
+                input
+                    .channels
+                    .iter()
+                    .position(|ch| ch.samples.get(s).is_some_and(|v| *v > 0.0))
+                    .map_or(-1.0, |i| i as f32)
+            })
+            .collect();
+        vec![Channel::new("chan1", samples)]
+    };
+    ChopData::new(channels, input.sample_rate, input.time_sliced)
+}
+
 // ----------------------------------------------------------- expression
 
 fn params_expression() -> IndexMap<String, Param> {
@@ -1649,6 +1775,90 @@ fn cook_panel(c: &mut ChopCtx) -> ChopData {
 
 // -------------------------------------------------------- DAT to CHOP
 
+fn params_particles() -> IndexMap<String, Param> {
+    params! {
+        "count" => Param::int(256).with_label("Particle Count").with_range(1.0, 4096.0),
+        "emitx" => Param::float(0.5).with_label("Emitter X (0..1)").with_range(0.0, 1.0),
+        "emity" => Param::float(0.5).with_label("Emitter Y (0..1, down)").with_range(0.0, 1.0),
+        "speed" => Param::float(0.2).with_label("Speed (frame widths/s)").with_range(0.0, 2.0),
+        "gravity" => Param::float(0.2).with_label("Downward Acceleration").with_range(-2.0, 2.0),
+        "lifetime" => Param::float(2.0).with_label("Lifetime (s)").with_range(0.1, 20.0),
+        "active" => Param::bool(true).with_label("Emit"),
+        "reset" => Param::bool(false).with_label("Reset"),
+    }
+}
+
+fn cook_particles(c: &mut ChopCtx) -> ChopData {
+    let n = c.i("count").clamp(1, 4096) as usize;
+    let lifetime = c.f("lifetime").clamp(0.1, 20.0);
+    let (emitx, emity, speed, gravity) = (c.f("emitx"), c.f("emity"), c.f("speed"), c.f("gravity"));
+    let active = c.b("active");
+    let rewind = c.state.prev.first().is_some_and(|t| c.time.abs_time < *t as f64);
+    if c.state.f.len() != n * 5 || c.b("reset") || rewind {
+        c.state.f = vec![0.0; n * 5];
+        for p in c.state.f.chunks_mut(5) { p[4] = lifetime; }
+        c.state.i = vec![0; n];
+    }
+    c.state.prev = vec![c.time.abs_time as f32];
+    let dt = c.time.dt.clamp(0.0, 0.1) as f32;
+    let mut output: [Vec<f32>; 5] = std::array::from_fn(|_| Vec::with_capacity(n));
+    for i in 0..n {
+        let p = &mut c.state.f[i * 5..i * 5 + 5];
+        if p[4] >= lifetime && active {
+            c.state.i[i] += 1;
+            let seed = (i as u32).wrapping_mul(747796405)
+                .wrapping_add(c.state.i[i] as u32 * 2891336453u32.wrapping_div(4));
+            let angle = (seed % 65536) as f32 / 65536.0 * std::f32::consts::TAU;
+            p[0] = emitx; p[1] = emity;
+            p[2] = angle.cos() * speed; p[3] = angle.sin() * speed;
+            p[4] = if c.state.i[i] == 1 { lifetime * i as f32 / n as f32 } else { 0.0 };
+        }
+        if p[4] < lifetime {
+            p[0] += p[2] * dt;
+            p[1] += p[3] * dt + 0.5 * gravity * dt * dt;
+            p[3] += gravity * dt;
+            p[4] += dt;
+        }
+        let life = (1.0 - p[4] / lifetime).clamp(0.0, 1.0);
+        output[0].push((p[0] - 0.5) * 6.0);
+        output[1].push((0.5 - p[1]) * 6.0);
+        output[2].push(0.0);
+        output[3].push(life);
+        output[4].push(life);
+    }
+    ChopData::new(["tx", "ty", "tz", "size", "life"].into_iter()
+        .zip(output).map(|(name, samples)| Channel::new(name, samples)).collect(), CONTROL_RATE, false)
+}
+
+fn params_blobtrack() -> IndexMap<String, Param> {
+    params! {
+        "threshold" => Param::float(0.5).with_label("Luminance Threshold").with_range(0.0, 1.0),
+        "minarea" => Param::float(0.002).with_label("Minimum Frame Fraction").with_range(0.0, 1.0),
+    }
+}
+
+fn cook_blobtrack(c: &mut ChopCtx) -> ChopData {
+    let blob = match c.foreign(0) {
+        Some(Crossing::Pixels { width, height, rgba }) => crate::tracking::largest(
+            *width as usize, *height as usize, rgba, c.f("threshold"), c.f("minarea")),
+        _ => crate::tracking::Blob::default(),
+    };
+    let present = blob.count > 0;
+    let previous = c.state.prev.as_slice();
+    let velocity = if present && previous.len() == 3 && previous[2] > 0.0 {
+        let dt = c.time.dt.max(0.000001) as f32;
+        [(blob.x - previous[0]) / dt, (blob.y - previous[1]) / dt]
+    } else { [0.0, 0.0] };
+    c.state.prev = vec![blob.x, blob.y, if present {1.0} else {0.0}];
+    ChopData::new([
+        ("present", if present {1.0} else {0.0}), ("count", blob.count as f32),
+        ("x", blob.x), ("y", blob.y), ("area", blob.area),
+        ("width", blob.width), ("height", blob.height),
+        ("vx", velocity[0]), ("vy", velocity[1]),
+    ].into_iter().map(|(name, value)| Channel::constant(name, value, 1)).collect(),
+        CONTROL_RATE, false)
+}
+
 fn params_dat_to() -> IndexMap<String, Param> {
     params! {
         "layout" => Param::menu("columns", &["columns", "rows"])
@@ -1788,7 +1998,7 @@ fn cook_sop_to_chop(c: &mut ChopCtx) -> ChopData {
 fn params_top_to() -> IndexMap<String, Param> {
     params! {
         "active" => Param::bool(true).with_label("Active"),
-        "layout" => Param::menu("rows", &["rows", "columns", "average"])
+        "layout" => Param::menu("rows", &["rows", "columns", "average", "image"])
             .with_label("Read"),
         "index" => Param::int(0)
             .with_label("Row / Column")
@@ -1843,6 +2053,30 @@ fn cook_top_to_chop(c: &mut ChopCtx) -> ChopData {
                 *out = (0..h).map(|y| at(x, y, comp)).collect();
             }
         }
+        // Every pixel, top row first, plus where it is: `u` across and `v`
+        // up, centred on zero with `u` spanning the aspect ratio. Named so a
+        // Geometry COMP can instance straight off it — tx=u, ty=v, tz=g is a
+        // luma-displaced point cloud of the picture with no other operator.
+        3 => {
+            // ponytail: 16384 pixels (128x128) caps the per-frame CPU copy;
+            // a GPU instancing path is the upgrade.
+            if w * h > 1 << 14 {
+                return ChopData::empty();
+            }
+            for (comp, out) in samples.iter_mut().enumerate() {
+                *out = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| at(x, y, comp)).collect();
+            }
+            let aspect = w as f32 / h as f32;
+            let (u, v): (Vec<f32>, Vec<f32>) = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| (
+                    ((x as f32 + 0.5) / w as f32 - 0.5) * aspect,
+                    0.5 - (y as f32 + 0.5) / h as f32,
+                ))
+                .unzip();
+            samples.push(u);
+            samples.push(v);
+        }
         // The whole image as one number per component.
         _ => {
             let n = (w * h) as f32;
@@ -1856,7 +2090,7 @@ fn cook_top_to_chop(c: &mut ChopCtx) -> ChopData {
         }
     }
 
-    let names = ["r", "g", "b", "a"];
+    let names = ["r", "g", "b", "a", "u", "v"];
     let channels = samples
         .into_iter()
         .enumerate()
@@ -1877,6 +2111,15 @@ fn specs() -> &'static Vec<ChopSpec> {
     static SPECS: OnceLock<Vec<ChopSpec>> = OnceLock::new();
     SPECS.get_or_init(|| {
         let mut v = vec![
+            spec_animated(
+                "particleCHOP", "Particle", &[],
+                "Stateful 2D particle emitter with velocity, gravity, lifetime and respawn. \
+                 tx/ty/tz are instance positions (6 scene units across); size/life fade to zero. \
+                 Emitter coordinates are normalized, origin top-left. Connect via geometryCOMP.instancechop; \
+                 set sx/sy/sz to size. Active stops births; existing particles finish. \
+                 Reset clears the simulation. CPU, at most 4096 particles; dt capped at 0.1s; no collisions or flocking.",
+                params_particles, cook_particles,
+            ),
             spec(
                 "constantCHOP",
                 "Constant",
@@ -2022,6 +2265,33 @@ fn specs() -> &'static Vec<ChopSpec> {
                 cook_delay,
             ),
             spec_animated(
+                "trailCHOP",
+                "Trail",
+                &["in"],
+                "The last few seconds of each channel as one buffer, oldest sample first — \
+                 draw a waveform, or lay out one instance per sample.",
+                params_trail,
+                cook_trail,
+            ),
+            spec_animated(
+                "springCHOP",
+                "Spring",
+                &["in"],
+                "Follow a channel like a mass on a spring: overshoot, wobble, then settle. \
+                 Raise damping to stop the wobble; raise the spring constant to follow faster.",
+                params_spring,
+                cook_spring,
+            ),
+            spec(
+                "fanCHOP",
+                "Fan",
+                &["in"],
+                "Fan out an index channel to one on/off channel per value (chan0..chanN-1), \
+                 or fan many channels in to the index of the first one above zero (-1 if none).",
+                params_fan,
+                cook_fan,
+            ),
+            spec_animated(
                 "expressionCHOP",
                 "Expression",
                 &["in"],
@@ -2137,10 +2407,26 @@ fn specs() -> &'static Vec<ChopSpec> {
             // anything, and the source is a moving picture by assumption.
             {
                 let mut s = converter_spec(
+                    "blobtrackCHOP", "Blob Track", Family::Top,
+                    "Largest connected bright region. Channels: present, count, x, y, area, width, height, vx, vy. \
+                     Coordinates and sizes are 0..1, origin top-left; velocity is frame-fractions/second. \
+                     CPU readback of last frame; downsample to 160x90 first. \
+                     Not person recognition or persistent identity: switching largest regions can jump. \
+                     A missing/empty input returns zero channels values.",
+                    params_blobtrack, cook_blobtrack,
+                );
+                s.def.time_dependent = true;
+                s
+            },
+            {
+                let mut s = converter_spec(
                     "toptochopCHOP",
                     "TOP to CHOP",
                     Family::Top,
-                    "Pixels as channels. Reads last frame; costs a GPU sync.",
+                    "Pixels as channels r g b a. `image` reads every pixel (top row first, at most \
+                     128x128) and adds u/v positions, centred, v up — instance a Geometry COMP with \
+                     tx=u ty=v tz=g for a camera point cloud. Reads last frame; costs a GPU sync, \
+                     so put a Resolution TOP in front.",
                     params_top_to,
                     cook_top_to_chop,
                 );

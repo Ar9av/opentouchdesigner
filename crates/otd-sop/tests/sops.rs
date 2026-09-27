@@ -425,3 +425,94 @@ fn blending_shapes_of_different_sizes_moves_every_point() {
         .count();
     assert_eq!(stuck, 0, "{stuck} of {n_a} points never made it to input B");
 }
+
+#[test]
+fn a_twist_turns_the_top_of_a_column_and_leaves_its_root() {
+    let mut p = Patch::new();
+    let line = p.add("lineSOP", "line1");
+    p.set(line, "from", Value::Vec3([1.0, 0.0, 0.0]));
+    p.set(line, "to", Value::Vec3([1.0, 2.0, 0.0]));
+    let tw = p.add("twistSOP", "twist1");
+    p.graph.connect(line, tw, 0).unwrap();
+    p.set(tw, "strength", Value::Float(90.0));
+    p.run(tw);
+    let pts = &p.geo(tw).points;
+    let (root, top) = (pts[0].position, pts[pts.len() - 1].position);
+    assert!((root[0] - 1.0).abs() < 1e-5 && root[2].abs() < 1e-5, "root untouched: {root:?}");
+    // length 2, strength 90 at y=2 is a quarter turn about Y: x=1 goes to z.
+    assert!(top[0].abs() < 1e-4 && (top[2].abs() - 1.0).abs() < 1e-4, "top turned: {top:?}");
+    assert!((top[1] - 2.0).abs() < 1e-5, "height kept");
+}
+
+#[test]
+fn a_bend_keeps_the_length_of_the_axis() {
+    let mut p = Patch::new();
+    let line = p.add("lineSOP", "line1");
+    p.set(line, "from", Value::Vec3([0.0, 0.0, 0.0]));
+    p.set(line, "to", Value::Vec3([0.0, 2.0, 0.0]));
+    p.set(line, "points", Value::Int(64));
+    let tw = p.add("twistSOP", "twist1");
+    p.graph.connect(line, tw, 0).unwrap();
+    p.set(tw, "operation", Value::Str("bend".into()));
+    p.set(tw, "strength", Value::Float(180.0));
+    p.run(tw);
+    let pts = &p.geo(tw).points;
+    let arc: f32 = pts
+        .windows(2)
+        .map(|w| {
+            let d = [0, 1, 2].map(|k| w[1].position[k] - w[0].position[k]);
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        })
+        .sum();
+    assert!((arc - 2.0).abs() < 0.01, "bending does not stretch: {arc}");
+    let top = pts[pts.len() - 1].position;
+    // A half turn over length 2 is a semicircle of radius 2/pi: back at y=0.
+    assert!(top[1].abs() < 1e-3, "curled back down: {top:?}");
+}
+
+#[test]
+fn facet_makes_normals_follow_a_displaced_surface() {
+    let mut p = Patch::new();
+    let grid = p.add("gridSOP", "grid1");
+    let tw = p.add("twistSOP", "twist1");
+    p.graph.connect(grid, tw, 0).unwrap();
+    // Taper along X scales Y and Z: the grid stays flat, so normals stay +Z.
+    p.set(tw, "axis", Value::Str("x".into()));
+    p.set(tw, "operation", Value::Str("taper".into()));
+    p.set(tw, "strength", Value::Float(100.0));
+    let smooth = p.add("facetSOP", "facet1");
+    p.graph.connect(tw, smooth, 0).unwrap();
+    p.run(smooth);
+    let g = p.geo(smooth);
+    for pt in &g.points {
+        let n = pt.normal;
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        assert!((len - 1.0).abs() < 1e-4, "unit normals: {n:?}");
+        assert!(n[2] > 0.99, "a flat grid stays facing +Z after taper: {n:?}");
+    }
+
+    let unique = p.add("facetSOP", "facet2");
+    p.graph.connect(grid, unique, 0).unwrap();
+    p.set(unique, "mode", Value::Str("unique".into()));
+    p.run(unique);
+    let (g, grid_geo) = (p.geo(unique), p.geo(grid));
+    assert_eq!(g.points.len(), grid_geo.indices.len(), "one point per corner");
+    assert!(g.indices.is_empty());
+}
+
+#[test]
+fn facet_fixes_the_stale_normals_noise_leaves_behind() {
+    let mut p = Patch::new();
+    let grid = p.add("gridSOP", "grid1");
+    p.set(grid, "rows", Value::Int(32));
+    p.set(grid, "columns", Value::Int(32));
+    let noise = p.add("noiseSOP", "noise1");
+    p.graph.connect(grid, noise, 0).unwrap();
+    p.set(noise, "amplitude", Value::Float(1.0));
+    let facet = p.add("facetSOP", "facet1");
+    p.graph.connect(noise, facet, 0).unwrap();
+    p.run(facet);
+    assert!(p.geo(noise).points.iter().all(|pt| pt.normal == [0.0, 0.0, 1.0]));
+    let tilted = p.geo(facet).points.iter().filter(|pt| pt.normal[2] < 0.95).count();
+    assert!(tilted > 50, "recomputed normals tilt with the bumps: {tilted}");
+}

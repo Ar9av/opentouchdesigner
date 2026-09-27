@@ -1,0 +1,84 @@
+{
+  "name": "greenscreen",
+  "group": "Camera",
+  "prompt": "replace my camera green screen with a glowing animated purple portal",
+  "needs": "video",
+  "notes": "Requires an actual green background. key1.key chooses the backdrop colour; key1.tolerance and softness tune the cutout. background1.uniform1.x controls the portal speed. The camera is composited over the portal using its keyed alpha.",
+  "nodes": [
+    {
+      "name": "key1",
+      "op": "chromakeyTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "tolerance": 0.2,
+        "softness": 0.12,
+        "despill": 0.8
+      }
+    },
+    {
+      "name": "background1",
+      "op": "glslTOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "language": "glsl",
+        "uniform1": [
+          0.3,
+          0,
+          0,
+          0
+        ],
+        "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n vec2 p = (fragCoord - 0.5*iResolution.xy)/iResolution.y;\n float r = length(p); float a = atan(p.y,p.x);\n float bands = pow(0.5+0.5*sin(38.0*r-3.0*a-iTime*U.p0.x*10.0),4.0);\n vec3 c = mix(vec3(0.02,0.005,0.08),vec3(0.65,0.08,1.0),bands);\n fragColor=vec4(c,1.0);\n}"
+      }
+    },
+    {
+      "name": "portal1",
+      "op": "compositeTOP",
+      "pos": [
+        240,
+        0
+      ],
+      "params": {
+        "operation": "over",
+        "opacity": 1
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        480,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "key1",
+      "input": 0
+    },
+    {
+      "from": "background1",
+      "to": "portal1",
+      "input": 0
+    },
+    {
+      "from": "key1",
+      "to": "portal1",
+      "input": 1
+    },
+    {
+      "from": "portal1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

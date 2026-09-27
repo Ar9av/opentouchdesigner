@@ -1541,8 +1541,35 @@ macro_rules! blend_top {
     };
 }
 
+fn params_optical_flow() -> IndexMap<String, Param> {
+    params! {
+        "gain" => Param::float(1.0).with_label("Vector Gain").with_range(0.0, 20.0),
+        "regularization" => Param::float(0.0001).with_label("Noise Regularization").with_range(0.000001, 0.1),
+        "maxmotion" => Param::float(4.0).with_label("Maximum Motion (px/frame)").with_range(0.1, 16.0),
+    }
+}
+
+fn pack_optical_flow(n: &Node, c: &EvalContext) -> PackedParams {
+    [[f(n, c, "gain"), f(n, c, "regularization"), f(n, c, "maxmotion"), 0.0],
+        [0.0; 4], [0.0; 4], [0.0; 4]]
+}
+
 fn extra_specs() -> Vec<TopSpec> {
     vec![
+        filter_top!(
+            "opticalflowTOP",
+            "Optical Flow",
+            "Local Lucas-Kanade motion from previous (input 2) to current (input 1). \
+             RG = 0.5 + gain * motion in UV/frame; B is clamped pixel magnitude divided by maxmotion. \
+             Feed a Feedback TOP targeting the source into input 2. Use matching input sizes. \
+             Estimates small translations with a 5x5 window; large motion, flat areas and changing lighting are unreliable. \
+             Lower the input resolution to reduce displacement in pixels. No pyramid or body tracking.",
+            &["current", "previous"],
+            include_str!("shaders/opticalflow.wgsl"),
+            Sizing::Input0,
+            params_optical_flow,
+            pack_optical_flow,
+        ),
         filter_top!(
             "monochromeTOP",
             "Monochrome",

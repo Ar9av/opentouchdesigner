@@ -1,0 +1,152 @@
+{
+  "name": "audiocamera",
+  "prompt": "make my webcam pulse and echo to the microphone while staying visible in silence",
+  "notes": "Actual microphone RMS is smoothed and mapped into brightness 0.85–1.4. response1.gain controls sensitivity; lag1.lagdown controls release; echo1.opacity controls the camera trail. Silence keeps the camera visible.",
+  "nodes": [
+    {
+      "name": "mic1",
+      "op": "audiodeviceinCHOP",
+      "pos": [
+        0,
+        240
+      ]
+    },
+    {
+      "name": "rms1",
+      "op": "analyzeCHOP",
+      "pos": [
+        220,
+        240
+      ],
+      "params": {
+        "function": "rms"
+      }
+    },
+    {
+      "name": "lag1",
+      "op": "lagCHOP",
+      "pos": [
+        440,
+        240
+      ],
+      "params": {
+        "lagup": 0.03,
+        "lagdown": 0.3
+      }
+    },
+    {
+      "name": "envelope1",
+      "op": "selectCHOP",
+      "pos": [
+        660,
+        240
+      ],
+      "params": {
+        "channels": "chan1",
+        "rename": "energy"
+      }
+    },
+    {
+      "name": "response1",
+      "op": "mathCHOP",
+      "pos": [
+        880,
+        240
+      ],
+      "params": {
+        "gain": 8,
+        "offset": 0.85,
+        "clamp": true,
+        "clampmin": 0.85,
+        "clampmax": 1.4
+      }
+    },
+    {
+      "name": "grade1",
+      "op": "levelTOP",
+      "pos": [
+        880,
+        0
+      ],
+      "exports": {
+        "brightness": "response1:energy"
+      }
+    },
+    {
+      "name": "history1",
+      "op": "feedbackTOP",
+      "pos": [
+        880,
+        140
+      ],
+      "params": {
+        "target": "echo1"
+      }
+    },
+    {
+      "name": "echo1",
+      "op": "compositeTOP",
+      "pos": [
+        1100,
+        0
+      ],
+      "params": {
+        "operation": "over",
+        "opacity": 0.7
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "grade1",
+      "input": 0
+    },
+    {
+      "from": "mic1",
+      "to": "rms1",
+      "input": 0
+    },
+    {
+      "from": "rms1",
+      "to": "lag1",
+      "input": 0
+    },
+    {
+      "from": "lag1",
+      "to": "envelope1",
+      "input": 0
+    },
+    {
+      "from": "envelope1",
+      "to": "response1",
+      "input": 0
+    },
+    {
+      "from": "grade1",
+      "to": "echo1",
+      "input": 0
+    },
+    {
+      "from": "history1",
+      "to": "echo1",
+      "input": 1
+    },
+    {
+      "from": "echo1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "group": "Camera",
+  "needs": "video",
+  "viewer": "out1"
+}

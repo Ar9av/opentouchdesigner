@@ -1,0 +1,132 @@
+{
+  "name": "datamosh",
+  "group": "Camera",
+  "prompt": "smear my camera in the direction of movement with optical flow feedback datamoshing",
+  "needs": "video",
+  "notes": "Current and previous low-resolution camera frames drive local optical flow. history1 is a separate image-history loop. flow1.gain controls smearing, mix1.opacity persistence. Small movements work best; fast motion and lighting changes can give inaccurate vectors.",
+  "nodes": [
+    {
+      "name": "analysis1",
+      "op": "resolutionTOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "resw": 160,
+        "resh": 90
+      }
+    },
+    {
+      "name": "previous1",
+      "op": "feedbackTOP",
+      "pos": [
+        200,
+        300
+      ],
+      "params": {
+        "target": "analysis1"
+      }
+    },
+    {
+      "name": "flow1",
+      "op": "opticalflowTOP",
+      "pos": [
+        400,
+        180
+      ],
+      "params": {
+        "gain": 4,
+        "maxmotion": 4,
+        "regularization": 0.0001
+      }
+    },
+    {
+      "name": "history1",
+      "op": "feedbackTOP",
+      "pos": [
+        400,
+        420
+      ],
+      "params": {
+        "target": "mix1"
+      }
+    },
+    {
+      "name": "warp1",
+      "op": "displaceTOP",
+      "pos": [
+        600,
+        180
+      ],
+      "params": {
+        "amount": -1,
+        "offset": -0.5,
+        "extend": "hold"
+      }
+    },
+    {
+      "name": "mix1",
+      "op": "compositeTOP",
+      "pos": [
+        800,
+        0
+      ],
+      "params": {
+        "operation": "over",
+        "opacity": 0.88
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        1000,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "analysis1",
+      "input": 0
+    },
+    {
+      "from": "analysis1",
+      "to": "flow1",
+      "input": 0
+    },
+    {
+      "from": "previous1",
+      "to": "flow1",
+      "input": 1
+    },
+    {
+      "from": "history1",
+      "to": "warp1",
+      "input": 0
+    },
+    {
+      "from": "flow1",
+      "to": "warp1",
+      "input": 1
+    },
+    {
+      "from": "source1",
+      "to": "mix1",
+      "input": 0
+    },
+    {
+      "from": "warp1",
+      "to": "mix1",
+      "input": 1
+    },
+    {
+      "from": "mix1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

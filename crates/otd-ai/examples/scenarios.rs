@@ -352,6 +352,7 @@ fn main() {
                 model: provider.default_model().to_string(),
                 prompt: scenario.prompt.to_string(),
                 image: scenario.wants_image.then(|| image.clone()).flatten(),
+                seen: Default::default(),
                 graph: &graph,
                 parent: root,
                 selected,

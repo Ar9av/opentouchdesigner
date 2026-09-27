@@ -1,0 +1,81 @@
+{
+  "name": "blobfollow",
+  "group": "Camera",
+  "prompt": "follow the largest bright object in my camera with a glowing cyan ring",
+  "needs": "video",
+  "notes": "Downsampled brightness regions drive a ring. tracker1.threshold selects bright objects; minarea filters specks. This follows the largest region, not a recognized person; use a bright object against a dark background. The tracker reads the previous frame.",
+  "nodes": [
+    {
+      "name": "analysis1",
+      "op": "resolutionTOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "resw": 160,
+        "resh": 90
+      }
+    },
+    {
+      "name": "tracker1",
+      "op": "blobtrackCHOP",
+      "pos": [
+        220,
+        180
+      ],
+      "params": {
+        "threshold": 0.6,
+        "minarea": 0.003
+      }
+    },
+    {
+      "name": "overlay1",
+      "op": "glslTOP",
+      "pos": [
+        440,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "void mainImage(out vec4 c, in vec2 fragCoord) {\n vec2 uv=fragCoord/iResolution.xy;\n vec2 target=vec2(U.p0.x,1.0-U.p1.x);\n vec2 d=(uv-target)*vec2(iResolution.x/iResolution.y,1.0);\n float ring=(1.0-smoothstep(0.005,0.015,abs(length(d)-0.09)))*clamp(U.p2.x,0.0,1.0);\n c=vec4(mix(texture(iChannel0,uv).rgb,vec3(0.1,1.0,0.9),ring),1.0);\n}"
+      },
+      "exports": {
+        "uniform1": "tracker1:x",
+        "uniform2": "tracker1:y",
+        "uniform3": "tracker1:present"
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "analysis1",
+      "input": 0
+    },
+    {
+      "from": "analysis1",
+      "to": "tracker1",
+      "input": 0
+    },
+    {
+      "from": "source1",
+      "to": "overlay1",
+      "input": 0
+    },
+    {
+      "from": "overlay1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

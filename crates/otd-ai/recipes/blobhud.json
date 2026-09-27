@@ -1,0 +1,146 @@
+{
+  "name": "blobhud",
+  "group": "Camera",
+  "prompt": "the viral blob tracking look: black and white camera with a red tracking box and crosshair locked onto whatever moves",
+  "needs": "video",
+  "notes": "Tracks MOVEMENT, not brightness: a 160x90 copy is differenced against its previous frame, blurred so the scattered edges of one mover merge into one region, gained, and blobtrackCHOP boxes the largest moving region. gain1.brightness is sensitivity; tracker1.threshold ignores small flicker and tracker1.minarea ignores specks. The box snaps on while something moves and vanishes when it stops, or when most of the frame changes at once (a light switched). Do not lag the exports: x and y fall to zero when nothing is tracked, so a lagged box flies into the corner. One region, the largest mover; it does not recognise people.",
+  "nodes": [
+    {
+      "name": "analysis1",
+      "op": "resolutionTOP",
+      "pos": [
+        0,
+        180
+      ],
+      "params": {
+        "resw": 160,
+        "resh": 90
+      }
+    },
+    {
+      "name": "previous1",
+      "op": "feedbackTOP",
+      "pos": [
+        0,
+        360
+      ],
+      "params": {
+        "target": "analysis1"
+      }
+    },
+    {
+      "name": "motion1",
+      "op": "compositeTOP",
+      "pos": [
+        200,
+        180
+      ],
+      "params": {
+        "operation": "difference"
+      }
+    },
+    {
+      "name": "merge1",
+      "op": "blurTOP",
+      "pos": [
+        400,
+        180
+      ],
+      "params": {
+        "size": 4.0
+      }
+    },
+    {
+      "name": "gain1",
+      "op": "levelTOP",
+      "pos": [
+        600,
+        180
+      ],
+      "params": {
+        "brightness": 4.0
+      }
+    },
+    {
+      "name": "tracker1",
+      "op": "blobtrackCHOP",
+      "pos": [
+        800,
+        180
+      ],
+      "params": {
+        "threshold": 0.12,
+        "minarea": 0.001
+      }
+    },
+    {
+      "name": "hud1",
+      "op": "glslTOP",
+      "pos": [
+        1000,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "float outline(vec2 uv, vec2 lo, vec2 hi, float w) {\n    vec2 px = w / iResolution.xy;\n    vec2 a = step(lo - px, uv) * step(uv, hi + px);\n    vec2 b = step(lo + px, uv) * step(uv, hi - px);\n    return a.x * a.y - b.x * b.y;\n}\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    vec3 src = texture(iChannel0, uv).rgb;\n    float l = dot(src, vec3(0.2126, 0.7152, 0.0722));\n    vec3 col = vec3(smoothstep(0.3, 0.7, l)) * 0.9;\n    // Nothing tracked reads as zero size; most of the frame at once is a\n    // lighting change, not a subject. Either way the overlay goes.\n    float area = U.p2.x * U.p3.x;\n    float on = step(0.00005, area) * step(area, 0.5);\n    vec2 ctr = vec2(U.p0.x, 1.0 - U.p1.x);\n    vec2 hs = max(vec2(U.p2.x, U.p3.x) * 0.5 + 0.015, vec2(0.03));\n    vec2 px = 1.0 / iResolution.xy;\n    float box = outline(uv, ctr - hs, ctr + hs, 1.5);\n    float inner = outline(uv, ctr - hs * 0.2, ctr + hs * 0.2, 1.0);\n    vec2 d = abs(uv - ctr);\n    float hair = (step(d.x, px.x) * step(hs.y, d.y) + step(d.y, px.y) * step(hs.x, d.x)) * 0.85;\n    vec2 g = fract(uv * vec2(32.0, 18.0));\n    float grid = step(g.x, 0.04) * step(g.y, 0.07) * 0.18;\n    float scan = 0.92 + 0.08 * sin(fragCoord.y * 1.7);\n    vec3 hud = vec3(1.0, 0.18, 0.12);\n    col = mix(col * scan + grid, hud, clamp((box + inner + hair) * on, 0.0, 1.0));\n    fragColor = vec4(col, 1.0);\n}\n"
+      },
+      "exports": {
+        "uniform1": "tracker1:x",
+        "uniform2": "tracker1:y",
+        "uniform3": "tracker1:width",
+        "uniform4": "tracker1:height"
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        1200,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "analysis1",
+      "input": 0
+    },
+    {
+      "from": "analysis1",
+      "to": "motion1",
+      "input": 0
+    },
+    {
+      "from": "previous1",
+      "to": "motion1",
+      "input": 1
+    },
+    {
+      "from": "gain1",
+      "to": "tracker1",
+      "input": 0
+    },
+    {
+      "from": "source1",
+      "to": "hud1",
+      "input": 0
+    },
+    {
+      "from": "hud1",
+      "to": "out1",
+      "input": 0
+    },
+    {
+      "from": "motion1",
+      "to": "merge1",
+      "input": 0
+    },
+    {
+      "from": "merge1",
+      "to": "gain1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

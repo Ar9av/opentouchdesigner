@@ -244,3 +244,30 @@ fn a_wire_only_crosses_where_the_operator_declared_it() {
     // And the converter's output is an ordinary CHOP.
     assert!(rig.graph.connect(to_chop, lag, 0).is_ok());
 }
+
+#[test]
+fn a_whole_image_reads_back_as_a_point_cloud_with_positions() {
+    let gpu = gpu_or_skip!();
+    let reg = registry();
+    let mut rig = Rig::new(gpu);
+    let root = rig.graph.root();
+    let ramp = add(&mut rig.graph, &reg, root, "rampTOP", "ramp");
+    let to_chop = add(&mut rig.graph, &reg, root, "toptochopCHOP", "read");
+    rig.graph.connect(ramp, to_chop, 0).unwrap();
+    for (key, v) in [("resw", 8), ("resh", 4)] {
+        rig.graph.set_param(ramp, key, Value::Int(v)).unwrap();
+    }
+    rig.graph
+        .set_param(to_chop, "layout", Value::Str("image".into()))
+        .unwrap();
+    rig.run(to_chop);
+    rig.run(to_chop);
+
+    let (u, v, r) = (rig.chan(to_chop, "u"), rig.chan(to_chop, "v"), rig.chan(to_chop, "r"));
+    assert_eq!((u.len(), v.len(), r.len()), (32, 32, 32), "one sample per pixel");
+    // Centred, u spans the 2:1 aspect, v points up, top row first.
+    assert!((u[0] + 0.875).abs() < 1e-4 && (u[7] - 0.875).abs() < 1e-4, "u {u:?}");
+    assert!((v[0] - 0.375).abs() < 1e-4 && (v[31] + 0.375).abs() < 1e-4, "v {v:?}");
+    // The default ramp runs left to right, so red follows u within a row.
+    assert!(r[7] > r[0], "pixels are read in order: {r:?}");
+}

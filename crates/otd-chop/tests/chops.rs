@@ -959,3 +959,59 @@ fn an_expression_can_reach_the_clock() {
         "the frame number should be advancing"
     );
 }
+
+#[test]
+fn a_trail_chop_keeps_a_window_of_history_oldest_first() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "const1");
+    let trail = p.add("trailCHOP", "trail1");
+    p.graph.connect(c, trail, 0).unwrap();
+    p.set(trail, "window", Value::Float(1.0));
+    p.run(trail, 10);
+    p.set(c, "value0", Value::Float(1.0));
+    p.run(trail, 5);
+    let s = &p.data(trail).channels[0].samples;
+    assert_eq!(s.len(), 60, "one second at control rate");
+    assert_eq!(s[s.len() - 1], 1.0, "newest last");
+    assert_eq!(s[0], 0.0, "oldest first");
+    assert_eq!(s.iter().filter(|v| **v == 1.0).count(), 5);
+    assert!(!p.data(trail).time_sliced, "a trail is a buffer, not a slice");
+}
+
+#[test]
+fn a_spring_chop_overshoots_then_settles() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "const1");
+    let spring = p.add("springCHOP", "spring1");
+    p.graph.connect(c, spring, 0).unwrap();
+    p.run(spring, 1);
+    assert_eq!(p.value(spring, "chan1"), 0.0, "starts at rest on its input");
+    p.set(c, "value0", Value::Float(1.0));
+    let mut peak = 0.0f32;
+    for _ in 0..240 {
+        p.run(spring, 1);
+        peak = peak.max(p.value(spring, "chan1"));
+    }
+    assert!(peak > 1.05, "underdamped by default, so it overshoots: {peak}");
+    assert!((p.value(spring, "chan1") - 1.0).abs() < 0.01, "and settles");
+}
+
+#[test]
+fn a_fan_chop_fans_out_an_index_and_back_in() {
+    let mut p = Patch::new();
+    let c = p.add("constantCHOP", "const1");
+    p.set(c, "value0", Value::Float(2.0));
+    let out = p.add("fanCHOP", "fan1");
+    p.graph.connect(c, out, 0).unwrap();
+    let back = p.add("fanCHOP", "fan2");
+    p.set(back, "operation", Value::Str("fanin".into()));
+    p.graph.connect(out, back, 0).unwrap();
+    p.run(back, 1);
+    assert_eq!(p.data(out).names(), ["chan0", "chan1", "chan2", "chan3"]);
+    assert_eq!(p.value(out, "chan2"), 1.0);
+    assert_eq!(p.value(out, "chan1"), 0.0);
+    assert_eq!(p.value(back, "chan1"), 2.0);
+    p.set(c, "value0", Value::Float(9.0));
+    p.run(back, 1);
+    assert_eq!(p.value(back, "chan1"), -1.0, "out of range lights nothing");
+}

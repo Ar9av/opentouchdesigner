@@ -1,0 +1,49 @@
+{
+  "name": "mosaic",
+  "group": "Camera",
+  "prompt": "turn my camera into a colourful tiled pixel mosaic with dark grout",
+  "needs": "video",
+  "notes": "Each tile samples the live image at its centre. mosaic1.uniform1.x controls tile count; uniform1.y controls grout width; uniform1.z sets colour levels.",
+  "nodes": [
+    {
+      "name": "mosaic1",
+      "op": "glslTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "uniform1": [
+          48,
+          0.04,
+          6,
+          0
+        ],
+        "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n vec2 uv=fragCoord/iResolution.xy;\n vec2 cells=vec2(max(U.p0.x,4.0),max(U.p0.x,4.0)*iResolution.y/iResolution.x);\n vec2 at=(floor(uv*cells)+0.5)/cells;\n vec3 c=texture(iChannel0,at).rgb;\n float levels=max(U.p0.z,2.0);\n c=floor(clamp(c,0.0,1.0)*(levels-1.0)+0.5)/(levels-1.0);\n vec2 f=fract(uv*cells); float edge=min(min(f.x,f.y),min(1.0-f.x,1.0-f.y));\n float mask=smoothstep(clamp(U.p0.y,0.0,0.3),clamp(U.p0.y,0.0,0.3)+0.02,edge);\n fragColor=vec4(mix(vec3(0.015),c,mask),1.0);\n}"
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        240,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "mosaic1",
+      "input": 0
+    },
+    {
+      "from": "mosaic1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

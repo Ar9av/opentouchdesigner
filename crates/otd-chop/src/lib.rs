@@ -10,6 +10,7 @@ pub mod dmx;
 pub mod engine;
 pub mod io;
 pub mod ops;
+mod tracking;
 pub mod wav;
 
 pub use anim::{Curve, Curves, Interp, Key};

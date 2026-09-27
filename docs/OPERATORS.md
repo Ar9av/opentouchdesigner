@@ -2,9 +2,9 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-163 operators.
+171 operators.
 
-**CHOP** (46)
+**CHOP** (51)
 
 - [analyzeCHOP](#analyze--analyzechop) — Reduce each channel to one number.
 - [animationCHOP](#animation--animationchop) — Keyframed curves over time.
@@ -13,6 +13,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [audiofileinCHOP](#audio-file-in--audiofileinchop) — Plays an audio file, following the timeline.
 - [audiospectrumCHOP](#audio-spectrum--audiospectrumchop) — Energy per frequency band, log spaced.
 - [beatCHOP](#beat--beatchop) — A tempo clock: ramp, pulse, count and bar.
+- [blobtrackCHOP](#blob-track--blobtrackchop) — Largest connected bright region. Channels: present, count, x, y, area, width, height, vx, vy. Coordinates and sizes are 0..1, origin top-left; velocity is frame-fractions/second. CPU readback of last frame; downsample to 160x90 first. Not person recognition or persistent identity: switching largest regions can jump. A missing/empty input returns zero channels values.
 - [clockCHOP](#clock--clockchop) — Wall-clock time, which keeps running when the timeline is paused.
 - [constantCHOP](#constant--constantchop) — Fixed values as channels.
 - [countCHOP](#count--countchop) — Count threshold crossings.
@@ -21,6 +22,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [delayCHOP](#delay--delaychop) — Play a channel back later, with optional feedback.
 - [dmxoutCHOP](#dmx-out--dmxoutchop) — Sends its channels as DMX over Art-Net or sACN.
 - [expressionCHOP](#expression--expressionchop) — Apply an expression to every sample. `v` is the sample.
+- [fanCHOP](#fan--fanchop) — Fan out an index channel to one on/off channel per value (chan0..chanN-1), or fan many channels in to the index of the first one above zero (-1 if none).
 - [filterCHOP](#filter--filterchop) — Low-pass or moving-average smoothing.
 - [holdCHOP](#hold--holdchop) — Freeze input 1's value until input 2 fires.
 - [inCHOP](#in--inchop) — A channel input on this component's node.
@@ -40,6 +42,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [oscoutCHOP](#osc-out--oscoutchop) — Sends its channels as one OSC message per frame.
 - [outCHOP](#out--outchop) — This component's channel output.
 - [panelCHOP](#panel--panelchop) — Panel widget values as channels.
+- [particleCHOP](#particle--particlechop) — Stateful 2D particle emitter with velocity, gravity, lifetime and respawn. tx/ty/tz are instance positions (6 scene units across); size/life fade to zero. Emitter coordinates are normalized, origin top-left. Connect via geometryCOMP.instancechop; set sx/sy/sz to size. Active stops births; existing particles finish. Reset clears the simulation. CPU, at most 4096 particles; dt capped at 0.1s; no collisions or flocking.
 - [patternCHOP](#pattern--patternchop) — A fixed-length waveform buffer.
 - [renameCHOP](#rename--renamechop) — Rename channels by pattern.
 - [resampleCHOP](#resample--resamplechop) — Change how many samples a buffer has, keeping its shape.
@@ -48,9 +51,11 @@ Generated from the operator registry — the same table the editor builds its me
 - [slopeCHOP](#slope--slopechop) — The rate of change of a channel.
 - [soptochopCHOP](#sop-to-chop--soptochopchop) — Point attributes as channels, one sample per point.
 - [speedCHOP](#speed--speedchop) — Integrate a channel: velocity becomes position.
+- [springCHOP](#spring--springchop) — Follow a channel like a mass on a spring: overshoot, wobble, then settle. Raise damping to stop the wobble; raise the spring constant to follow faster.
 - [switchCHOP](#switch--switchchop) — Choose one of two inputs.
 - [timerCHOP](#timer--timerchop) — A running timer with fraction, seconds, cycles and done.
-- [toptochopCHOP](#top-to-chop--toptochopchop) — Pixels as channels. Reads last frame; costs a GPU sync.
+- [toptochopCHOP](#top-to-chop--toptochopchop) — Pixels as channels r g b a. `image` reads every pixel (top row first, at most 128x128) and adds u/v positions, centred, v up — instance a Geometry COMP with tx=u ty=v tz=g for a camera point cloud. Reads last frame; costs a GPU sync, so put a Resolution TOP in front.
+- [trailCHOP](#trail--trailchop) — The last few seconds of each channel as one buffer, oldest sample first — draw a waveform, or lay out one instance per sample.
 - [triggerCHOP](#trigger--triggerchop) — An attack/decay/sustain/release envelope per channel.
 
 **COMP** (8)
@@ -94,13 +99,14 @@ Generated from the operator registry — the same table the editor builds its me
 - [pointspriteMAT](#point-sprite--pointspritemat) — Draws every point as a camera-facing quad.
 - [wireframeMAT](#wireframe--wireframemat) — Draws the edges rather than the faces.
 
-**SOP** (16)
+**SOP** (18)
 
 - [blendSOP](#blend--blendsop) — Morph between two shapes by interpolating point positions.
 - [boxSOP](#box--boxsop) — A box with flat-shaded faces.
 - [circleSOP](#circle--circlesop) — A disc, ring or arc — filled, or a line to copy along.
 - [colorSOP](#color--colorsop) — Set the colour carried by every point.
 - [copySOP](#copy--copysop) — Stamp copies with a compounding transform.
+- [facetSOP](#facet--facetsop) — Recompute normals from the triangles — put after Noise or Twist so lighting follows the new shape. `unique` gives flat, faceted shading.
 - [gridSOP](#grid--gridsop) — A flat grid of quads — the usual thing to displace.
 - [inSOP](#in--insop) — A geometry input on this component's node.
 - [lineSOP](#line--linesop) — A run of points between two positions.
@@ -112,8 +118,9 @@ Generated from the operator registry — the same table the editor builds its me
 - [torusSOP](#torus--torussop) — A torus.
 - [transformSOP](#transform--transformsop) — Translate, rotate and scale points.
 - [tubeSOP](#tube--tubesop) — A cylinder, cone or tapered tube, with optional caps.
+- [twistSOP](#twist--twistsop) — Twist, bend or taper along one axis, growing with distance from the origin. Needs enough rows along that axis to curve smoothly.
 
-**TOP** (69)
+**TOP** (70)
 
 - [addTOP](#add--addtop) — The two inputs summed.
 - [antialiasTOP](#anti-alias--antialiastop) — Softens luminance edges in place — FXAA as a post pass.
@@ -160,6 +167,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [noiseTOP](#noise--noisetop) — Fractal value noise. Animate Translate Z to make it move.
 - [normalmapTOP](#normal-map--normalmaptop) — A height field becomes a tangent-space normal map.
 - [nullTOP](#null--nulltop) — Pass-through. A stable name to reference and to view.
+- [opticalflowTOP](#optical-flow--opticalflowtop) — Local Lucas-Kanade motion from previous (input 2) to current (input 1). RG = 0.5 + gain * motion in UV/frame; B is clamped pixel magnitude divided by maxmotion. Feed a Feedback TOP targeting the source into input 2. Use matching input sizes. Estimates small translations with a 5x5 window; large motion, flat areas and changing lighting are unreliable. Lower the input resolution to reduce displacement in pixels. No pyramid or body tracking.
 - [outTOP](#out--outtop) — This component's texture output.
 - [outsideTOP](#outside--outsidetop) — Input 2, kept only where input 1 is not.
 - [overTOP](#over--overtop) — Input 2 over input 1, by its alpha.
@@ -294,6 +302,19 @@ A tempo clock: ramp, pulse, count and bar.
 | Beats Per Bar | `beatsperbar` | `4` | 1 … 32 |
 | Sample Rate | `rate` | `60` | 1 … 48000 |
 
+### Blob Track — `blobtrackCHOP`
+
+Largest connected bright region. Channels: present, count, x, y, area, width, height, vx, vy. Coordinates and sizes are 0..1, origin top-left; velocity is frame-fractions/second. CPU readback of last frame; downsample to 160x90 first. Not person recognition or persistent identity: switching largest regions can jump. A missing/empty input returns zero channels values.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Luminance Threshold | `threshold` | `0.5` | 0 … 1 |
+| Minimum Frame Fraction | `minarea` | `0.002` | 0 … 1 |
+
 ### Clock — `clockCHOP`
 
 Wall-clock time, which keeps running when the timeline is paused.
@@ -406,6 +427,17 @@ Apply an expression to every sample. `v` is the sample.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Expression | `expr` | `v` |  |
+
+### Fan — `fanCHOP`
+
+Fan out an index channel to one on/off channel per value (chan0..chanN-1), or fan many channels in to the index of the first one above zero (-1 if none).
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Operation | `operation` | `fanout` | `fanout` · `fanin` |
+| Channels (fan out) | `channels` | `4` | 1 … 64 |
 
 ### Filter — `filterCHOP`
 
@@ -638,6 +670,25 @@ Panel widget values as channels.
 |---|---|---|---|
 | Panel COMPs (paths) | `ops` | *(empty)* |  |
 
+### Particle — `particleCHOP`
+
+Stateful 2D particle emitter with velocity, gravity, lifetime and respawn. tx/ty/tz are instance positions (6 scene units across); size/life fade to zero. Emitter coordinates are normalized, origin top-left. Connect via geometryCOMP.instancechop; set sx/sy/sz to size. Active stops births; existing particles finish. Reset clears the simulation. CPU, at most 4096 particles; dt capped at 0.1s; no collisions or flocking.
+
+*No inputs — this is a generator.*
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Particle Count | `count` | `256` | 1 … 4096 |
+| Emitter X (0..1) | `emitx` | `0.5` | 0 … 1 |
+| Emitter Y (0..1, down) | `emity` | `0.5` | 0 … 1 |
+| Speed (frame widths/s) | `speed` | `0.2` | 0 … 2 |
+| Downward Acceleration | `gravity` | `0.2` | -2 … 2 |
+| Lifetime (s) | `lifetime` | `2` | 0.1 … 20 |
+| Emit | `active` | `true` |  |
+| Reset | `reset` | `false` |  |
+
 ### Pattern — `patternCHOP`
 
 A fixed-length waveform buffer.
@@ -736,6 +787,19 @@ Integrate a channel: velocity becomes position.
 | Min | `min` | `0` |  |
 | Max | `max` | `1` |  |
 
+### Spring — `springCHOP`
+
+Follow a channel like a mass on a spring: overshoot, wobble, then settle. Raise damping to stop the wobble; raise the spring constant to follow faster.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Spring Constant | `spring` | `80` | 0 … 1000 |
+| Damping | `damping` | `6` | 0 … 100 |
+
 ### Switch — `switchCHOP`
 
 Choose one of two inputs.
@@ -763,7 +827,7 @@ A running timer with fraction, seconds, cycles and done.
 
 ### TOP to CHOP — `toptochopCHOP`
 
-Pixels as channels. Reads last frame; costs a GPU sync.
+Pixels as channels r g b a. `image` reads every pixel (top row first, at most 128x128) and adds u/v positions, centred, v up — instance a Geometry COMP with tx=u ty=v tz=g for a camera point cloud. Reads last frame; costs a GPU sync, so put a Resolution TOP in front.
 
 **Inputs:** in
 
@@ -772,8 +836,20 @@ Pixels as channels. Reads last frame; costs a GPU sync.
 | Parameter | Name | Default | Range |
 |---|---|---|---|
 | Active | `active` | `true` |  |
-| Read | `layout` | `rows` | `rows` · `columns` · `average` |
+| Read | `layout` | `rows` | `rows` · `columns` · `average` · `image` |
 | Row / Column | `index` | `0` | 0 … 4096 |
+
+### Trail — `trailCHOP`
+
+The last few seconds of each channel as one buffer, oldest sample first — draw a waveform, or lay out one instance per sample.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Window (s) | `window` | `2` | 0.05 … 60 |
 
 ### Trigger — `triggerCHOP`
 
@@ -1271,6 +1347,16 @@ Stamp copies with a compounding transform.
 | Rotate Each (deg) | `rotate` | `[0.0, 0.0, 0.0]` |  |
 | Scale Each | `scale` | `[1.0, 1.0, 1.0]` |  |
 
+### Facet — `facetSOP`
+
+Recompute normals from the triangles — put after Noise or Twist so lighting follows the new shape. `unique` gives flat, faceted shading.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Normals | `mode` | `smooth` | `smooth` · `unique` |
+
 ### Grid — `gridSOP`
 
 A flat grid of quads — the usual thing to displace.
@@ -1387,6 +1473,19 @@ A cylinder, cone or tapered tube, with optional caps.
 | Rows | `rows` | `1` | 1 … 128 |
 | Caps | `caps` | `true` |  |
 | Center | `center` | `[0.0, 0.0, 0.0]` |  |
+
+### Twist — `twistSOP`
+
+Twist, bend or taper along one axis, growing with distance from the origin. Needs enough rows along that axis to curve smoothly.
+
+**Inputs:** in
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Operation | `operation` | `twist` | `twist` · `bend` · `taper` |
+| Primary Axis | `axis` | `y` | `x` · `y` · `z` |
+| Strength (deg, or scale for taper) | `strength` | `90` | -720 … 720 |
+| Deform Length | `length` | `2` | 0.01 … 16 |
 
 ---
 
@@ -1998,6 +2097,18 @@ A height field becomes a tangent-space normal map.
 Pass-through. A stable name to reference and to view.
 
 **Inputs:** in
+
+### Optical Flow — `opticalflowTOP`
+
+Local Lucas-Kanade motion from previous (input 2) to current (input 1). RG = 0.5 + gain * motion in UV/frame; B is clamped pixel magnitude divided by maxmotion. Feed a Feedback TOP targeting the source into input 2. Use matching input sizes. Estimates small translations with a 5x5 window; large motion, flat areas and changing lighting are unreliable. Lower the input resolution to reduce displacement in pixels. No pyramid or body tracking.
+
+**Inputs:** current, previous
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Vector Gain | `gain` | `1` | 0 … 20 |
+| Noise Regularization | `regularization` | `0.0001` | 0.000001 … 0.1 |
+| Maximum Motion (px/frame) | `maxmotion` | `4` | 0.1 … 16 |
 
 ### Out — `outTOP`
 

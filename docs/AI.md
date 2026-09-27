@@ -51,6 +51,34 @@ re-encoded — JPEG normally, PNG when the image genuinely uses transparency,
 because flattening an alpha channel changes the question being asked. Past that
 size every provider resizes it themselves, having already charged for it.
 
+## Watching the camera
+
+**Watch** in the bar (or `/watch`, with optional direction — `/watch make it
+moody`) is "turn my camera on and make it cool" as one action:
+
+1. It uses the camera on the canvas, or adds one, and waits for a frame that is
+   not black — the permission prompt and a warming-up sensor both sit inside
+   that wait, and it says so if the picture never comes.
+2. That frame goes to the model with a different brief from a reference image:
+   *this is the input, design for it.* The model says what it sees first — a
+   face close up, a person full length, a dark room — and picks an effect that
+   suits it, wired into the existing camera rather than replacing it.
+3. Once the patch lands it lets it run for a second and a half, then reads the
+   viewer and the camera twice and measures them locally: **black**, **blown
+   out**, **frozen while the camera moves**, or **the camera unchanged**. The
+   thresholds are the ones `vfx_eval` uses, so the editor and the numbers in
+   `TODO.md` agree about what broken means.
+4. Only if something was measured wrong, the viewer frame goes back once with
+   exactly that named. A second failure is reported, not retried, because every
+   round is a paid request.
+
+A result that looks alive costs one request. The same loop runs headless,
+against a clip instead of a camera:
+
+```bash
+cargo run -p otd-ai --example vfx_eval -- --watch --provider claude-code --repeat 3
+```
+
 ## Setting it up
 
 Five providers, any one of which is enough. Three want an API key:
@@ -275,10 +303,12 @@ The brief also teaches the chain, because it is not guessable — measuring
 ## Commands the box answers itself
 
 The prompt box is the only place in the editor you type a sentence, so it is
-where a slash command gets typed whether or not one exists. Two do, and
-neither costs a round trip:
+where a slash command gets typed whether or not one exists. Three do, and
+none is sent to a model as text:
 
 - `/clear` empties the network you are looking at. One undo.
+- `/watch [direction]` turns the camera on and builds an effect for it — see
+  *Watching the camera*.
 - `/help` lists them.
 
 Anything else starting with `/` is reported as an unknown command rather than

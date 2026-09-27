@@ -98,6 +98,15 @@ cargo run -p otd-ai --example scenarios
       one, which should help; if it does not, make `apply` rewire it, or warn
       the way the starved-loop check does.
 
+- [ ] **Watch converges on one look.** Four `--watch` runs through Claude
+      Code on the eval clip (a person standing in a white room) all built neon
+      edges with trails — striking, but the same answer four times, even with
+      the worked examples rotating. One was nearly black (mean luma 2.6/255,
+      just over the BLACK line of 2). Typed direction (`/watch make it ascii`)
+      steers it. Re-measure with
+      `vfx_eval -- --watch --provider claude-code --repeat 4`; the repair
+      round is exercised with `--watch --sabotage` (1/1 fixed a black patch).
+
 ## Camera and packaging
 
 - [ ] **Ad-hoc signing means the camera permission is asked for again after
@@ -132,10 +141,14 @@ the look is wanted.
 - [ ] **Mesh morphing beyond point interpolation** — `blendSOP` interpolates
       positions with an invented correspondence. Real morphing between
       different topologies wants resampling, and nothing here does that.
-- [ ] **Particle simulation** — instancing draws thousands of copies from a
-      CHOP, but nothing integrates position over time. Attractors, flocking
-      and the rest need state that survives a frame, which is the same
+- [ ] **GPU particle simulation** — `particleCHOP` is a CPU emitter (4096
+      particles, gravity and lifetime) that instances through a Geometry
+      COMP. Attractors, flocking and collisions — TouchDesigner's POP family —
+      want a compute pass whose buffer survives a frame, which is the same
       problem as ISF persistent buffers.
+- [ ] **SOPs that change topology** — Extrude, Sweep, Subdivide, Boolean,
+      Resample. Twist and Facet landed because they are per-point; these are
+      mesh surgery, which the flat-buffer design deliberately avoids.
 
 ## TouchDesigner TOPs still missing
 

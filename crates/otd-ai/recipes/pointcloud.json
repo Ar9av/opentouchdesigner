@@ -1,0 +1,152 @@
+{
+  "name": "pointcloud",
+  "group": "Camera",
+  "prompt": "rebuild my camera as a 3d point cloud of coloured dots pushed forward by brightness, slowly turning",
+  "needs": "video",
+  "notes": "A 96x54 copy of the camera is read back as one sample per pixel (toptochopCHOP layout image) and instanced: tx=u, ty=v, tz=g, colour from r/g/b. The Geometry COMP's scale multiplies the dots as well as the spacing, so dot1.size stays small. geo1.scale z is how far brightness pushes dots forward; analysis1 resw/resh is the density (at most 128x128). Reads one frame late and costs a small GPU sync.",
+  "nodes": [
+    {
+      "name": "analysis1",
+      "op": "resolutionTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "resw": 96,
+        "resh": 54
+      }
+    },
+    {
+      "name": "pixels1",
+      "op": "toptochopCHOP",
+      "pos": [
+        200,
+        0
+      ],
+      "params": {
+        "layout": "image"
+      }
+    },
+    {
+      "name": "dot1",
+      "op": "boxSOP",
+      "pos": [
+        200,
+        160
+      ],
+      "params": {
+        "size": [
+          0.009,
+          0.009,
+          0.009
+        ]
+      }
+    },
+    {
+      "name": "mat1",
+      "op": "constantMAT",
+      "pos": [
+        200,
+        320
+      ]
+    },
+    {
+      "name": "geo1",
+      "op": "geometryCOMP",
+      "pos": [
+        400,
+        160
+      ],
+      "params": {
+        "sop": "dot1",
+        "material": "mat1",
+        "instancing": true,
+        "instancechop": "pixels1",
+        "tx": "u",
+        "ty": "v",
+        "tz": "g",
+        "cr": "r",
+        "cg": "g",
+        "cb": "b",
+        "scale": [
+          4.0,
+          4.0,
+          1.6
+        ]
+      },
+      "expressions": {
+        "rotate": "[0.0, sin(absTime * 0.4) * 28.0, 0.0]"
+      }
+    },
+    {
+      "name": "cam1",
+      "op": "cameraCOMP",
+      "pos": [
+        400,
+        320
+      ],
+      "params": {
+        "translate": [
+          0.0,
+          0.4,
+          8.0
+        ],
+        "lookat": "geo1"
+      }
+    },
+    {
+      "name": "light1",
+      "op": "lightCOMP",
+      "pos": [
+        400,
+        480
+      ]
+    },
+    {
+      "name": "render1",
+      "op": "renderTOP",
+      "pos": [
+        600,
+        0
+      ],
+      "params": {
+        "geometry": "geo1",
+        "camera": "cam1",
+        "light": "light1",
+        "background": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        800,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "analysis1",
+      "input": 0
+    },
+    {
+      "from": "analysis1",
+      "to": "pixels1",
+      "input": 0
+    },
+    {
+      "from": "render1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

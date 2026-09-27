@@ -166,6 +166,19 @@ fn retrieval_understands_visual_intent_and_does_not_default_to_tunnels() {
         ("music reactive", "audio"),
         ("120 bpm pulse", "beat"),
         ("tunnel", "tunnel"),
+        ("green screen portal", "greenscreen"),
+        ("directional optical flow", "datamosh"),
+        ("follow a bright blob", "blobfollow"),
+        ("night vision", "nightvision"),
+        ("embossed relief", "relief"),
+        ("pixelated mosaic", "mosaic"),
+        ("watercolor washes", "watercolour"),
+        ("freeze while I hold F", "freeze"),
+        ("camera reacts to the microphone", "audiocamera"),
+        ("a surveillance hud with a crosshair", "blobhud"),
+        ("turn me into ascii characters", "ascii"),
+        ("newspaper halftone", "halftone"),
+        ("scan me into a pointcloud", "pointcloud"),
     ] {
         let examples = recipes::examples_for(prompt, false);
         assert!(
@@ -193,4 +206,18 @@ fn technique_cards_reference_real_recipes_and_supported_operators() {
     assert!(text.contains("Instanced geometry"));
     let text = otd_ai::knowledge::context_for("3d swarm", &otd_core::OpRegistry::default());
     assert!(!text.contains("Instanced geometry"));
+}
+
+#[test]
+fn new_operator_techniques_are_retrieved_by_what_people_ask_for() {
+    let reg = registry();
+    for (prompt, card) in [
+        ("a fountain of sparks", "Particle emitter"),
+        ("make the logo bouncy", "Springy motion"),
+        ("an oscilloscope of the bass", "Waveform history"),
+        ("a twisted faceted tube", "Deformed geometry"),
+    ] {
+        let text = otd_ai::knowledge::context_for(prompt, &reg);
+        assert!(text.contains(card), "{prompt:?} should bring up {card}");
+    }
 }

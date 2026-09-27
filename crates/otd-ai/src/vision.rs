@@ -80,7 +80,22 @@ impl Image {
     pub fn decode(bytes: &[u8]) -> Result<Image, String> {
         let decoded = image::load_from_memory(bytes)
             .map_err(|e| format!("not an image this build can read: {e}"))?;
+        Image::from_dynamic(decoded)
+    }
 
+    /// A frame read back from a TOP, as straight RGBA8.
+    ///
+    /// Flattened to RGB first: a TOP's alpha is whatever the last operator
+    /// left there — a keyed camera is mostly transparent — and what the
+    /// model should see is the picture the viewer shows, not a cut-out.
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Image, String> {
+        let frame = image::RgbaImage::from_raw(width, height, rgba)
+            .ok_or("frame size does not match its pixels")?;
+        let rgb = image::DynamicImage::ImageRgba8(frame).to_rgb8();
+        Image::from_dynamic(image::DynamicImage::ImageRgb8(rgb))
+    }
+
+    fn from_dynamic(decoded: image::DynamicImage) -> Result<Image, String> {
         // `thumbnail` rather than `resize`: it is a box filter and about ten
         // times quicker, and nothing here is being printed.
         let (w, h) = (decoded.width(), decoded.height());
@@ -181,6 +196,100 @@ impl Image {
         }
         Ok(path)
     }
+}
+
+// ----------------------------------------------------- looking at output
+
+/// The size every frame is judged at. Small enough that a readback-and-compare
+/// costs nothing next to a frame, big enough that a thin effect still shows.
+pub const JUDGE_W: u32 = 256;
+pub const JUDGE_H: u32 = 144;
+
+/// Shrink a read-back frame to the judging size, so frames of different
+/// resolutions compare pixel for pixel.
+pub fn judging_size(width: u32, height: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
+    let frame = image::RgbaImage::from_raw(width, height, rgba)?;
+    Some(
+        image::imageops::resize(&frame, JUDGE_W, JUDGE_H, image::imageops::FilterType::Triangle)
+            .into_raw(),
+    )
+}
+
+/// What an effect's output looks like, from two moments of it and of its
+/// source. All values are 0..255 means over judging-size RGBA8 frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Measured {
+    /// Mean luminance of the later output frame.
+    pub luma: f64,
+    /// How much the output changed between the two moments.
+    pub motion: f64,
+    /// How different the output is from the source at the same moment.
+    pub from_source: f64,
+    /// How much the SOURCE changed over the same interval — without this a
+    /// frozen patch and a still camera look the same.
+    pub source_motion: f64,
+}
+
+impl Measured {
+    pub fn of(early: &[u8], late: &[u8], src_early: &[u8], src_late: &[u8]) -> Measured {
+        Measured {
+            luma: mean_luma(late),
+            motion: mean_abs_diff(early, late),
+            from_source: mean_abs_diff(late, src_late),
+            source_motion: mean_abs_diff(src_early, src_late),
+        }
+    }
+
+    /// What is visibly wrong, as short tags. Empty means it looks alive.
+    ///
+    /// The thresholds are the eval harness's, so the editor's check and the
+    /// numbers in TODO.md measure with the same ruler.
+    pub fn faults(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self.luma < 2.0 {
+            out.push("BLACK");
+        }
+        if self.luma > 248.0 {
+            out.push("BLOWN");
+        }
+        // A still output over a still source has not been shown to be wrong.
+        if self.motion < 0.4 && self.source_motion >= 0.4 {
+            out.push("STILL");
+        }
+        if self.from_source < 2.0 {
+            out.push("PASSTHROUGH");
+        }
+        out
+    }
+}
+
+impl Measured {
+    /// Stricter than [`Measured::faults`], for "make it cool": an effect that
+    /// works but is hard to see. Grades like `retro` sit near 10 on the eval
+    /// clip; trails over a still subject sit near 2.
+    pub fn is_subtle(&self) -> bool {
+        self.from_source < 12.0
+    }
+}
+
+pub fn mean_luma(rgba: &[u8]) -> f64 {
+    let sum: f64 = rgba
+        .chunks(4)
+        .map(|p| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64)
+        .sum();
+    sum / (rgba.len() / 4).max(1) as f64
+}
+
+/// Mean absolute difference over RGB and alpha. Frames of different lengths
+/// are as different as it gets, rather than compared on their overlap.
+pub fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
+    if a.len() != b.len() {
+        return 255.0;
+    }
+    if a.is_empty() {
+        return 0.0;
+    }
+    a.iter().zip(b).map(|(x, y)| x.abs_diff(*y) as f64).sum::<f64>() / a.len() as f64
 }
 
 /// Deliberately not printing the bytes. A `{:?}` on a request should not
@@ -366,5 +475,32 @@ mod tests {
         let debugged = format!("{image:?}");
         assert!(debugged.len() < 100, "{debugged}");
         assert!(debugged.contains("64×64"), "{debugged}");
+    }
+
+    #[test]
+    fn a_grabbed_frame_goes_out_opaque() {
+        // A keyed camera is mostly transparent; the model should see the
+        // picture, so the frame is flattened and sent as a JPEG.
+        let rgba = [255u8, 0, 0, 0].repeat(16);
+        let image = Image::from_rgba(4, 4, rgba).unwrap();
+        assert_eq!(image.media_type(), "image/jpeg");
+        assert!(Image::from_rgba(4, 4, vec![0; 3]).is_err());
+    }
+
+    #[test]
+    fn the_ruler_names_what_is_wrong_with_an_output() {
+        let grey = vec![128u8; 64];
+        let camera_a = vec![100u8; 64];
+        let camera_b = vec![140u8; 64];
+        let black = vec![0u8; 64];
+        let white = vec![255u8; 64];
+        let faults = |a: &[u8], b: &[u8], s: &[u8], t: &[u8]| Measured::of(a, b, s, t).faults();
+        assert_eq!(faults(&black, &black, &camera_a, &camera_b), ["BLACK", "STILL"]);
+        assert_eq!(faults(&white, &white, &camera_a, &camera_b), ["BLOWN", "STILL"]);
+        assert_eq!(faults(&camera_a, &camera_b, &camera_a, &camera_b), ["PASSTHROUGH"]);
+        // Frozen output over a frozen camera is not the patch's fault.
+        assert!(faults(&grey, &grey, &camera_a, &camera_a).is_empty());
+        // Alive and different from the camera.
+        assert!(faults(&black.iter().map(|_| 60).collect::<Vec<u8>>(), &grey, &camera_a, &camera_b).is_empty());
     }
 }

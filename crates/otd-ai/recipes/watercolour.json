@@ -1,0 +1,60 @@
+{
+  "name": "watercolour",
+  "group": "Camera",
+  "prompt": "turn my camera into soft watercolour washes with ink outlines",
+  "needs": "video",
+  "notes": "A painterly image treatment with soft colour bands and ink outlines. wash1.size controls diffusion; ink1.bands controls colour bands; ink1.edge controls outline strength. This is not a pigment simulation.",
+  "nodes": [
+    {
+      "name": "wash1",
+      "op": "blurTOP",
+      "pos": [
+        0,
+        0
+      ],
+      "params": {
+        "size": 5
+      }
+    },
+    {
+      "name": "ink1",
+      "op": "toonTOP",
+      "pos": [
+        220,
+        0
+      ],
+      "params": {
+        "bands": 8,
+        "edge": 0.7,
+        "saturation": 0.85
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        440,
+        0
+      ],
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "wash1",
+      "input": 0
+    },
+    {
+      "from": "wash1",
+      "to": "ink1",
+      "input": 0
+    },
+    {
+      "from": "ink1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

@@ -33,10 +33,23 @@
 //! are measured against, and one that fails here is a template that builds
 //! a broken patch.
 //!
+//! `--watch` runs the editor's Watch loop instead of the prompts: one frame
+//! of the clip goes to the model with the live-camera brief (`Seen::Camera`),
+//! the plan is cooked and measured, and anything measured wrong goes back
+//! once with the viewer frame and the result brief (`Seen::Result`) — the
+//! same two requests the Watch button makes, minus the button.
+//!
+//!     cargo run -p otd-ai --example vfx_eval -- --watch --provider claude-code --repeat 3
+//!     cargo run -p otd-ai --example vfx_eval -- --watch --sabotage --provider claude-code
+//!
+//! `--sabotage` swaps the first answer for a patch that shows black, so the
+//! repair request is tested on purpose rather than only when a model slips.
+//!
 //! `--save` writes each patch as a `.otd`, so anything that scores badly can
 //! be opened in the editor and looked at rather than guessed about.
 
-use otd_ai::{Ask, Keys, Provider, patch};
+use otd_ai::vision::{Measured, mean_abs_diff, mean_luma};
+use otd_ai::{Ask, Keys, Provider, Seen, patch};
 use otd_core::{CookContext, CookEngine, Graph, NodeId, OpRegistry, Project, Value};
 use otd_engine::{Engines, registry};
 use otd_gpu::GpuContext;
@@ -48,6 +61,12 @@ use otd_gpu::GpuContext;
 /// and phrased the way somebody types rather than the way an operator is
 /// named, because a prompt that names the operator is not testing anything.
 const PROMPTS: &[(&str, &str)] = &[
+    ("datamosh", "smear my camera in the direction of movement with optical flow feedback datamoshing"),
+    ("greenscreen", "replace my camera green screen with a glowing animated purple portal"),
+    ("nightvision", "give my webcam a green night vision look with grain scanlines and a dark vignette"),
+    ("relief", "make my camera look like a metallic embossed relief lit from the side"),
+    ("mosaic", "turn my camera into a colourful tiled pixel mosaic with dark grout"),
+    ("watercolour", "turn my camera into soft watercolour washes with ink outlines"),
     (
         "glitch",
         "make the video glitch out with rgb split and scanlines",
@@ -100,17 +119,6 @@ const PROMPTS: &[(&str, &str)] = &[
     ),
 ];
 
-struct Measured {
-    luma: f64,
-    motion: f64,
-    from_source: f64,
-    /// How much the SOURCE moved over the same frames.
-    ///
-    /// Without this the ruler cannot tell a patch that froze the picture from
-    /// a clip that never advanced, and it called the second one the first —
-    /// see the pacing note in `measure`.
-    source_motion: f64,
-}
 
 fn main() {
     let keys = Keys::load();
@@ -122,6 +130,8 @@ fn main() {
     let mut repeat = 1usize;
     let mut save: Option<String> = None;
     let mut use_recipes = false;
+    let mut watch = false;
+    let mut sabotage = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -143,6 +153,10 @@ fn main() {
             "--repeat" => repeat = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
             "--save" => save = args.next(),
             "--recipes" => use_recipes = true,
+            "--watch" => watch = true,
+            // Replace the first answer with a patch that crushes the picture
+            // to black, so the repair round is exercised on purpose.
+            "--sabotage" => sabotage = true,
             other => eprintln!("ignoring `{other}`"),
         }
     }
@@ -151,6 +165,11 @@ fn main() {
         eprintln!("no clip at {clip} — pass --clip");
         std::process::exit(1);
     }
+    // Saved projects must reopen from the output directory, not just this cwd.
+    clip = std::fs::canonicalize(&clip)
+        .expect("resolve clip")
+        .to_string_lossy()
+        .into_owned();
     let Ok(gpu) = GpuContext::headless() else {
         eprintln!("no GPU available; this example needs one");
         std::process::exit(1);
@@ -193,6 +212,8 @@ fn main() {
             .iter()
             .map(|r| (r.name.as_str(), r.prompt.as_str(), Some(r)))
             .collect()
+    } else if watch {
+        vec![("watch", "", None)]
     } else {
         PROMPTS.iter().map(|(n, p)| (*n, *p, None)).collect()
     };
@@ -222,38 +243,22 @@ fn main() {
                     }
                 }
             } else {
-                let ask = Ask {
-                    provider,
-                    model: provider.default_model().to_string(),
-                    prompt: prompt.to_string(),
-                    image: None,
-                    graph: &graph,
-                    parent: root,
-                    selected: Some(source),
-                    viewer: None,
-                    registry: &reg,
-                    allow_delete: true,
-                    scope: &[],
+                let frame = match watch {
+                    true => grab(&gpu, &mut graph, source),
+                    false => None,
                 };
-                let request = otd_ai::request_for(&ask);
-                let reply =
-                    match otd_ai::complete_with_repair(&request, &key, &keys, Some(check_shader)) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            println!(
-                                "{name:<11} {:>5} {:>6} {:>7} {:>7}  CALL FAILED {e}",
-                                "-", "-", "-", "-"
-                            );
-                            continue;
-                        }
-                    };
-                match otd_ai::plan_from_reply(&reply.text, &reg) {
+                let seen = match watch {
+                    true => Seen::Camera,
+                    false => Seen::Reference,
+                };
+                let first = match sabotage {
+                    true => otd_ai::plan_from_reply(SABOTAGE, &reg).map_err(|e| format!("PLAN REJECTED {e}")),
+                    false => ask_model(provider, &key, &keys, &reg, &graph, source, None, prompt, frame, seen),
+                };
+                match first {
                     Ok(p) => p,
                     Err(e) => {
-                        println!(
-                            "{name:<11} {:>5} {:>6} {:>7} {:>7}  PLAN REJECTED {e}",
-                            "-", "-", "-", "-"
-                        );
+                        println!("{name:<11} {:>5} {:>6} {:>7} {:>7}  {e}", "-", "-", "-", "-");
                         continue;
                     }
                 }
@@ -287,31 +292,19 @@ fn main() {
             } else {
                 String::new()
             };
-            let mut faults: Vec<String> = Vec::new();
-            if m.luma < 2.0 {
-                faults.push("BLACK".into());
-            }
-            // The other end of the same failure. A feedback loop that adds a
-            // bright clip every frame settles at many times the clip, and
-            // solid white passes every other check here — it is not black, it
-            // is not the source, and the last few percent of it still moves.
-            if m.luma > 248.0 {
-                faults.push("BLOWN".into());
-            }
-            // A patch that does not move over a source that also does not
-            // move has not been shown to be wrong: there was nothing to
-            // respond to. Say which it is rather than blaming the patch.
-            if m.motion < 0.4 {
-                faults.push(match m.source_motion < 0.4 {
-                    true => "SRC-STILL".into(),
-                    false => "STILL".to_string(),
-                });
-            }
-            if m.from_source < 2.0 {
-                faults.push("PASSTHROUGH".into());
+            // One ruler: the editor's live check uses the same thresholds.
+            let mut faults: Vec<String> = m.faults().iter().map(|f| f.to_string()).collect();
+            // A still patch over a still source has not been shown to be
+            // wrong; say which it is rather than blaming the patch.
+            if m.motion < 0.4 && m.source_motion < 0.4 {
+                faults.push("SRC-STILL".into());
             }
             faults.extend(shader_errors.iter().map(|e| format!("SHADER({e})")));
+            faults.extend(applied.warnings.iter().map(|w| format!("WARNING({w})")));
             faults.extend(dangling_refs(&graph, &applied.created));
+            if watch && m.faults().is_empty() && m.is_subtle() {
+                faults.push("SUBTLE".into());
+            }
             let verdict = if faults.is_empty() {
                 passes += 1;
                 format!("{tag}ok")
@@ -330,6 +323,45 @@ fn main() {
             for w in &applied.warnings {
                 println!("{:>12}warn: {w}", "");
             }
+            if watch {
+                println!("{:>12}model saw: {}", "", first_words(&plan.notes));
+            }
+
+            // The Watch loop's second request: only when the ruler found
+            // something, and only once.
+            let mut measured = m.faults();
+            if measured.is_empty() && m.is_subtle() {
+                measured.push("SUBTLE");
+            }
+            if watch && (!measured.is_empty() || !shader_errors.is_empty()) {
+                let frame = grab(&gpu, &mut graph, watched);
+                let fixed = ask_model(
+                    provider, &key, &keys, &reg, &graph, source, Some(watched), "",
+                    frame, Seen::Result(measured),
+                )
+                .and_then(|plan| patch::apply(&mut graph, root, &reg, &plan).map(|a| (plan, a)));
+                match fixed {
+                    Ok((plan, (_, viewer))) => {
+                        let watched = viewer.unwrap_or(watched);
+                        let (m, errors) = measure(&gpu, &mut graph, watched, source);
+                        let mut faults: Vec<&str> = m.faults();
+                        if faults.is_empty() && m.is_subtle() {
+                            faults.push("SUBTLE");
+                        }
+                        let ok = faults.is_empty() && errors.is_empty();
+                        if ok {
+                            passes += 1;
+                        }
+                        println!(
+                            "{:<11} {:>5} {:>6.1} {:>7.2} {:>7.2} {:>7.1}  {}",
+                            "  +fix", "", m.luma, m.motion, m.source_motion, m.from_source,
+                            if ok { "ok (after one fix)".to_string() } else { format!("{} {:?}", faults.join(" "), errors) },
+                        );
+                        println!("{:>12}fix notes: {}", "", first_words(&plan.notes));
+                    }
+                    Err(e) => println!("{:>12}fix failed: {e}", ""),
+                }
+            }
             if let Some(dir) = &save {
                 let path = format!("{dir}/{name}{}.otd", if repeat > 1 { run + 1 } else { 0 });
                 let project = Project::from_graph(&graph, &reg, 60.0);
@@ -343,6 +375,83 @@ fn main() {
 
     println!("{}", "-".repeat(86));
     println!("{passes}/{runs} produced a moving, non-black picture that differs from the source");
+    if runs == 0 || passes != runs {
+        std::process::exit(1);
+    }
+}
+
+/// A patch that builds cleanly and shows nothing, as a model's first answer
+/// sometimes does.
+const SABOTAGE: &str = r#"{"notes": "sabotage", "nodes": [{"name": "crush1", "op": "levelTOP", "params": {"brightness": 0.0}}],
+ "connections": [{"from": "movie1", "to": "crush1", "input": 0}, {"from": "crush1", "to": "out1", "input": 0}],
+ "viewer": "out1"}"#;
+
+/// Ask the model once, the way the editor does, and validate the reply.
+#[allow(clippy::too_many_arguments)]
+fn ask_model(
+    provider: Provider,
+    key: &otd_ai::Key,
+    keys: &Keys,
+    reg: &OpRegistry,
+    graph: &Graph,
+    source: NodeId,
+    viewer: Option<NodeId>,
+    prompt: &str,
+    frame: Option<(u32, u32, Vec<u8>)>,
+    seen: Seen,
+) -> Result<patch::Plan, String> {
+    let image = match frame {
+        Some((w, h, p)) => Some(otd_ai::Image::from_rgba(w, h, p)?),
+        None => None,
+    };
+    let ask = Ask {
+        provider,
+        model: provider.default_model().to_string(),
+        prompt: format!(
+            "{prompt}\nFor this test, movie1 is the recorded camera feed. \
+             Apply the effect to that selected input; do not open another camera or file."
+        ),
+        image,
+        seen,
+        graph,
+        parent: graph.root(),
+        selected: Some(source),
+        viewer,
+        registry: reg,
+        allow_delete: true,
+        scope: &[],
+    };
+    let request = otd_ai::request_for(&ask);
+    let reply = otd_ai::complete_with_repair(&request, key, keys, Some(check_shader))
+        .map_err(|e| format!("CALL FAILED {e}"))?;
+    otd_ai::plan_from_reply(&reply.text, reg).map_err(|e| format!("PLAN REJECTED {e}"))
+}
+
+/// Cook in real time until a node shows a picture, and return it full size —
+/// the frame the Watch button would send.
+fn grab(gpu: &GpuContext, graph: &mut Graph, node: NodeId) -> Option<(u32, u32, Vec<u8>)> {
+    let mut engines = Engines::new(gpu.clone());
+    let mut cook = CookEngine::new();
+    let mut time = CookContext::default();
+    for frame in 0..240 {
+        engines.begin_frame();
+        let _ = cook.cook_frame(graph, &[node], &time, &mut engines);
+        engines.end_frame();
+        time.advance(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        // Past the first second so a feedback loop has built up, as it
+        // would have on screen.
+        if frame < 60 {
+            continue;
+        }
+        let tex = engines.top.output(graph, node)?.clone();
+        if let Ok((w, h, p)) = otd_gpu::read_pixels_rgba8(gpu, &tex) {
+            if mean_luma(&p) > 1.0 {
+                return Some((w, h, p));
+            }
+        }
+    }
+    None
 }
 
 /// A clip on the canvas and a null after it — the patch somebody has open
@@ -511,26 +620,10 @@ fn read(gpu: &GpuContext, engines: &Engines, graph: &Graph, id: NodeId) -> Optio
     let tex = engines.top.output(graph, id)?.clone();
     otd_gpu::read_pixels_rgba8(gpu, &tex)
         .ok()
-        .map(|(_, _, p)| p)
-}
-
-fn mean_luma(pixels: &[u8]) -> f64 {
-    let sum: f64 = pixels
-        .chunks(4)
-        .map(|p| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64)
-        .sum();
-    sum / (pixels.len() / 4).max(1) as f64
-}
-
-fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
-    let n = a.len().min(b.len());
-    if n == 0 {
-        return 0.0;
-    }
-    let sum: f64 = (0..n)
-        .map(|i| (a[i] as i32 - b[i] as i32).abs() as f64)
-        .sum();
-    sum / n as f64
+        .and_then(|(w, h, p)| image::RgbaImage::from_raw(w, h, p))
+        .map(|image| image::imageops::resize(
+            &image, 256, 144, image::imageops::FilterType::Triangle,
+        ).into_raw())
 }
 
 /// Parameters naming an operator that is not there — the quiet 3D failure.

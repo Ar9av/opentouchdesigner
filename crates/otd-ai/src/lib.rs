@@ -41,6 +41,8 @@ pub struct Ask<'a> {
     /// and the prompt itself becomes optional, because pointing at a picture
     /// is a complete request on its own.
     pub image: Option<vision::Image>,
+    /// What the image is, which decides the brief that goes with it.
+    pub seen: Seen,
     pub graph: &'a Graph,
     pub parent: NodeId,
     /// What the user has clicked on, if anything. This is the referent of
@@ -60,6 +62,18 @@ pub struct Ask<'a> {
     /// for what the model is told and [`patch::gate_scope`] for what is
     /// enforced regardless of what it was told.
     pub scope: &'a [NodeId],
+}
+
+/// What an attached image is a picture of.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Seen {
+    /// A look to work back to — a screenshot, a still, a painting.
+    #[default]
+    Reference,
+    /// A frame of the live camera: the input to design an effect for.
+    Camera,
+    /// The viewer after the last change, with what was measured wrong.
+    Result(Vec<&'static str>),
 }
 
 /// Recent successful creative decisions. Kept in memory, never in project files.
@@ -121,12 +135,17 @@ pub fn request_for(ask: &Ask) -> Request {
     let prompt = ask.prompt.trim();
 
     let user = match &ask.image {
-        // With an image, the reverse-engineering brief carries the request and
-        // anything typed is a refinement on top of it — "like this but slower",
-        // "these colours, no feedback". An empty box is a complete ask here,
-        // which it never is without a picture.
+        // With an image, its brief carries the request and anything typed is
+        // a refinement on top of it — "like this but slower", "these colours,
+        // no feedback". An empty box is a complete ask here, which it never is
+        // without a picture.
         Some(_) => {
-            let mut text = format!("{network}\n\n{}", patch::reverse_engineer_prompt());
+            let brief = match &ask.seen {
+                Seen::Reference => patch::reverse_engineer_prompt().to_string(),
+                Seen::Camera => patch::camera_prompt().to_string(),
+                Seen::Result(faults) => patch::result_prompt(faults),
+            };
+            let mut text = format!("{network}\n\n{brief}");
             if !prompt.is_empty() {
                 text.push_str(&format!(
                     "\n\nAND WHAT THEY ASKED FOR ON TOP OF THAT\n\
@@ -147,7 +166,10 @@ pub fn request_for(ask: &Ask) -> Request {
         .iter()
         .any(|id| ask.graph.node(*id).family == otd_core::Family::Top);
     system += &knowledge::context_for(prompt, ask.registry);
-    system += &recipes::examples_for(prompt, has_source);
+    system += &match (&ask.image, &ask.seen) {
+        (Some(_), Seen::Camera) => recipes::camera_examples(prompt, camera_turn()),
+        _ => recipes::examples_for(prompt, has_source),
+    };
     if !ask.allow_delete {
         system += patch::NO_DELETE_RULE;
     }
@@ -159,6 +181,12 @@ pub fn request_for(ask: &Ask) -> Request {
         .system(system)
         .user(user)
         .image(ask.image.clone())
+}
+
+/// Which pair of camera examples to show: moves on every Watch request.
+fn camera_turn() -> usize {
+    static TURN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    TURN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Turn a raw reply into a validated plan.
@@ -358,6 +386,7 @@ mod context_tests {
             model: String::new(),
             prompt: "make it slower".into(),
             image: None,
+            seen: Default::default(),
             graph: &graph,
             parent: graph.root(),
             selected: None,
@@ -377,5 +406,35 @@ mod context_tests {
             &[],
             &registry
         )));
+    }
+
+    #[test]
+    fn each_kind_of_picture_gets_its_own_brief() {
+        let registry = otd_engine::registry();
+        let graph = Graph::new();
+        let frame = vision::Image::from_rgba(4, 2, vec![128; 32]).unwrap();
+        let user = |seen: Seen| {
+            request_for(&Ask {
+                provider: Provider::Anthropic,
+                model: String::new(),
+                prompt: String::new(),
+                image: Some(frame.clone()),
+                seen,
+                graph: &graph,
+                parent: graph.root(),
+                selected: None,
+                viewer: None,
+                registry: &registry,
+                allow_delete: false,
+                scope: &[],
+            })
+            .user
+        };
+        assert!(user(Seen::Reference).contains("REFERENCE IMAGE"));
+        let camera = user(Seen::Camera);
+        assert!(camera.contains("LIVE CAMERA") && !camera.contains("REFERENCE IMAGE"));
+        let result = user(Seen::Result(vec!["BLACK", "PASSTHROUGH"]));
+        assert!(result.contains("- BLACK:") && result.contains("- PASSTHROUGH:"));
+        assert!(!result.contains("- BLOWN:"), "only the measured faults are explained");
     }
 }

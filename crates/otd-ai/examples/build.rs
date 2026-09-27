@@ -104,6 +104,7 @@ fn main() {
         model: model.clone(),
         prompt: args[1].clone(),
         image,
+        seen: Default::default(),
         graph: &graph,
         parent: root,
         selected,

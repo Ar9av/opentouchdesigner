@@ -1,0 +1,48 @@
+{
+  "name": "ascii",
+  "group": "Camera",
+  "prompt": "turn my camera into live green ascii text art, brighter areas as denser characters",
+  "needs": "video",
+  "notes": "Each cell samples the picture once and draws one 5x5 glyph chosen by brightness. ascii1.uniform1.x is the cell size in pixels (bigger = chunkier letters); .y blends the terminal green into the camera's own colours; .z is the brightness curve (above 1 sparser).",
+  "nodes": [
+    {
+      "name": "ascii1",
+      "op": "glslTOP",
+      "pos": [
+        220,
+        0
+      ],
+      "params": {
+        "language": "glsl",
+        "source": "float glyph(int n, vec2 p) {\n    // p in [-1,1]; a 5x5 bitmap packed row by row, bit = x + 5*y.\n    vec2 q = floor(p * vec2(-2.5, 2.5) + 2.5);\n    if (q.x < 0.0 || q.y < 0.0 || q.x > 4.0 || q.y > 4.0) return 0.0;\n    int a = int(q.x) + 5 * int(q.y);\n    return float((n >> a) & 1);\n}\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    float cell = max(U.p0.x, 4.0);\n    vec2 centre = (floor(fragCoord / cell) + 0.5) * cell;\n    vec3 src = texture(iChannel0, centre / iResolution.xy).rgb;\n    float l = pow(dot(src, vec3(0.2126, 0.7152, 0.0722)), U.p0.z);\n    int n = 4;\n    if (l > 0.10) n = 131200;\n    if (l > 0.20) n = 14336;\n    if (l > 0.30) n = 145536;\n    if (l > 0.40) n = 1016800;\n    if (l > 0.50) n = 18157905;\n    if (l > 0.60) n = 27070835;\n    if (l > 0.70) n = 11512810;\n    if (l > 0.80) n = 15455950;\n    vec2 local = (fragCoord - centre) / (cell * 0.5);\n    float on = glyph(n, local * 1.1);\n    vec3 tint = mix(vec3(0.25, 1.0, 0.45), src * 1.4, U.p0.y);\n    fragColor = vec4(tint * on, 1.0);\n}\n",
+        "uniform1": [
+          10.0,
+          0.0,
+          0.9,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "out1",
+      "op": "nullTOP",
+      "pos": [
+        440,
+        0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "source1",
+      "to": "ascii1",
+      "input": 0
+    },
+    {
+      "from": "ascii1",
+      "to": "out1",
+      "input": 0
+    }
+  ],
+  "viewer": "out1"
+}

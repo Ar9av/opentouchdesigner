@@ -5,9 +5,10 @@ description: Draw many copies of a shape in OpenTouchDesigner by instancing a Ge
 
 # Instancing
 
-The upstream `td-pops` skill targets TouchDesigner's GPU particle operators.
-**There is no particle operator here.** The equivalent is instancing: one SOP
-drawn many times, with a per-instance transform built from a CHOP.
+The upstream `td-pops` skill targets TouchDesigner's GPU particle operators
+(POPs). **There are no POPs here.** The equivalent is instancing: one SOP drawn
+many times, with a per-instance transform built from a CHOP — and
+`particleCHOP` is the one CHOP that simulates.
 
 ## How it works
 
@@ -32,9 +33,18 @@ merge and name it as `sx`, and every copy breathes together.
 
 `instancescale` multiplies every instance's scale uniformly.
 
+## Particles
+
+`particleCHOP` is a stateful CPU emitter: one sample per particle, with
+`tx ty tz size life`. Set `geometryCOMP` `sx`/`sy`/`sz` to `size` and the
+particles shrink as they die. `emitx`/`emity` are 0..1 with y **down**;
+positions span 6 scene units across, so frame the camera on that. Negative
+`gravity` rises (embers, bubbles). Up to 4096; no collisions or flocking —
+don't promise either.
+
 ## Building the point field
 
-There is no point-simulation operator, so the CHOP *is* the simulation:
+For anything that is not an emitter, the CHOP *is* the simulation:
 
 - `patternCHOP` — a fixed-length buffer. The usual source of N samples.
 - `noiseCHOP` — per-sample noise. Three of these merged is a random cloud.
@@ -45,6 +55,11 @@ There is no point-simulation operator, so the CHOP *is* the simulation:
 - `mergeCHOP` — put the channels side by side.
 - `renameCHOP` / `selectCHOP` — get the names to match the parameters above.
 - `lagCHOP` — smooth. An instance field that snaps looks like a bug.
+- `springCHOP` — smooth with overshoot, for motion that should feel physical.
+- `trailCHOP` — the last N seconds of a channel as one buffer: instance one
+  copy per sample to draw a waveform or a comet tail.
+- `fanCHOP` — one index channel to N on/off channels, e.g. light one of N
+  instances with `cr`.
 
 A field that responds to audio: `audiospectrumCHOP` → `lagCHOP` →
 `selectCHOP(rename: "sy")` merged into the position channels. See the
