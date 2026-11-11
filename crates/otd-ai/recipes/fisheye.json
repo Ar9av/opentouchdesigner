@@ -1,0 +1,45 @@
+{
+ "name": "fisheye",
+ "group": "Video",
+ "prompt": "a breathing fisheye lens, like a skate video",
+ "needs": "video",
+ "notes": "Lens Distort with a negative k1 bulges the middle out; an expression makes it breathe. lens1.k1 is the bulge (more negative is rounder); lens1.scale above 1 crops the black corners.",
+ "nodes": [
+  {
+   "name": "lens1",
+   "op": "lensdistortTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "scale": 1.1,
+    "extend": "mirror"
+   },
+   "expressions": {
+    "k1": "-0.4 - 0.12 * sin(absTime * 1.3)"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    200,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "lens1",
+   "input": 0
+  },
+  {
+   "from": "lens1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

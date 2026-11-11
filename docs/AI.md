@@ -20,6 +20,22 @@ It is not a chatbot bolted to the side: the reply is a *plan*, checked against
 the real operator registry and built into the network you are looking at, as
 one undoable edit.
 
+## Stacking known-good looks
+
+Every recipe in the **Recipes** menu is listed in the assistant's brief, and
+a reply can build them by name instead of retyping them:
+
+```json
+{"use": [{"recipe": "crt", "on": "camera1"}, {"recipe": "bloom"}, {"recipe": "beatglitch"}]}
+```
+
+That is a CRT, blooming, glitching on the beat: three tested patches chained
+in order, each fed from the one before, nodes named `crt_…`, `bloom_…`,
+`beatglitch_…`. `"params": {"crt1": {"uniform1": [0.12, 0, 0, 0]}}` on an
+entry tunes a node inside it. So "VHS and bloom on my camera, synced to the
+music" is one short reply whose shaders are already known to compile, rather
+than a hundred lines of GLSL the model has to get right first time.
+
 ## Working back from a picture
 
 Attach a still and the assistant builds a patch that produces that look.

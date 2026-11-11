@@ -1,0 +1,138 @@
+{
+ "name": "sketch",
+ "group": "Camera",
+ "prompt": "turn my camera into a pencil sketch on paper",
+ "needs": "video",
+ "notes": "Edges, inverted to dark lines on white, multiplied onto a fine paper grain. lines1.strength is how heavy the pencil is; paper1.period the grain size.",
+ "nodes": [
+  {
+   "name": "lines1",
+   "op": "edgeTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "strength": 2.5,
+    "width": 1
+   }
+  },
+  {
+   "name": "ink1",
+   "op": "levelTOP",
+   "pos": [
+    200,
+    0
+   ],
+   "params": {
+    "invert": 1.0,
+    "gamma": 1.4
+   }
+  },
+  {
+   "name": "grey1",
+   "op": "monochromeTOP",
+   "pos": [
+    400,
+    0
+   ]
+  },
+  {
+   "name": "paper1",
+   "op": "noiseTOP",
+   "pos": [
+    200,
+    180
+   ],
+   "params": {
+    "period": 0.015,
+    "monochrome": true
+   }
+  },
+  {
+   "name": "grain1",
+   "op": "levelTOP",
+   "pos": [
+    400,
+    180
+   ],
+   "params": {
+    "brightness": 0.25,
+    "blacklevel": 0.0
+   }
+  },
+  {
+   "name": "tone1",
+   "op": "levelTOP",
+   "pos": [
+    600,
+    180
+   ],
+   "params": {
+    "invert": 1.0
+   }
+  },
+  {
+   "name": "mix1",
+   "op": "compositeTOP",
+   "pos": [
+    800,
+    0
+   ],
+   "params": {
+    "operation": "multiply"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    1000,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "lines1",
+   "input": 0
+  },
+  {
+   "from": "lines1",
+   "to": "ink1",
+   "input": 0
+  },
+  {
+   "from": "ink1",
+   "to": "grey1",
+   "input": 0
+  },
+  {
+   "from": "paper1",
+   "to": "grain1",
+   "input": 0
+  },
+  {
+   "from": "grain1",
+   "to": "tone1",
+   "input": 0
+  },
+  {
+   "from": "grey1",
+   "to": "mix1",
+   "input": 0
+  },
+  {
+   "from": "tone1",
+   "to": "mix1",
+   "input": 1
+  },
+  {
+   "from": "mix1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

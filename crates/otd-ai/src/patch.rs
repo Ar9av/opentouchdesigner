@@ -436,11 +436,13 @@ Reply with ONE JSON object and nothing else. No prose, no markdown fences.
   "set": [{{"node": "level1", "params": {{"brightness": 0.9}},
             "exports": {{"contrast": "lag1:r"}}}}],
   "delete": ["blur2", "oldramp1"],
+  "use": [{{"recipe": "vhs", "on": "camera1"}}, {{"recipe": "bloom"}}],
   "viewer": "out1"
 }}
 
-`nodes` creates, `set` retunes what is already there, `delete` removes it.
-All four lists are optional; a plan may be nothing but a `set`.
+`nodes` creates, `set` retunes what is already there, `delete` removes it,
+`use` builds tested recipes by name (listed below). All five are optional; a
+plan may be nothing but a `set`, or nothing but a `use`.
 
 RULES
 - Use only operator types from the catalogue below. Never invent one.
@@ -754,8 +756,10 @@ WHAT MAKES A GOOD-LOOKING PATCH
   turn, and set their starting values in `params`. Everything else is a
   `const float` at the top of the source.
 
+{}
 OPERATOR CATALOGUE
 {}"#,
+        crate::recipes::menu(),
         catalogue(registry)
     )
 }
@@ -978,7 +982,7 @@ const DELETE_KEYS: &[&str] = &["delete", "deletes", "remove", "removals"];
 const SET_KEYS: &[&str] = &["set", "sets"];
 
 /// Everything else the parser reads.
-const OTHER_KEYS: &[&str] = &["notes", "nodes", "connections", "viewer"];
+const OTHER_KEYS: &[&str] = &["notes", "nodes", "connections", "viewer", "use"];
 
 /// The first of `keys` present as an array.
 fn first_array<'a>(
@@ -1158,6 +1162,8 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
             unknown.join(", ")
         ));
     }
+
+    crate::recipes::expand_uses(value, &mut plan, registry);
 
     // A plan used to have to build something to be a plan. It no longer does:
     // "delete the second feedback loop" and "slow the zoom down" are complete

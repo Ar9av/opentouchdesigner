@@ -83,6 +83,8 @@ const FILES: &[&str] = &[
     include_str!("../recipes/cloak.json"),
     include_str!("../recipes/motionpixel.json"),
     include_str!("../recipes/popart.json"),
+    include_str!("../recipes/rainbowtrail.json"),
+    include_str!("../recipes/sketch.json"),
     include_str!("../recipes/slitscan.json"),
     include_str!("../recipes/thermal.json"),
     include_str!("../recipes/hologram.json"),
@@ -94,6 +96,8 @@ const FILES: &[&str] = &[
     include_str!("../recipes/vhs.json"),
     include_str!("../recipes/crt.json"),
     include_str!("../recipes/bloom.json"),
+    include_str!("../recipes/duotone.json"),
+    include_str!("../recipes/fisheye.json"),
     include_str!("../recipes/kaleidoscope.json"),
     include_str!("../recipes/retro.json"),
     include_str!("../recipes/toon.json"),
@@ -108,6 +112,7 @@ const FILES: &[&str] = &[
     include_str!("../recipes/beat.json"),
     include_str!("../recipes/musicsync.json"),
     include_str!("../recipes/beatglitch.json"),
+    include_str!("../recipes/beatstrobe.json"),
 ];
 
 /// Every recipe, in menu order. Parsed once; a file that does not parse is a
@@ -214,6 +219,203 @@ pub fn with_source(plan: &mut Plan, name: &str) {
                     *target = format!("{name}{rest}");
                 }
             }
+        }
+    }
+}
+
+/// The recipes, one line each, for the brief: what the model can `use`.
+pub fn menu() -> String {
+    let mut out = String::from(
+        "RECIPES YOU CAN USE BY NAME
+Each is a tested patch. Prefer `use` over rebuilding one by hand: it costs
+one line, its shaders are known to compile, and it cannot starve a loop.
+- `{\"recipe\": \"vhs\", \"on\": \"camera1\"}` builds vhs fed from camera1.
+  A recipe marked [video] needs `on`: the clip or camera to put it on.
+- Several in one `use` list CHAIN: each one is fed from the one before, so
+  [{\"recipe\": \"crt\", \"on\": \"camera1\"}, {\"recipe\": \"bloom\"}] is a CRT
+  with its highlights blooming. Leave `on` off everything after the first.
+- `\"params\": {\"<node>\": {\"<param>\": value}}` tunes nodes inside it, by the
+  names in the recipe; the notes below say which ones matter.
+- Its nodes land named `<recipe>_<node>`, e.g. `vhs_out1`; wire on from
+  that, or `set` it in a later request. The last one becomes the viewer.
+- Add your own `nodes` alongside when nothing here does what was asked.
+
+",
+    );
+    for r in all() {
+        let video = if r.needs == Needs::Video {
+            " [video]"
+        } else {
+            ""
+        };
+        out.push_str(&format!("- {}{video}: {}", r.name, r.prompt));
+        let knobs = knob_sentences(&r.notes);
+        if !knobs.is_empty() {
+            out.push_str(&format!(" — {knobs}"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The sentences of a recipe's notes that name a `node.param` to turn — the
+/// part a model needs to tune it — capped so fifty recipes stay a short list.
+fn knob_sentences(notes: &str) -> String {
+    let names_a_knob = |s: &str| {
+        s.split(|c: char| c.is_whitespace() || c == ';' || c == ',')
+            .any(|w| {
+                let w = w.trim_end_matches(['.', ')', ':']);
+                w.split_once('.').is_some_and(|(a, b)| {
+                    a.chars().any(|c| c.is_ascii_alphabetic())
+                        && b.starts_with(|c: char| c.is_ascii_lowercase())
+                })
+            })
+    };
+    let mut out = String::new();
+    for sentence in notes.split_inclusive(". ") {
+        if names_a_knob(sentence) && out.len() + sentence.len() <= 200 {
+            out.push_str(sentence);
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Expand a plan's `use` list: each named recipe becomes nodes in the plan,
+/// prefixed so two recipes (or one used twice) cannot collide, fed from
+/// `on` or from the previous recipe's viewer, laid out left to right.
+pub fn expand_uses(value: &serde_json::Value, plan: &mut Plan, registry: &OpRegistry) {
+    let Some(uses) = value.get("use").and_then(|u| u.as_array()) else {
+        return;
+    };
+    let mut previous: Option<String> = None;
+    let mut x = plan.nodes.iter().map(|n| n.pos[0]).fold(0.0_f32, f32::max);
+    let y = plan.nodes.iter().map(|n| n.pos[1]).fold(0.0_f32, f32::max)
+        + if plan.nodes.is_empty() { 0.0 } else { 400.0 };
+    let mut taken: Vec<String> = plan.nodes.iter().map(|n| n.name.clone()).collect();
+    for (i, entry) in uses.iter().enumerate() {
+        let name = entry
+            .get("recipe")
+            .or_else(|| entry.get("name"))
+            .and_then(|n| n.as_str())
+            .or_else(|| entry.as_str());
+        let Some(name) = name else {
+            plan.warnings.push(format!("use {i}: no `recipe` name"));
+            continue;
+        };
+        let Some(recipe) = find(name) else {
+            let names: Vec<_> = all().iter().map(|r| r.name.as_str()).collect();
+            plan.warnings.push(format!(
+                "use: there is no recipe `{name}` — the recipes are {}",
+                names.join(", ")
+            ));
+            continue;
+        };
+        let mut json = recipe.value().clone();
+        if let Some(tune) = entry.get("params").and_then(|p| p.as_object()) {
+            for (node, params) in tune {
+                let target = json["nodes"]
+                    .as_array()
+                    .and_then(|ns| ns.iter().position(|n| n["name"] == node.as_str()));
+                match (target, params.as_object()) {
+                    (Some(at), Some(params)) => {
+                        let n = &mut json["nodes"][at];
+                        if !n["params"].is_object() {
+                            n["params"] = serde_json::json!({});
+                        }
+                        for (k, v) in params {
+                            n["params"][k] = v.clone();
+                        }
+                    }
+                    _ => plan
+                        .warnings
+                        .push(format!("use {name}: it has no node `{node}` to tune")),
+                }
+            }
+        }
+        let mut sub = match patch::parse_plan(&json, registry) {
+            Ok(sub) => sub,
+            Err(e) => {
+                plan.warnings.push(format!("use {name}: {e}"));
+                continue;
+            }
+        };
+        plan.warnings.append(&mut sub.warnings);
+
+        let mut prefix = name.to_string();
+        let mut k = 2;
+        while taken.iter().any(|t| t.starts_with(&format!("{prefix}_"))) {
+            prefix = format!("{name}{k}");
+            k += 1;
+        }
+        let on = entry
+            .get("on")
+            .and_then(|o| o.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| previous.clone());
+        if recipe.needs == Needs::Video && on.is_none() {
+            plan.warnings.push(format!(
+                "use {name}: it goes on a clip or camera — say which with `on`"
+            ));
+        }
+        let own: Vec<String> = sub.nodes.iter().map(|n| n.name.clone()).collect();
+        let rename = |s: &str| -> Option<String> {
+            if own.iter().any(|o| o == s) {
+                Some(format!("{prefix}_{s}"))
+            } else if s == SOURCE {
+                on.clone()
+            } else {
+                None
+            }
+        };
+        let swap = |s: &mut String| {
+            if let Some(new) = rename(s) {
+                *s = new;
+            }
+        };
+        let min_x = sub.nodes.iter().map(|n| n.pos[0]).fold(f32::MAX, f32::min);
+        let max_x = sub.nodes.iter().map(|n| n.pos[0]).fold(f32::MIN, f32::max);
+        for node in &mut sub.nodes {
+            swap(&mut node.name);
+            node.pos[0] += x + 250.0 - min_x;
+            node.pos[1] += y;
+            for value in node.params.values_mut() {
+                if let Value::Str(s) = value {
+                    swap(s);
+                }
+            }
+            for target in node.exports.values_mut() {
+                if let Some((src, chan)) = target.rsplit_once(':') {
+                    if let Some(new) = rename(src) {
+                        *target = format!("{new}:{chan}");
+                    }
+                }
+            }
+        }
+        for wire in &mut sub.connections {
+            swap(&mut wire.from);
+            swap(&mut wire.to);
+        }
+        // A source nobody named: keep the convention, and the caller stands
+        // one in or points it at the selection, as it does for a template.
+        sub.connections.retain(|w| !w.from.is_empty());
+        x += 250.0 + (max_x - min_x).max(0.0);
+        taken.extend(sub.nodes.iter().map(|n| n.name.clone()));
+        if let Some(v) = &mut sub.viewer {
+            swap(v);
+        }
+        previous = sub.viewer.clone();
+        plan.nodes.append(&mut sub.nodes);
+        plan.connections.append(&mut sub.connections);
+        if !recipe.notes.is_empty() {
+            if !plan.notes.is_empty() {
+                plan.notes.push(' ');
+            }
+            plan.notes.push_str(&format!("[{name}] {}", recipe.notes));
+        }
+    }
+    if plan.viewer.is_none() || value.get("nodes").is_none() {
+        if let Some(v) = previous {
+            plan.viewer = Some(v);
         }
     }
 }
@@ -393,6 +595,57 @@ pub fn camera_examples(prompt: &str, turn: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn used(json: serde_json::Value) -> Plan {
+        patch::parse_plan(&json, &otd_engine::registry()).unwrap()
+    }
+
+    #[test]
+    fn use_chains_recipes_by_name() {
+        let plan = used(serde_json::json!({"use": [
+            {"recipe": "crt", "on": "camera1", "params": {"crt1": {"uniform1": [0.2, 0, 0, 0]}}},
+            {"recipe": "bloom"},
+        ]}));
+        let wired = |from: &str, to: &str| {
+            plan.connections
+                .iter()
+                .any(|w| w.from == from && w.to == to)
+        };
+        assert!(wired("camera1", "crt_crt1"), "{:?}", plan.connections);
+        // The second is fed from the first's viewer, not from a source1.
+        assert!(wired("crt_out1", "bloom_bright1"), "{:?}", plan.connections);
+        assert!(!plan.connections.iter().any(|w| w.from == SOURCE));
+        assert_eq!(plan.viewer.as_deref(), Some("bloom_out1"));
+        let crt = plan.nodes.iter().find(|n| n.name == "crt_crt1").unwrap();
+        assert_eq!(crt.params["uniform1"], Value::Vec4([0.2, 0.0, 0.0, 0.0]));
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    }
+
+    #[test]
+    fn use_renames_exports_and_targets_and_says_what_is_wrong() {
+        let plan = used(serde_json::json!({"use": [
+            {"recipe": "beatglitch", "on": "camera1"},
+            {"recipe": "trails"},
+            {"recipe": "nonsense"},
+        ]}));
+        let glitch = plan
+            .nodes
+            .iter()
+            .find(|n| n.name == "beatglitch_glitch1")
+            .unwrap();
+        assert_eq!(glitch.exports["uniform1"], "beatglitch_amount1:kick");
+        let fb = plan.nodes.iter().find(|n| n.name == "trails_fb1").unwrap();
+        assert_eq!(fb.params["target"], Value::Str("trails_out1".into()));
+        assert!(plan.warnings.iter().any(|w| w.contains("nonsense")));
+    }
+
+    #[test]
+    fn the_brief_lists_every_recipe() {
+        let menu = menu();
+        for r in all() {
+            assert!(menu.contains(&format!("- {}", r.name)), "{}", r.name);
+        }
+    }
 
     #[test]
     fn camera_examples_name_real_recipes_and_rotate() {

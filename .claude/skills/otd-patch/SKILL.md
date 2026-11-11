@@ -17,6 +17,9 @@ otd plan more.json --on /tmp/p.otd --out /tmp/p.otd   # build on what's there (`
 otd render /tmp/p.otd --node /out1 --frames 60 --out /tmp/f   # then look at the PNGs
 ```
 
+A plan can also be `{"use": [{"recipe": "vhs", "on": "source1"}, {"recipe": "bloom"}]}` —
+recipes by name, chained in order; `otd brief` lists them all.
+
 `otd plan` exits non-zero when anything fired — an invented operator or
 parameter, a value of the wrong type, a shader that does not compile (with the
 compiler's error), a loop that starves, a node wired to nothing, a path param

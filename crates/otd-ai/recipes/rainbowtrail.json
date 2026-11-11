@@ -1,0 +1,208 @@
+{
+ "name": "rainbowtrail",
+ "group": "Camera",
+ "prompt": "leave rainbow trails behind me when I move, cycling through every colour",
+ "needs": "video",
+ "notes": "Only what moves paints: the frame difference is tinted by a colour that cycles round the wheel over time, held in a decaying loop and screened over the camera, so each part of a trail keeps the colour it was painted in. decay1.brightness is trail length; tint1's hue expression is how fast the colours cycle; boost1.brightness the sensitivity.",
+ "nodes": [
+  {
+   "name": "previous1",
+   "op": "feedbackTOP",
+   "pos": [
+    0,
+    200
+   ],
+   "params": {
+    "target": "source1"
+   }
+  },
+  {
+   "name": "change1",
+   "op": "compositeTOP",
+   "pos": [
+    200,
+    140
+   ],
+   "params": {
+    "operation": "difference"
+   }
+  },
+  {
+   "name": "grey1",
+   "op": "monochromeTOP",
+   "pos": [
+    400,
+    140
+   ]
+  },
+  {
+   "name": "boost1",
+   "op": "levelTOP",
+   "pos": [
+    600,
+    140
+   ],
+   "params": {
+    "brightness": 5.0
+   }
+  },
+  {
+   "name": "red1",
+   "op": "constantTOP",
+   "pos": [
+    400,
+    320
+   ],
+   "params": {
+    "color": [
+     1.0,
+     0.15,
+     0.15,
+     1.0
+    ]
+   }
+  },
+  {
+   "name": "tint1",
+   "op": "hsvadjustTOP",
+   "pos": [
+    600,
+    320
+   ],
+   "expressions": {
+    "hue": "(absTime * 0.35) % 1.0 - 0.5"
+   }
+  },
+  {
+   "name": "colour1",
+   "op": "compositeTOP",
+   "pos": [
+    800,
+    140
+   ],
+   "params": {
+    "operation": "multiply"
+   }
+  },
+  {
+   "name": "history1",
+   "op": "feedbackTOP",
+   "pos": [
+    800,
+    320
+   ],
+   "params": {
+    "target": "paint1"
+   }
+  },
+  {
+   "name": "decay1",
+   "op": "levelTOP",
+   "pos": [
+    1000,
+    320
+   ],
+   "params": {
+    "brightness": 0.94
+   }
+  },
+  {
+   "name": "paint1",
+   "op": "compositeTOP",
+   "pos": [
+    1200,
+    140
+   ],
+   "params": {
+    "operation": "maximum"
+   }
+  },
+  {
+   "name": "mix1",
+   "op": "compositeTOP",
+   "pos": [
+    1400,
+    0
+   ],
+   "params": {
+    "operation": "screen"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    1600,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "change1",
+   "input": 0
+  },
+  {
+   "from": "previous1",
+   "to": "change1",
+   "input": 1
+  },
+  {
+   "from": "change1",
+   "to": "grey1",
+   "input": 0
+  },
+  {
+   "from": "grey1",
+   "to": "boost1",
+   "input": 0
+  },
+  {
+   "from": "red1",
+   "to": "tint1",
+   "input": 0
+  },
+  {
+   "from": "boost1",
+   "to": "colour1",
+   "input": 0
+  },
+  {
+   "from": "tint1",
+   "to": "colour1",
+   "input": 1
+  },
+  {
+   "from": "history1",
+   "to": "decay1",
+   "input": 0
+  },
+  {
+   "from": "colour1",
+   "to": "paint1",
+   "input": 0
+  },
+  {
+   "from": "decay1",
+   "to": "paint1",
+   "input": 1
+  },
+  {
+   "from": "source1",
+   "to": "mix1",
+   "input": 0
+  },
+  {
+   "from": "paint1",
+   "to": "mix1",
+   "input": 1
+  },
+  {
+   "from": "mix1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}
