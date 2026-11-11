@@ -1,0 +1,48 @@
+{
+ "name": "vhs",
+ "group": "Video",
+ "prompt": "make it look like a worn VHS tape: colour bleed, a rolling tracking line, tape noise",
+ "needs": "video",
+ "notes": "One GLSL TOP reading the clip as iChannel0: chroma bleed, horizontal smear, a rolling tracking band, scanlines, noise and vignette. uniform1.x is how worn the tape is \u2014 0.5 is subtle, 2 is chewed.",
+ "nodes": [
+  {
+   "name": "vhs1",
+   "op": "glslTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float wear = U.p0.x;\n    float t = iTime;\n    // A tracking band rolls up the frame and shoves its rows sideways.\n    float band = 1.0 - smoothstep(0.0, 0.035, abs(uv.y - fract(t * 0.13)));\n    float row = hash(vec2(floor(uv.y * 240.0), floor(t * 30.0))) - 0.5;\n    float shove = band * row * 0.08 * wear + sin(uv.y * 40.0 + t * 3.0) * 0.0015 * wear;\n    vec2 p = vec2(uv.x + shove, uv.y);\n    float bleed = 0.006 * wear;\n    vec3 col = vec3(texture(iChannel0, p + vec2(bleed, 0.0)).r,\n                    texture(iChannel0, p).g,\n                    texture(iChannel0, p - vec2(bleed, 0.0)).b);\n    // Tape has little horizontal resolution: smear along the line.\n    vec3 smear = 0.5 * (texture(iChannel0, p + vec2(0.003, 0.0)).rgb + texture(iChannel0, p - vec2(0.003, 0.0)).rgb);\n    col = mix(col, smear, 0.4);\n    float l = dot(col, vec3(0.299, 0.587, 0.114));\n    col = mix(vec3(l), col, 0.75);\n    col *= 0.9 + 0.1 * sin(fragCoord.y * 3.14159);\n    col += (hash(fragCoord + t) - 0.5) * 0.12 * wear;\n    col += band * 0.15 * wear;\n    vec2 v = uv - 0.5;\n    col *= 1.0 - dot(v, v) * 0.9;\n    fragColor = vec4(col, 1.0);\n}\n",
+    "uniform1": [
+     1.0,
+     0,
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    200,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "vhs1",
+   "input": 0
+  },
+  {
+   "from": "vhs1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

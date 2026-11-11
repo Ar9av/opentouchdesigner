@@ -10,6 +10,7 @@ pub mod dmx;
 pub mod engine;
 pub mod io;
 pub mod ops;
+mod onset;
 mod tracking;
 pub mod wav;
 

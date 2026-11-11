@@ -1,0 +1,48 @@
+{
+ "name": "crt",
+ "group": "Video",
+ "prompt": "show it on an old curved CRT monitor with scanlines and a phosphor glow",
+ "needs": "video",
+ "notes": "One GLSL TOP: barrel curvature, phosphor glow, scanlines, an RGB aperture mask, vignette and a faint flicker. uniform1.x is the curvature \u2014 0 is flat glass, 0.15 a deep tube.",
+ "nodes": [
+  {
+   "name": "crt1",
+   "op": "glslTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float k = U.p0.x;\n    vec2 c = uv * 2.0 - 1.0;\n    c *= 1.0 + k * dot(c, c);\n    vec2 p = c * 0.5 + 0.5;\n    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) {\n        fragColor = vec4(0.0, 0.0, 0.0, 1.0);\n        return;\n    }\n    vec3 col = texture(iChannel0, p).rgb;\n    vec3 glow = 0.25 * (texture(iChannel0, p + vec2(0.004, 0.0)).rgb + texture(iChannel0, p - vec2(0.004, 0.0)).rgb\n                      + texture(iChannel0, p + vec2(0.0, 0.004)).rgb + texture(iChannel0, p - vec2(0.0, 0.004)).rgb);\n    col += glow * 0.35;\n    float scan = 0.75 + 0.25 * sin(p.y * iResolution.y * 1.5);\n    float m = mod(fragCoord.x, 3.0);\n    vec3 mask = m < 1.0 ? vec3(1.0, 0.7, 0.7) : (m < 2.0 ? vec3(0.7, 1.0, 0.7) : vec3(0.7, 0.7, 1.0));\n    col *= scan * mask * 1.25;\n    float vig = 16.0 * p.x * p.y * (1.0 - p.x) * (1.0 - p.y);\n    col *= pow(vig, 0.25);\n    col *= 0.97 + 0.03 * sin(iTime * 110.0);\n    fragColor = vec4(col, 1.0);\n}\n",
+    "uniform1": [
+     0.08,
+     0,
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    200,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "crt1",
+   "input": 0
+  },
+  {
+   "from": "crt1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

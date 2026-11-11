@@ -48,6 +48,7 @@ pub struct Io {
     osc_out: HashMap<String, OscOut>,
     dmx: HashMap<String, DmxOut>,
     spectra: HashMap<String, Spectrum>,
+    pub(crate) beats: HashMap<String, crate::onset::Detector>,
     /// Per-node message shown on the node body — "no such device", and so on.
     pub status: HashMap<String, String>,
 }
@@ -80,6 +81,7 @@ impl Io {
         self.osc_out.clear();
         self.dmx.clear();
         self.spectra.clear();
+        self.beats.clear();
         self.status.clear();
     }
 }
@@ -1403,6 +1405,14 @@ pub(crate) fn specs() -> Vec<ChopSpec> {
             "Energy per frequency band, log spaced.",
             params_spectrum,
             cook_spectrum,
+        ),
+        spec_animated(
+            crate::onset::BEAT_DETECT,
+            "Beat Detect",
+            &["in"],
+            "Beats heard in audio: beat pulse, kick envelope, bass, level, bpm, phase, count.",
+            crate::onset::params,
+            crate::onset::cook,
         ),
         spec_animated(
             MIDI_IN,

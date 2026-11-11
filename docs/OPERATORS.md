@@ -2,9 +2,9 @@
 
 Generated from the operator registry — the same table the editor builds its menus and parameter pages from, so this cannot drift from what the operators actually do.
 
-171 operators.
+172 operators.
 
-**CHOP** (51)
+**CHOP** (52)
 
 - [analyzeCHOP](#analyze--analyzechop) — Reduce each channel to one number.
 - [animationCHOP](#animation--animationchop) — Keyframed curves over time.
@@ -13,6 +13,7 @@ Generated from the operator registry — the same table the editor builds its me
 - [audiofileinCHOP](#audio-file-in--audiofileinchop) — Plays an audio file, following the timeline.
 - [audiospectrumCHOP](#audio-spectrum--audiospectrumchop) — Energy per frequency band, log spaced.
 - [beatCHOP](#beat--beatchop) — A tempo clock: ramp, pulse, count and bar.
+- [beatdetectCHOP](#beat-detect--beatdetectchop) — Beats heard in audio: beat pulse, kick envelope, bass, level, bpm, phase, count.
 - [blobtrackCHOP](#blob-track--blobtrackchop) — Largest connected bright region. Channels: present, count, x, y, area, width, height, vx, vy. Coordinates and sizes are 0..1, origin top-left; velocity is frame-fractions/second. CPU readback of last frame; downsample to 160x90 first. Not person recognition or persistent identity: switching largest regions can jump. A missing/empty input returns zero channels values.
 - [clockCHOP](#clock--clockchop) — Wall-clock time, which keeps running when the timeline is paused.
 - [constantCHOP](#constant--constantchop) — Fixed values as channels.
@@ -301,6 +302,21 @@ A tempo clock: ramp, pulse, count and bar.
 | Tempo (BPM) | `tempo` | `120` | 20 … 300 |
 | Beats Per Bar | `beatsperbar` | `4` | 1 … 32 |
 | Sample Rate | `rate` | `60` | 1 … 48000 |
+
+### Beat Detect — `beatdetectCHOP`
+
+Beats heard in audio: beat pulse, kick envelope, bass, level, bpm, phase, count.
+
+**Inputs:** in
+
+*Time dependent: cooks every frame, and everything downstream of it does too.*
+
+| Parameter | Name | Default | Range |
+|---|---|---|---|
+| Threshold | `sensitivity` | `1.6` | 1.05 … 4 |
+| Kick Decay | `decay` | `0.25` | 0.02 … 2 |
+| Bass Cutoff | `cutoff` | `150` | 40 … 1000 |
+| Max BPM | `maxbpm` | `200` | 60 … 400 |
 
 ### Blob Track — `blobtrackCHOP`
 

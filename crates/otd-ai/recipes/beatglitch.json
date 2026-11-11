@@ -1,0 +1,139 @@
+{
+ "name": "beatglitch",
+ "group": "Audio",
+ "prompt": "make the video glitch and punch in on every beat of the music",
+ "needs": "video",
+ "notes": "Mic -> beatdetectCHOP -> kick, an envelope that jumps to 1 on each beat and decays. It drives the glitch shader's split/tear amount (uniform1) and a zoom punch on the clip. amount1.gain is how violent a hit is; beats1.decay how fast it settles back to clean.",
+ "nodes": [
+  {
+   "name": "mic1",
+   "op": "audiodeviceinCHOP",
+   "pos": [
+    0,
+    260
+   ]
+  },
+  {
+   "name": "beats1",
+   "op": "beatdetectCHOP",
+   "pos": [
+    200,
+    260
+   ],
+   "params": {
+    "decay": 0.18
+   }
+  },
+  {
+   "name": "kick1",
+   "op": "selectCHOP",
+   "pos": [
+    400,
+    260
+   ],
+   "params": {
+    "channels": "kick",
+    "rename": "kick"
+   }
+  },
+  {
+   "name": "amount1",
+   "op": "mathCHOP",
+   "pos": [
+    600,
+    220
+   ],
+   "params": {
+    "gain": 0.04,
+    "offset": 0.002
+   }
+  },
+  {
+   "name": "punch1",
+   "op": "mathCHOP",
+   "pos": [
+    600,
+    320
+   ],
+   "params": {
+    "gain": 0.12,
+    "offset": 1.0
+   }
+  },
+  {
+   "name": "zoom1",
+   "op": "transformTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "extend": "mirror"
+   },
+   "exports": {
+    "scale": "punch1:kick"
+   }
+  },
+  {
+   "name": "glitch1",
+   "op": "glslTOP",
+   "pos": [
+    200,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "float hash(float n) { return fract(sin(n) * 43758.5453); }\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float amount = U.p0.x;\n    float t = floor(iTime * 12.0);\n    float row = floor(uv.y * 24.0);\n    float tear = step(0.92, hash(row + t)) * (hash(row * 3.1 + t) - 0.5) * amount * 6.0;\n    uv.x = fract(uv.x + tear);\n    float r = texture(iChannel0, uv + vec2(amount, 0.0)).r;\n    float g = texture(iChannel0, uv).g;\n    float b = texture(iChannel0, uv - vec2(amount, 0.0)).b;\n    vec3 col = vec3(r, g, b);\n    col *= 0.85 + 0.15 * sin(uv.y * iResolution.y * 3.14159);\n    fragColor = vec4(col, 1.0);\n}\n"
+   },
+   "exports": {
+    "uniform1": "amount1:kick"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    400,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "mic1",
+   "to": "beats1",
+   "input": 0
+  },
+  {
+   "from": "beats1",
+   "to": "kick1",
+   "input": 0
+  },
+  {
+   "from": "kick1",
+   "to": "amount1",
+   "input": 0
+  },
+  {
+   "from": "kick1",
+   "to": "punch1",
+   "input": 0
+  },
+  {
+   "from": "source1",
+   "to": "zoom1",
+   "input": 0
+  },
+  {
+   "from": "zoom1",
+   "to": "glitch1",
+   "input": 0
+  },
+  {
+   "from": "glitch1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

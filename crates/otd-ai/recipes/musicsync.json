@@ -1,0 +1,283 @@
+{
+ "name": "musicsync",
+ "group": "Audio",
+ "prompt": "visuals locked to the music: a tunnel that punches forward on every kick and changes colour each beat",
+ "needs": "none",
+ "notes": "Mic -> beatdetectCHOP, which hears the kicks and gives kick (an envelope per beat), count and bpm. kick drives zoom1.scale and wisps1.brightness; count steps palette1.phase so the colour changes on the beat. beats1.sensitivity is how hard a hit has to be; beats1.decay how long each punch lasts. To sync to a song or track instead of the room, swap mic1 for an audiofileinCHOP (mp3, wav, m4a).",
+ "nodes": [
+  {
+   "name": "mic1",
+   "op": "audiodeviceinCHOP",
+   "pos": [
+    0,
+    340
+   ]
+  },
+  {
+   "name": "beats1",
+   "op": "beatdetectCHOP",
+   "pos": [
+    200,
+    340
+   ],
+   "params": {
+    "sensitivity": 1.6,
+    "decay": 0.22
+   }
+  },
+  {
+   "name": "kick1",
+   "op": "selectCHOP",
+   "pos": [
+    400,
+    340
+   ],
+   "params": {
+    "channels": "kick",
+    "rename": "kick"
+   }
+  },
+  {
+   "name": "punch1",
+   "op": "mathCHOP",
+   "pos": [
+    600,
+    300
+   ],
+   "params": {
+    "gain": 0.08,
+    "offset": 1.012
+   }
+  },
+  {
+   "name": "flash1",
+   "op": "mathCHOP",
+   "pos": [
+    600,
+    400
+   ],
+   "params": {
+    "gain": 1.4,
+    "offset": 1.6
+   }
+  },
+  {
+   "name": "step1",
+   "op": "selectCHOP",
+   "pos": [
+    400,
+    460
+   ],
+   "params": {
+    "channels": "count",
+    "rename": "count"
+   }
+  },
+  {
+   "name": "hue1",
+   "op": "mathCHOP",
+   "pos": [
+    600,
+    500
+   ],
+   "params": {
+    "gain": 0.125
+   }
+  },
+  {
+   "name": "noise1",
+   "op": "noiseTOP",
+   "pos": [
+    0,
+    -150
+   ],
+   "params": {
+    "period": 0.22,
+    "harmonics": 6,
+    "monochrome": true
+   },
+   "expressions": {
+    "translate": "absTime * 0.06"
+   }
+  },
+  {
+   "name": "wisps1",
+   "op": "levelTOP",
+   "pos": [
+    200,
+    -150
+   ],
+   "params": {
+    "blacklevel": 0.42,
+    "contrast": 2.4
+   },
+   "exports": {
+    "brightness": "flash1:kick"
+   }
+  },
+  {
+   "name": "palette1",
+   "op": "rampTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "color1": [
+     0.15,
+     0.95,
+     0.9,
+     1.0
+    ],
+    "color2": [
+     0.95,
+     0.25,
+     0.7,
+     1.0
+    ]
+   },
+   "exports": {
+    "phase": "hue1:count"
+   }
+  },
+  {
+   "name": "tint1",
+   "op": "compositeTOP",
+   "pos": [
+    400,
+    -90
+   ],
+   "params": {
+    "operation": "multiply"
+   }
+  },
+  {
+   "name": "fb1",
+   "op": "feedbackTOP",
+   "pos": [
+    200,
+    180
+   ],
+   "params": {
+    "target": "out1"
+   }
+  },
+  {
+   "name": "decay1",
+   "op": "levelTOP",
+   "pos": [
+    400,
+    180
+   ],
+   "params": {
+    "brightness": 0.955
+   }
+  },
+  {
+   "name": "zoom1",
+   "op": "transformTOP",
+   "pos": [
+    600,
+    180
+   ],
+   "params": {
+    "rotate": 0.6
+   },
+   "exports": {
+    "scale": "punch1:kick"
+   }
+  },
+  {
+   "name": "mix1",
+   "op": "compositeTOP",
+   "pos": [
+    800,
+    40
+   ],
+   "params": {
+    "operation": "maximum"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    1000,
+    40
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "mic1",
+   "to": "beats1",
+   "input": 0
+  },
+  {
+   "from": "beats1",
+   "to": "kick1",
+   "input": 0
+  },
+  {
+   "from": "kick1",
+   "to": "punch1",
+   "input": 0
+  },
+  {
+   "from": "kick1",
+   "to": "flash1",
+   "input": 0
+  },
+  {
+   "from": "beats1",
+   "to": "step1",
+   "input": 0
+  },
+  {
+   "from": "step1",
+   "to": "hue1",
+   "input": 0
+  },
+  {
+   "from": "noise1",
+   "to": "wisps1",
+   "input": 0
+  },
+  {
+   "from": "wisps1",
+   "to": "tint1",
+   "input": 0
+  },
+  {
+   "from": "palette1",
+   "to": "tint1",
+   "input": 1
+  },
+  {
+   "from": "fb1",
+   "to": "decay1",
+   "input": 0
+  },
+  {
+   "from": "decay1",
+   "to": "zoom1",
+   "input": 0
+  },
+  {
+   "from": "tint1",
+   "to": "mix1",
+   "input": 0
+  },
+  {
+   "from": "zoom1",
+   "to": "mix1",
+   "input": 1
+  },
+  {
+   "from": "mix1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

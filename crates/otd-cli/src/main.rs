@@ -25,6 +25,8 @@ USAGE:
     otd bundle <project.otd> --out <dir>
     otd docs [--out FILE]
     otd demo <name> --out <project.otd>
+    otd plan <plan.json | recipe> --out <project.otd> [--on <project.otd>]
+    otd brief
 
 COMMANDS:
     run       Cook the project in realtime. Output CHOPs (DMX, OSC) keep
@@ -37,6 +39,13 @@ COMMANDS:
     docs      Write the operator reference, generated from the registry.
     demo      Write one of the built-in patches out as a project file, so the
               shipped examples are generated rather than hand-saved.
+    plan      Build a patch from a plan — the assistant's JSON reply schema,
+              or a recipe name — with the assistant's own checks: unknown
+              operators and parameters, shaders that do not compile, loops
+              that starve, nodes wired to nothing. Exits non-zero if any
+              fired. --on builds on an existing project.
+    brief     Print what the assistant is told: the reply schema, every
+              operator, and the rules. For an agent writing plans by hand.
 
 OPTIONS:
     --frames N   How many frames to run. `run` defaults to forever.
@@ -44,6 +53,7 @@ OPTIONS:
     --node PATH  Cook this node, e.g. /out1, whether or not it is flagged for
                  render. Required by `render`, which reads its output.
     --out DIR    Where to write frames. Defaults to ./frames.
+    --on FILE    `plan` only: the project to build on.
 ";
 
 /// Why we stopped. Asking for help is not a failure, and exiting non-zero for
@@ -86,6 +96,7 @@ struct Args {
     /// prints to stdout without it, so a sentinel comparison against the
     /// default would break the day somebody asks for `--out frames`.
     out_given: bool,
+    on: Option<PathBuf>,
 }
 
 fn parse(argv: Vec<String>) -> Result<Args, Fail> {
@@ -94,13 +105,17 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
     if command == "-h" || command == "--help" || command == "help" {
         return Err(Fail::Help);
     }
-    if !["run", "render", "stats", "bundle", "docs", "demo"].contains(&command.as_str()) {
+    if ![
+        "run", "render", "stats", "bundle", "docs", "demo", "plan", "brief",
+    ]
+    .contains(&command.as_str())
+    {
         return Err(format!("unknown command `{command}`\n\n{USAGE}").into());
     }
     // `docs` reads the operator registry, not a project — it is about the
     // build, not about anything an artist made. `demo` takes a name rather
     // than a path, and writes the project out.
-    let project = if command == "docs" {
+    let project = if command == "docs" || command == "brief" {
         PathBuf::new()
     } else if command == "demo" {
         PathBuf::from(it.next().ok_or_else(|| {
@@ -124,6 +139,7 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
         node: None,
         out: PathBuf::from("frames"),
         out_given: false,
+        on: None,
     };
     while let Some(flag) = it.next() {
         let mut value = || -> Result<String, Fail> {
@@ -149,6 +165,7 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
                 args.fps = Some(fps);
             }
             "--node" => args.node = Some(value()?),
+            "--on" => args.on = Some(PathBuf::from(value()?)),
             "--out" => {
                 args.out = PathBuf::from(value()?);
                 args.out_given = true;
@@ -162,6 +179,11 @@ fn parse(argv: Vec<String>) -> Result<Args, Fail> {
     if args.command == "demo" && !args.out_given {
         return Err(Fail::Err(
             "`demo` needs --out <file.otd>, where to write the project".into(),
+        ));
+    }
+    if args.command == "plan" && !args.out_given {
+        return Err(Fail::Err(
+            "`plan` needs --out <file.otd>, where to write the project".into(),
         ));
     }
     if args.command == "bundle" && !args.out_given {
@@ -197,6 +219,107 @@ fn write_demo(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// The same compiler the editor checks with.
+fn check_shader(source: &str, is_glsl: bool) -> Result<(), String> {
+    use otd_gpu::shader::*;
+    match is_glsl {
+        true => validate_glsl(&wrap_glsl(source)),
+        false => validate_wgsl(&wrap_wgsl(source)),
+    }
+}
+
+/// Apply a plan the way the assistant bar does, minus the model.
+///
+/// An agent outside the editor otherwise writes RON by hand and finds out
+/// what it got wrong one `otd run` at a time — or never, since an invented
+/// parameter cooks fine and does nothing. The project is written even when
+/// something fired, so it can be looked at; the exit code says to look.
+fn build_plan(args: &Args) -> Result<(), String> {
+    use otd_ai::{patch, recipes};
+    let registry = otd_engine::registry();
+    let source = args.project.to_string_lossy().to_string();
+    let mut graph = match &args.on {
+        Some(path) => otd_core::Project::open(path, &registry)
+            .map_err(|e| format!("--on {}: {e}", path.display()))?,
+        None => otd_core::Graph::new(),
+    };
+    let root = graph.root();
+
+    let (json, mut plan) = match recipes::find(&source) {
+        Some(recipe) => (recipe.value().clone(), recipe.plan(&registry)?),
+        None => {
+            let text = std::fs::read_to_string(&source).map_err(|e| {
+                let names: Vec<_> = recipes::all().iter().map(|r| r.name.as_str()).collect();
+                format!(
+                    "{source}: {e} — and not a recipe either: {}",
+                    names.join(", ")
+                )
+            })?;
+            let json = patch::extract_json(&text)?;
+            let plan = patch::parse_plan(&json, &registry)?;
+            (json, plan)
+        }
+    };
+    // Recipes and hand-written plans alike wire from `source1` and expect it
+    // on the canvas; with nothing there, stand a generator in for it.
+    let wants_source = plan.connections.iter().any(|w| w.from == recipes::SOURCE);
+    if wants_source && graph.find_from(root, recipes::SOURCE).is_none() {
+        recipes::stand_in_source(&mut plan);
+    }
+
+    let mut problems: Vec<String> = patch::shader_problems(&json, check_shader)
+        .into_iter()
+        .map(|(node, e)| format!("shader {node}: {e}"))
+        .collect();
+    problems.extend(
+        patch::dangling(&plan)
+            .into_iter()
+            .map(|n| format!("wired to nothing: {n}")),
+    );
+
+    let (applied, viewer) = patch::apply(&mut graph, root, &registry, &plan)?;
+    problems.extend(applied.warnings.iter().cloned());
+    problems.extend(
+        patch::unresolved_refs(&graph, root, &applied.created)
+            .into_iter()
+            .map(|r| format!("points at nothing: {r}")),
+    );
+    // Flag the viewer for render, so `otd run` and `otd stats` have a root
+    // without being told one.
+    if let Some(v) = viewer {
+        graph.node_mut(v).flags.render = true;
+    }
+
+    otd_core::Project::from_graph(&graph, &registry, 60.0)
+        .save(&args.out)
+        .map_err(|e| format!("{}: {e}", args.out.display()))?;
+    eprintln!(
+        "{} node(s) created, {} wire(s), {} retuned, {} removed",
+        applied.created.len(),
+        applied.wired,
+        applied.changed.len(),
+        applied.removed.len()
+    );
+    if let Some(v) = viewer {
+        eprintln!(
+            "look at it: otd render {} --node {} --frames 60",
+            args.out.display(),
+            graph.path(v)
+        );
+    }
+    for p in &problems {
+        eprintln!("  ! {p}");
+    }
+    println!("{}", args.out.display());
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(format!(
+            "{} problem(s) — the project was written anyway",
+            problems.len()
+        )),
+    }
+}
+
 fn run() -> Result<(), Fail> {
     let args = parse(std::env::args().collect())?;
 
@@ -211,6 +334,13 @@ fn run() -> Result<(), Fail> {
     }
     if args.command == "demo" {
         return Ok(write_demo(&args)?);
+    }
+    if args.command == "brief" {
+        print!("{}", otd_ai::patch::system_prompt(&otd_engine::registry()));
+        return Ok(());
+    }
+    if args.command == "plan" {
+        return Ok(build_plan(&args)?);
     }
 
     let mut rt = Runtime::open(&args.project)?;

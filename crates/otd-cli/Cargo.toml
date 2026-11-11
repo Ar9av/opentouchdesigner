@@ -14,6 +14,8 @@ path = "src/main.rs"
 otd-core = { version = "0.1.0", path = "../otd-core" }
 otd-engine = { version = "0.1.0", path = "../otd-engine" }
 otd-gpu = { version = "0.1.0", path = "../otd-gpu" }
+# `plan` and `brief`: the assistant's checks, without the model.
+otd-ai = { version = "0.1.0", path = "../otd-ai" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]

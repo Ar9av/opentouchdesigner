@@ -600,6 +600,19 @@ The same chain with an audiodeviceinCHOP in place of the picture is how a
 patch reacts to sound; there is no Top To CHOP in that one because audio is
 already channels.
 
+SYNCING TO MUSIC — the beat, not the loudness — is a beatdetectCHOP after
+the audio (audiodeviceinCHOP for the room, audiofileinCHOP for a song). It
+hears the kicks and gives channels that need no lag and no scaling chain:
+- `kick` jumps to 1 on every beat and decays over `decay` seconds — the
+  punch. Through a mathCHOP onto `transformTOP.scale` (gain ~0.08, offset
+  ~1.01) inside a feedback loop, or onto `levelTOP.brightness`.
+- `count` goes up by one per beat — a mathCHOP with gain 0.125 onto
+  `rampTOP.phase` changes the colour on every beat and cycles every eight.
+- `beat` is 1 on the frame a beat lands; `bpm` the tempo; `phase` ramps
+  0..1 between beats; `bass` and `level` are 0..1 at any volume.
+Select the channel you want with a selectCHOP before a mathCHOP, so the
+export names a channel that exists.
+
 UNITS, WHICH THE CATALOGUE DOES NOT SPELL OUT
 A number in the right parameter with the wrong scale is the quietest way to
 get a patch that builds, cooks, and shows nothing. These are the ones that
@@ -1054,20 +1067,32 @@ pub fn parse_plan(value: &serde_json::Value, registry: &OpRegistry) -> Result<Pl
         let mut params = BTreeMap::new();
         if let Some(map) = entry.get("params").and_then(|p| p.as_object()) {
             for (key, raw) in map {
-                if let Some(param) = declared.get(key.as_str()) {
-                    if let Some(v) = json_to_value(raw, &param.value) {
+                match declared
+                    .get(key.as_str())
+                    .map(|p| json_to_value(raw, &p.value))
+                {
+                    Some(Some(v)) => {
                         params.insert(key.clone(), v);
                     }
+                    Some(None) => plan.warnings.push(format!(
+                        "{name}.{key}: {raw} is not a {}",
+                        declared[key.as_str()].value.type_name()
+                    )),
+                    None => plan.warnings.push(format!("{op} has no parameter `{key}`")),
                 }
             }
         }
         let mut expressions = BTreeMap::new();
         if let Some(map) = entry.get("expressions").and_then(|p| p.as_object()) {
             for (key, raw) in map {
-                if declared.contains_key(key.as_str()) {
-                    if let Some(text) = raw.as_str() {
+                match (declared.contains_key(key.as_str()), raw.as_str()) {
+                    (true, Some(text)) => {
                         expressions.insert(key.clone(), text.to_string());
                     }
+                    (false, _) => plan.warnings.push(format!("{op} has no parameter `{key}`")),
+                    (true, None) => plan
+                        .warnings
+                        .push(format!("{name}.{key}: expression is not a string")),
                 }
             }
         }
@@ -1810,6 +1835,12 @@ mod tests {
         let params = &plan.nodes[0].params;
         assert!(params.contains_key("gain"), "{params:?}");
         assert!(!params.contains_key("flux_capacitance"));
+        // Dropped, and said so: an invented name cooks fine and does nothing.
+        assert!(
+            plan.warnings.iter().any(|w| w.contains("flux_capacitance")),
+            "{:?}",
+            plan.warnings
+        );
     }
 
     #[test]

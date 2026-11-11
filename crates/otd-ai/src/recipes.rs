@@ -86,6 +86,9 @@ const FILES: &[&str] = &[
     include_str!("../recipes/rings.json"),
     include_str!("../recipes/trails.json"),
     include_str!("../recipes/glitch.json"),
+    include_str!("../recipes/vhs.json"),
+    include_str!("../recipes/crt.json"),
+    include_str!("../recipes/bloom.json"),
     include_str!("../recipes/kaleidoscope.json"),
     include_str!("../recipes/retro.json"),
     include_str!("../recipes/toon.json"),
@@ -98,6 +101,8 @@ const FILES: &[&str] = &[
     include_str!("../recipes/terrain.json"),
     include_str!("../recipes/audio.json"),
     include_str!("../recipes/beat.json"),
+    include_str!("../recipes/musicsync.json"),
+    include_str!("../recipes/beatglitch.json"),
 ];
 
 /// Every recipe, in menu order. Parsed once; a file that does not parse is a

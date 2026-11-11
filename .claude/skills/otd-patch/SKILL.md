@@ -3,6 +3,31 @@ name: otd-patch
 description: Read and write OpenTouchDesigner `.otd` project files — the RON node/param/expression format — and cook them headlessly with the `otd` CLI. Use when creating or editing a patch by hand, adding operators to an example, wiring inputs, binding parameters to expressions or channels, or rendering a project to PNGs.
 ---
 
+# Building a patch: write a plan, not RON
+
+Don't hand-write `.otd` for anything new. Write a **plan** — the in-app
+assistant's JSON reply schema, the same shape as `crates/otd-ai/recipes/*.json`
+— and let `otd plan` build it with the assistant's own checks:
+
+```bash
+otd brief > /tmp/brief.txt                      # schema, every operator + params, the rules
+otd plan trails --out /tmp/t.otd                # a recipe by name, as a starting point
+otd plan mine.json --out /tmp/p.otd             # your plan
+otd plan more.json --on /tmp/p.otd --out /tmp/p.otd   # build on what's there (`sets`, `deletes`)
+otd render /tmp/p.otd --node /out1 --frames 60 --out /tmp/f   # then look at the PNGs
+```
+
+`otd plan` exits non-zero when anything fired — an invented operator or
+parameter, a value of the wrong type, a shader that does not compile (with the
+compiler's error), a loop that starves, a node wired to nothing, a path param
+that points at nothing. The project is written anyway so it can be inspected.
+A plan that wires from `source1` with no `source1` present gets a noise
+stand-in. The viewer node is flagged for render, so `otd run` needs no `--node`.
+
+Loop: plan → fix every `!` line → render → look at frames 0, 30, 59 (a
+feedback loop that is black or white by frame 59 is starving or saturating —
+see `otd-feedback`).
+
 # The `.otd` project format
 
 `.otd` is RON, it is text, and it is meant to be read in a diff. Never put an

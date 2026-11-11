@@ -2887,6 +2887,7 @@ name = "otd-cli"
 version = "0.1.0"
 dependencies = [
  "image",
+ "otd-ai",
  "otd-core",
  "otd-engine",
  "otd-gpu",

@@ -1,0 +1,94 @@
+{
+ "name": "bloom",
+ "group": "Video",
+ "prompt": "make the highlights glow and bloom like a dreamy lens",
+ "needs": "video",
+ "notes": "Keep only the highlights (bright1.blacklevel), blur them wide, and add them back over the clip. bright1.blacklevel is what counts as a highlight; glow1.size how far it spreads; boost1.brightness how strong.",
+ "nodes": [
+  {
+   "name": "bright1",
+   "op": "levelTOP",
+   "pos": [
+    0,
+    140
+   ],
+   "params": {
+    "blacklevel": 0.6
+   }
+  },
+  {
+   "name": "glow1",
+   "op": "blurTOP",
+   "pos": [
+    200,
+    140
+   ],
+   "params": {
+    "size": 28
+   }
+  },
+  {
+   "name": "boost1",
+   "op": "levelTOP",
+   "pos": [
+    400,
+    140
+   ],
+   "params": {
+    "brightness": 1.4
+   }
+  },
+  {
+   "name": "mix1",
+   "op": "compositeTOP",
+   "pos": [
+    600,
+    0
+   ],
+   "params": {
+    "operation": "screen"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    800,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "bright1",
+   "input": 0
+  },
+  {
+   "from": "bright1",
+   "to": "glow1",
+   "input": 0
+  },
+  {
+   "from": "glow1",
+   "to": "boost1",
+   "input": 0
+  },
+  {
+   "from": "source1",
+   "to": "mix1",
+   "input": 0
+  },
+  {
+   "from": "boost1",
+   "to": "mix1",
+   "input": 1
+  },
+  {
+   "from": "mix1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

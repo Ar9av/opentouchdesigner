@@ -368,7 +368,7 @@ pub fn pick_for(op_type: &str, key: &str) -> Option<PathBuf> {
     }
     let dialog = rfd::FileDialog::new().set_title("Choose a file");
     let dialog = match (op_type, key) {
-        (otd_chop::io::AUDIO_FILE, _) => dialog.add_filter("Audio (WAV)", &["wav"]),
+        (otd_chop::io::AUDIO_FILE, _) => dialog.add_filter("Audio", AUDIO_EXT),
         (_, "font") => dialog.add_filter("Font", &["ttf", "otf"]),
         (otd_gpu::ops::MOVIE_IN, _) => {
             let mut all: Vec<&str> = Vec::new();
@@ -538,26 +538,31 @@ fn add_one(app: &mut OtdApp, path: &Path, pos: egui::Vec2) -> Option<NodeId> {
             Some(id)
         }
         DropKind::Audio => {
+            // A song dropped on the canvas is for hearing and for syncing to,
+            // so it arrives playing out of the speakers with its beats
+            // already tracked: three nodes, and `beats:kick` is one drag
+            // away from any parameter.
             let id = create_named(app, otd_chop::io::AUDIO_FILE, pos, &stem)?;
             let _ = app.graph.set_param(id, "file", Value::Str(stored));
-            app.status = if path
-                .extension()
-                .map(|e| e.eq_ignore_ascii_case("wav"))
-                .unwrap_or(false)
-            {
-                format!(
-                    "{} — drag a channel from the parameter panel onto any parameter",
-                    app.graph.node(id).name
-                )
-            } else {
-                // Say it here rather than leaving a silent node: the operator
-                // reads WAV only, and the file dialog cannot know that for a
-                // file the user dragged in from elsewhere.
-                format!(
-                    "{}: Audio File In reads WAV only — convert it, or use the movie's own audio",
-                    app.graph.node(id).name
-                )
-            };
+            let out = create_named(
+                app,
+                otd_chop::io::AUDIO_OUT,
+                pos + egui::vec2(220.0, 0.0),
+                "speaker",
+            );
+            let beats = create_named(
+                app,
+                "beatdetectCHOP",
+                pos + egui::vec2(220.0, 120.0),
+                "beats",
+            );
+            for dst in [out, beats].into_iter().flatten() {
+                let _ = app.graph.connect(id, dst, 0);
+            }
+            app.status = format!(
+                "{} — playing; drag beats:kick, beats:bass or beats:phase onto any parameter",
+                app.graph.node(id).name
+            );
             Some(id)
         }
         DropKind::Component => {
