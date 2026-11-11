@@ -7,8 +7,8 @@
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   let base = sample0(in.uv);
-  var top = sample1(in.uv);
-  top = top * U.p0.y;
+  let raw = sample1(in.uv);
+  let top = raw * U.p0.y;
 
   let op = i32(U.p0.x + 0.5);
   var rgb: vec3<f32>;
@@ -51,8 +51,11 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     rgb = top.rgb * top.a * (1.0 - base.a) + base.rgb * base.a * (1.0 - top.a);
     a = top.a * (1.0 - base.a) + base.a * (1.0 - top.a);
   } else {
-    // Source-over, premultiplied by the incoming alpha.
-    rgb = top.rgb * top.a + base.rgb * (1.0 - top.a);
+    // Source-over, premultiplied by the incoming alpha. The colour is the
+    // unscaled sample: `top.a` already carries the opacity, and weighting
+    // `top.rgb` by it too made a 0.85 crossfade loop settle at 54% of its
+    // source instead of at the source.
+    rgb = raw.rgb * top.a + base.rgb * (1.0 - top.a);
     a = top.a + base.a * (1.0 - top.a);
   }
 

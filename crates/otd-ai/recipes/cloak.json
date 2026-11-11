@@ -1,0 +1,165 @@
+{
+ "name": "cloak",
+ "group": "Camera",
+ "prompt": "predator-style cloak: whatever moves on my camera turns into rippling, shimmering glass",
+ "needs": "video",
+ "notes": "A motion mask (frame difference, boosted, blurred and held for a moment by a decaying loop) tells a shader where to bend the picture instead of showing it, with a cyan shimmer on the edges. Stand still and you reappear. cloak1.uniform1.x is how fully moving parts vanish, .y how hard the edges refract; hold1.brightness how long the cloak lingers.",
+ "nodes": [
+  {
+   "name": "previous1",
+   "op": "feedbackTOP",
+   "pos": [
+    0,
+    200
+   ],
+   "params": {
+    "target": "source1"
+   }
+  },
+  {
+   "name": "change1",
+   "op": "compositeTOP",
+   "pos": [
+    200,
+    140
+   ],
+   "params": {
+    "operation": "difference"
+   }
+  },
+  {
+   "name": "boost1",
+   "op": "levelTOP",
+   "pos": [
+    400,
+    140
+   ],
+   "params": {
+    "brightness": 5.0
+   }
+  },
+  {
+   "name": "soft1",
+   "op": "blurTOP",
+   "pos": [
+    600,
+    140
+   ],
+   "params": {
+    "size": 14
+   }
+  },
+  {
+   "name": "history1",
+   "op": "feedbackTOP",
+   "pos": [
+    600,
+    320
+   ],
+   "params": {
+    "target": "mask1"
+   }
+  },
+  {
+   "name": "hold1",
+   "op": "levelTOP",
+   "pos": [
+    800,
+    320
+   ],
+   "params": {
+    "brightness": 0.88
+   }
+  },
+  {
+   "name": "mask1",
+   "op": "compositeTOP",
+   "pos": [
+    1000,
+    140
+   ],
+   "params": {
+    "operation": "maximum"
+   }
+  },
+  {
+   "name": "cloak1",
+   "op": "glslTOP",
+   "pos": [
+    1200,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    vec2 e = 3.0 / iResolution.xy;\n    float m = clamp(texture(iChannel1, uv).r * U.p0.x, 0.0, 1.0);\n    float dx = texture(iChannel1, uv + vec2(e.x, 0.0)).r - texture(iChannel1, uv - vec2(e.x, 0.0)).r;\n    float dy = texture(iChannel1, uv + vec2(0.0, e.y)).r - texture(iChannel1, uv - vec2(0.0, e.y)).r;\n    vec2 ripple = vec2(sin(uv.y * 60.0 + iTime * 4.0), cos(uv.x * 60.0 + iTime * 3.0));\n    vec2 off = vec2(dx, dy) * U.p0.y + 0.012 * m * ripple;\n    vec3 cam = texture(iChannel0, uv).rgb;\n    vec3 bent = texture(iChannel0, uv + off).rgb * vec3(0.85, 1.0, 1.08);\n    float edge = clamp(length(vec2(dx, dy)) * 5.0, 0.0, 1.0);\n    vec3 col = mix(cam, bent, m) + edge * vec3(0.2, 0.8, 1.0) * 0.6;\n    fragColor = vec4(col, 1.0);\n}\n",
+    "uniform1": [
+     2.0,
+     0.08,
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    1400,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "change1",
+   "input": 0
+  },
+  {
+   "from": "previous1",
+   "to": "change1",
+   "input": 1
+  },
+  {
+   "from": "change1",
+   "to": "boost1",
+   "input": 0
+  },
+  {
+   "from": "boost1",
+   "to": "soft1",
+   "input": 0
+  },
+  {
+   "from": "soft1",
+   "to": "mask1",
+   "input": 0
+  },
+  {
+   "from": "history1",
+   "to": "hold1",
+   "input": 0
+  },
+  {
+   "from": "hold1",
+   "to": "mask1",
+   "input": 1
+  },
+  {
+   "from": "source1",
+   "to": "cloak1",
+   "input": 0
+  },
+  {
+   "from": "mask1",
+   "to": "cloak1",
+   "input": 1
+  },
+  {
+   "from": "cloak1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

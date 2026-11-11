@@ -1,0 +1,244 @@
+{
+ "name": "chromaecho",
+ "group": "Camera",
+ "prompt": "split my camera into red, green and blue ghosts that lag behind me when I move",
+ "needs": "video",
+ "notes": "Green is live; red and blue are two crossfade trails of different lengths, so anything that moves leaves a red ghost and a longer blue one. Still parts line up and look normal. fast1.opacity and slow1.opacity are how far each ghost lags (0.6 short, 0.92 long).",
+ "nodes": [
+  {
+   "name": "fasthist",
+   "op": "feedbackTOP",
+   "pos": [
+    0,
+    200
+   ],
+   "params": {
+    "target": "fast1"
+   }
+  },
+  {
+   "name": "fast1",
+   "op": "compositeTOP",
+   "pos": [
+    200,
+    140
+   ],
+   "params": {
+    "operation": "over",
+    "opacity": 0.7
+   }
+  },
+  {
+   "name": "slowhist",
+   "op": "feedbackTOP",
+   "pos": [
+    0,
+    380
+   ],
+   "params": {
+    "target": "slow1"
+   }
+  },
+  {
+   "name": "slow1",
+   "op": "compositeTOP",
+   "pos": [
+    200,
+    320
+   ],
+   "params": {
+    "operation": "over",
+    "opacity": 0.92
+   }
+  },
+  {
+   "name": "green1",
+   "op": "channelmixTOP",
+   "pos": [
+    400,
+    0
+   ],
+   "params": {
+    "red": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "green": [
+     0,
+     1,
+     0,
+     0
+    ],
+    "blue": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "alpha": [
+     0,
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  {
+   "name": "red1",
+   "op": "channelmixTOP",
+   "pos": [
+    400,
+    140
+   ],
+   "params": {
+    "red": [
+     1,
+     0,
+     0,
+     0
+    ],
+    "green": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "blue": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "alpha": [
+     0,
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  {
+   "name": "blue1",
+   "op": "channelmixTOP",
+   "pos": [
+    400,
+    320
+   ],
+   "params": {
+    "red": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "green": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "blue": [
+     0,
+     0,
+     1,
+     0
+    ],
+    "alpha": [
+     0,
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  {
+   "name": "rg1",
+   "op": "addTOP",
+   "pos": [
+    600,
+    60
+   ]
+  },
+  {
+   "name": "rgb1",
+   "op": "addTOP",
+   "pos": [
+    800,
+    160
+   ]
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    1000,
+    160
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "fast1",
+   "input": 0
+  },
+  {
+   "from": "fasthist",
+   "to": "fast1",
+   "input": 1
+  },
+  {
+   "from": "source1",
+   "to": "slow1",
+   "input": 0
+  },
+  {
+   "from": "slowhist",
+   "to": "slow1",
+   "input": 1
+  },
+  {
+   "from": "source1",
+   "to": "green1",
+   "input": 0
+  },
+  {
+   "from": "fast1",
+   "to": "red1",
+   "input": 0
+  },
+  {
+   "from": "slow1",
+   "to": "blue1",
+   "input": 0
+  },
+  {
+   "from": "green1",
+   "to": "rg1",
+   "input": 0
+  },
+  {
+   "from": "red1",
+   "to": "rg1",
+   "input": 1
+  },
+  {
+   "from": "rg1",
+   "to": "rgb1",
+   "input": 0
+  },
+  {
+   "from": "blue1",
+   "to": "rgb1",
+   "input": 1
+  },
+  {
+   "from": "rgb1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

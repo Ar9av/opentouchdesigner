@@ -78,6 +78,11 @@ const FILES: &[&str] = &[
     include_str!("../recipes/freeze.json"),
     include_str!("../recipes/audiocamera.json"),
     include_str!("../recipes/motionpaint.json"),
+    include_str!("../recipes/chromaecho.json"),
+    include_str!("../recipes/motionglitch.json"),
+    include_str!("../recipes/cloak.json"),
+    include_str!("../recipes/motionpixel.json"),
+    include_str!("../recipes/popart.json"),
     include_str!("../recipes/slitscan.json"),
     include_str!("../recipes/thermal.json"),
     include_str!("../recipes/hologram.json"),
@@ -330,8 +335,23 @@ pub fn examples_for(prompt: &str, has_source: bool) -> String {
 /// Looks that read at a glance on a live camera, strongest first. The Watch
 /// brief shows two of these in full and names the rest.
 pub const CAMERA_LOOKS: &[&str] = &[
-    "blobhud", "ascii", "halftone", "pointcloud", "neon", "thermal", "datamosh",
-    "glitch", "kaleidoscope", "motionpaint", "toon", "nightvision",
+    "blobhud",
+    "ascii",
+    "halftone",
+    "pointcloud",
+    "neon",
+    "thermal",
+    "datamosh",
+    "glitch",
+    "kaleidoscope",
+    "motionpaint",
+    "toon",
+    "nightvision",
+    "cloak",
+    "chromaecho",
+    "motionpixel",
+    "motionglitch",
+    "popart",
 ];
 
 /// Worked examples for a request made of a camera frame rather than words.

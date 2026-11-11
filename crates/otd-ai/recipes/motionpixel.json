@@ -1,0 +1,165 @@
+{
+ "name": "motionpixel",
+ "group": "Camera",
+ "prompt": "pixelate me wherever I move, like I'm glitching out of a video game",
+ "needs": "video",
+ "notes": "A motion mask (frame difference, boosted and held by a decaying loop) picks which blocks a shader turns into chunky, colour-crushed pixels; the still room stays sharp. pixel1.uniform1.x is the block size in pixels; hold1.brightness how long the pixels trail behind you.",
+ "nodes": [
+  {
+   "name": "previous1",
+   "op": "feedbackTOP",
+   "pos": [
+    0,
+    200
+   ],
+   "params": {
+    "target": "source1"
+   }
+  },
+  {
+   "name": "change1",
+   "op": "compositeTOP",
+   "pos": [
+    200,
+    140
+   ],
+   "params": {
+    "operation": "difference"
+   }
+  },
+  {
+   "name": "boost1",
+   "op": "levelTOP",
+   "pos": [
+    400,
+    140
+   ],
+   "params": {
+    "brightness": 4.0
+   }
+  },
+  {
+   "name": "soft1",
+   "op": "blurTOP",
+   "pos": [
+    600,
+    140
+   ],
+   "params": {
+    "size": 10
+   }
+  },
+  {
+   "name": "history1",
+   "op": "feedbackTOP",
+   "pos": [
+    600,
+    320
+   ],
+   "params": {
+    "target": "mask1"
+   }
+  },
+  {
+   "name": "hold1",
+   "op": "levelTOP",
+   "pos": [
+    800,
+    320
+   ],
+   "params": {
+    "brightness": 0.9
+   }
+  },
+  {
+   "name": "mask1",
+   "op": "compositeTOP",
+   "pos": [
+    1000,
+    140
+   ],
+   "params": {
+    "operation": "maximum"
+   }
+  },
+  {
+   "name": "pixel1",
+   "op": "glslTOP",
+   "pos": [
+    1200,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float block = max(U.p0.x, 2.0);\n    vec2 cell = (floor(fragCoord / block) + 0.5) * block / iResolution.xy;\n    float m = smoothstep(0.08, 0.3, texture(iChannel1, cell).r);\n    vec3 live = texture(iChannel0, uv).rgb;\n    vec3 chunk = floor(texture(iChannel0, cell).rgb * 5.0 + 0.5) / 5.0;\n    vec2 g = fract(fragCoord / block);\n    chunk *= 0.85 + 0.15 * step(0.08, min(g.x, g.y));\n    fragColor = vec4(mix(live, chunk, m), 1.0);\n}\n",
+    "uniform1": [
+     24.0,
+     0,
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    1400,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "change1",
+   "input": 0
+  },
+  {
+   "from": "previous1",
+   "to": "change1",
+   "input": 1
+  },
+  {
+   "from": "change1",
+   "to": "boost1",
+   "input": 0
+  },
+  {
+   "from": "boost1",
+   "to": "soft1",
+   "input": 0
+  },
+  {
+   "from": "soft1",
+   "to": "mask1",
+   "input": 0
+  },
+  {
+   "from": "history1",
+   "to": "hold1",
+   "input": 0
+  },
+  {
+   "from": "hold1",
+   "to": "mask1",
+   "input": 1
+  },
+  {
+   "from": "source1",
+   "to": "pixel1",
+   "input": 0
+  },
+  {
+   "from": "mask1",
+   "to": "pixel1",
+   "input": 1
+  },
+  {
+   "from": "pixel1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

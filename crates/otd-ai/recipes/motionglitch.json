@@ -1,0 +1,163 @@
+{
+ "name": "motionglitch",
+ "group": "Camera",
+ "prompt": "glitch my camera only when I move: still is clean, moving tears it apart",
+ "needs": "video",
+ "notes": "How much the picture changed since last frame (a difference against a one-frame feedback, averaged down to one number) drives the glitch shader's split/tear amount. Stand still and it is clean. amount1.gain is the sensitivity; lag1.lagdown how long the glitch lingers after you stop.",
+ "nodes": [
+  {
+   "name": "previous1",
+   "op": "feedbackTOP",
+   "pos": [
+    0,
+    200
+   ],
+   "params": {
+    "target": "source1"
+   }
+  },
+  {
+   "name": "change1",
+   "op": "compositeTOP",
+   "pos": [
+    200,
+    140
+   ],
+   "params": {
+    "operation": "difference"
+   }
+  },
+  {
+   "name": "measure1",
+   "op": "toptochopCHOP",
+   "pos": [
+    400,
+    300
+   ],
+   "params": {
+    "layout": "average"
+   }
+  },
+  {
+   "name": "avg1",
+   "op": "analyzeCHOP",
+   "pos": [
+    600,
+    300
+   ],
+   "params": {
+    "function": "average"
+   }
+  },
+  {
+   "name": "motion1",
+   "op": "selectCHOP",
+   "pos": [
+    800,
+    300
+   ],
+   "params": {
+    "channels": "r",
+    "rename": "motion"
+   }
+  },
+  {
+   "name": "lag1",
+   "op": "lagCHOP",
+   "pos": [
+    1000,
+    300
+   ],
+   "params": {
+    "lagup": 0.02,
+    "lagdown": 0.4
+   }
+  },
+  {
+   "name": "amount1",
+   "op": "mathCHOP",
+   "pos": [
+    1200,
+    300
+   ],
+   "params": {
+    "gain": 1.5,
+    "offset": 0.0,
+    "clamp": true,
+    "clampmin": 0.0,
+    "clampmax": 0.08
+   }
+  },
+  {
+   "name": "glitch1",
+   "op": "glslTOP",
+   "pos": [
+    400,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "float hash(float n) { return fract(sin(n) * 43758.5453); }\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float amount = U.p0.x;\n    float t = floor(iTime * 12.0);\n    float row = floor(uv.y * 24.0);\n    float tear = step(0.92, hash(row + t)) * (hash(row * 3.1 + t) - 0.5) * amount * 6.0;\n    uv.x = fract(uv.x + tear);\n    float r = texture(iChannel0, uv + vec2(amount, 0.0)).r;\n    float g = texture(iChannel0, uv).g;\n    float b = texture(iChannel0, uv - vec2(amount, 0.0)).b;\n    vec3 col = vec3(r, g, b);\n    col *= 0.85 + 0.15 * sin(uv.y * iResolution.y * 3.14159);\n    fragColor = vec4(col, 1.0);\n}\n"
+   },
+   "exports": {
+    "uniform1": "amount1:motion"
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    600,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "change1",
+   "input": 0
+  },
+  {
+   "from": "previous1",
+   "to": "change1",
+   "input": 1
+  },
+  {
+   "from": "change1",
+   "to": "measure1",
+   "input": 0
+  },
+  {
+   "from": "measure1",
+   "to": "avg1",
+   "input": 0
+  },
+  {
+   "from": "avg1",
+   "to": "motion1",
+   "input": 0
+  },
+  {
+   "from": "motion1",
+   "to": "lag1",
+   "input": 0
+  },
+  {
+   "from": "lag1",
+   "to": "amount1",
+   "input": 0
+  },
+  {
+   "from": "source1",
+   "to": "glitch1",
+   "input": 0
+  },
+  {
+   "from": "glitch1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}

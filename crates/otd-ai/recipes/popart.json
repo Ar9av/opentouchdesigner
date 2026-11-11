@@ -1,0 +1,48 @@
+{
+ "name": "popart",
+ "group": "Camera",
+ "prompt": "turn my camera into a four-panel pop-art screen print, each panel in different loud colours",
+ "needs": "video",
+ "notes": "One GLSL TOP: the picture tiled 2x2, each tile's brightness cut into three bands and printed in that tile's three inks, with a faint halftone dot. pop1.uniform1.x and .y are where the shadow and highlight bands start \u2014 move them to where your face sits.",
+ "nodes": [
+  {
+   "name": "pop1",
+   "op": "glslTOP",
+   "pos": [
+    0,
+    0
+   ],
+   "params": {
+    "language": "glsl",
+    "source": "vec3 tone(float idx, float band) {\n    if (idx < 0.5) return band < 0.5 ? vec3(0.1, 0.05, 0.3) : (band < 1.5 ? vec3(1.0, 0.2, 0.55) : vec3(1.0, 0.9, 0.2));\n    if (idx < 1.5) return band < 0.5 ? vec3(0.0, 0.2, 0.25) : (band < 1.5 ? vec3(0.1, 0.8, 0.7) : vec3(1.0, 0.55, 0.1));\n    if (idx < 2.5) return band < 0.5 ? vec3(0.25, 0.0, 0.05) : (band < 1.5 ? vec3(0.95, 0.3, 0.1) : vec3(0.5, 0.9, 1.0));\n    return band < 0.5 ? vec3(0.05, 0.1, 0.05) : (band < 1.5 ? vec3(0.6, 0.2, 0.9) : vec3(0.7, 1.0, 0.3));\n}\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    vec2 cell = floor(uv * 2.0);\n    vec2 p = fract(uv * 2.0);\n    vec3 c = texture(iChannel0, p).rgb;\n    float l = dot(c, vec3(0.299, 0.587, 0.114));\n    float band = l < U.p0.x ? 0.0 : (l < U.p0.y ? 1.0 : 2.0);\n    vec3 col = tone(cell.x + cell.y * 2.0, band);\n    vec2 d = fract(fragCoord / 6.0) - 0.5;\n    col *= 0.9 + 0.1 * step(length(d), 0.35);\n    fragColor = vec4(col, 1.0);\n}\n",
+    "uniform1": [
+     0.33,
+     0.62,
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "out1",
+   "op": "nullTOP",
+   "pos": [
+    200,
+    0
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "from": "source1",
+   "to": "pop1",
+   "input": 0
+  },
+  {
+   "from": "pop1",
+   "to": "out1",
+   "input": 0
+  }
+ ],
+ "viewer": "out1"
+}
